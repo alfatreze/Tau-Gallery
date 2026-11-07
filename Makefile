@@ -879,3 +879,26 @@ test-ram192k:
 # B-338: the CLK66=1 firmware link and the RAM_192K/CLK66 mutual-exclusion refusal. Slow (a firmware build).
 test-clk66:
 	$(PYTHON) sim/test_clk66.py --build
+
+# Tau Gallery M0: the 800 x 720 packed RGB888 viewer scan-out (tau_scanout_v): every pixel of two enabled frames against a golden picture, black while disabled, the frame and sync
+# geometry of the mode Tau V ran on a Pocket, and a slow filler counted as late lines. The mutation run (BUG 1..10) must FAIL for every value; each run is about a minute.
+.PHONY: test-rtl-scanout-v test-rtl-scanout-v-mutation
+SCANOUT_V_SRC = sim/tb_tau_scanout_v.v src/fpga/core/tau_scanout_v.sv src/fpga/core/tau_cdc_gray_ctr.sv src/fpga/core/tau_cdc_gray_bus.sv
+test-rtl-scanout-v: | $(RTL_BUILD_DIR)
+	@set -e; \
+	$(IVERILOG) -g2012 -Isrc/fpga/core -o $(RTL_BUILD_DIR)/tb_tau_scanout_v.vvp $(SCANOUT_V_SRC); \
+	$(IVERILOG) -g2012 -Isrc/fpga/core -Ptb_tau_scanout_v.SLOW=1 -o $(RTL_BUILD_DIR)/tb_tau_scanout_v_slow.vvp $(SCANOUT_V_SRC); \
+	( $(VVP) $(RTL_BUILD_DIR)/tb_tau_scanout_v.vvp > $(RTL_BUILD_DIR)/tb_tau_scanout_v.log 2>&1 & $(VVP) $(RTL_BUILD_DIR)/tb_tau_scanout_v_slow.vvp > $(RTL_BUILD_DIR)/tb_tau_scanout_v_slow.log 2>&1 & wait ); \
+	grep -E "PASS|FAIL" $(RTL_BUILD_DIR)/tb_tau_scanout_v.log $(RTL_BUILD_DIR)/tb_tau_scanout_v_slow.log; \
+	grep -q "PASS  BUG=0 SLOW=0" $(RTL_BUILD_DIR)/tb_tau_scanout_v.log; grep -q "PASS  BUG=0 SLOW=1" $(RTL_BUILD_DIR)/tb_tau_scanout_v_slow.log
+test-rtl-scanout-v-mutation: | $(RTL_BUILD_DIR)
+	@set -e; \
+	for b in 1 2 3 4 5 6 7 8 9 10; do \
+	  s=0; [ $$b = 10 ] && s=1; \
+	  $(IVERILOG) -g2012 -Isrc/fpga/core -Ptb_tau_scanout_v.BUG=$$b -Ptb_tau_scanout_v.SLOW=$$s -o $(RTL_BUILD_DIR)/tb_tau_scanout_v_m$$b.vvp $(SCANOUT_V_SRC); \
+	  ( $(VVP) $(RTL_BUILD_DIR)/tb_tau_scanout_v_m$$b.vvp > $(RTL_BUILD_DIR)/tb_tau_scanout_v_m$$b.log 2>&1 & ); \
+	done; \
+	for b in 1 2 3 4 5 6 7 8 9 10; do \
+	  while ! grep -qE "PASS|FAILED|TIMEOUT" $(RTL_BUILD_DIR)/tb_tau_scanout_v_m$$b.log 2>/dev/null; do sleep 2; done; \
+	  if grep -q "^FAILED" $(RTL_BUILD_DIR)/tb_tau_scanout_v_m$$b.log || grep -q TIMEOUT $(RTL_BUILD_DIR)/tb_tau_scanout_v_m$$b.log; then echo "mutant $$b killed"; else echo "MUTANT $$b SURVIVED"; exit 1; fi; \
+	done
