@@ -14,7 +14,7 @@ void sd_probe_run(sd_probe_t *r, uint32_t slot, uint32_t span, uint32_t chunk, u
     uint32_t t0 = cycles();
     while ((r->n + 1u) * chunk <= span && (uint32_t)(cycles() - t0) < limit) {
         uint32_t t = cycles();
-        if (!slot_read_blocking(slot, r->n * chunk, dst_off, chunk, tmo)) return;   /* ok stays 0 */
+        if (!slot_read_blocking(slot, r->n * chunk, dst_off, chunk, tmo)) { r->fail_at = r->n * chunk + 1u; break; }   /* keep what was measured */
         uint32_t d = cycles() - t;
         if (d > r->worst_cyc) r->worst_cyc = d;
         if (d < r->best_cyc) r->best_cyc = d;
@@ -26,5 +26,5 @@ void sd_probe_run(sd_probe_t *r, uint32_t slot, uint32_t span, uint32_t chunk, u
     r->bytes = r->n * chunk;
     if (!r->n || r->cycles < 1000u) return;
     r->kbps = (uint32_t)(((uint64_t)r->bytes * CLK_HZ) / ((uint64_t)r->cycles * 1000u));
-    r->ok = 1;
+    r->ok = r->fail_at == 0u;
 }

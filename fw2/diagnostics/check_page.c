@@ -15,6 +15,7 @@
 #include "sdram_soak.h"
 #include "name_matrix.h"
 #include "sd_probe.h"
+#include "../stream/cold.h"
 
 #define BG UI_BG_SCREEN
 #define DIM UI_DIM
@@ -30,18 +31,18 @@ static const uint8_t mode_of[T_N] = { 0, 0, 0, 0, 2, 2, 2, 1, 1, 1, 0, 0, 0 }, s
 uint32_t check_mask, check_under;
 /* M-1 SD feed probe (L1): sequential 4 KB commands on the cold-image slot (data slot 6, tau-cold.bin, always on the card). Blocks about a quarter of a second; refused while a track plays (one command in flight). */
 extern uint8_t _tag_start;
-static sd_probe_t sdp; static uint8_t sd_state;      /* 0 not run, 1 done, 2 refused (playing), 3 failed */
+static sd_probe_t sdp; static uint8_t sd_state;      /* 0 not run, 1 done, 2 refused (playing), 3 failed at once, 4 measured but a later read failed */
 static char *put_u(char *q, uint32_t v) { char t[10]; uint32_t n = 0; do { t[n++] = (char)('0' + v % 10u); v /= 10u; } while (v); while (n) *q++ = t[--n]; return q; }
 static void sd_run(void)
 {
     if (mp.playing) { sd_state = 2u; return; }
-    sd_probe_run(&sdp, 6u, 1u << 20, 4096u, (uint32_t)(uintptr_t)&_tag_start, 2000u);
-    sd_state = sdp.ok ? 1u : 3u;
+    sd_probe_run(&sdp, 6u, cold_bytes & ~4095u, 4096u, (uint32_t)(uintptr_t)&_tag_start, 2000u);    /* the file is the span: a read past its end fails (the first version asked for 1 MiB and failed at 216 KB) */
+    sd_state = sdp.n ? (sdp.ok ? 1u : 4u) : 3u;
 }
 static void sd_line(char *s)
 {
     char *q = s;
-    if (sd_state == 1u) { q = put_u(q, sdp.kbps); for (const char *p = " KB/S W"; *p; p++) *q++ = *p; q = put_u(q, sdp.worst_cyc / (CLK_HZ / 1000u)); *q++ = 'M'; *q++ = 'S'; *q++ = ' '; *q++ = 'N'; q = put_u(q, sdp.n); }
+    if (sd_state == 1u || sd_state == 4u) { q = put_u(q, sdp.kbps); for (const char *p = " KB/S W"; *p; p++) *q++ = *p; q = put_u(q, sdp.worst_cyc / (CLK_HZ / 1000u)); *q++ = 'M'; *q++ = 'S'; *q++ = ' '; *q++ = 'N'; q = put_u(q, sdp.n); if (sd_state == 4u) { *q++ = ' '; *q++ = 'F'; q = put_u(q, sdp.fail_at / 1024u); } }
     else { const char *p = sd_state == 2u ? "SD STOP PLAYBACK" : sd_state == 3u ? "SD READ FAILED" : "SD L1 TO RUN"; while (*p) *q++ = *p++; }
     *q = 0;
 }

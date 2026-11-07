@@ -12,7 +12,8 @@ typedef struct {
     uint32_t worst_cyc;  /* slowest single command */
     uint32_t best_cyc;   /* fastest single command */
     uint32_t hist[8];    /* per-command time: <1ms <2 <3 <4 <5 <8 <13 >=13 ms */
-    int      ok;         /* 0 = a read failed or the slot was too small */
+    uint32_t fail_at;    /* byte offset of the first failed command, 0 when none failed */
+    int      ok;         /* 1 = every command succeeded; the statistics are filled whenever n > 0, even after a failure */
 } sd_probe_t;
 void sd_probe_run(sd_probe_t *r, uint32_t slot, uint32_t span, uint32_t chunk, uint32_t dst_off, uint32_t ms);
 #endif
