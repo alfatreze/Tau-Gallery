@@ -1,0 +1,20 @@
+# Reply to Tau V on the SDRAM controller contract (2026-10-28; ready to send)
+
+v0.2 of the contract is `docs/features/SDRAM_CONTROLLER_CONTRACT.md` (this repo, commit `703f9524` or later). Your five additions:
+
+1. **Bank function.** Accepted. Default `addr[11:10] ^ addr[21:20] ^ addr[23:22]`, parameter `BANK_HASH` (plain, `[21:20]`, default, client skew). Picture slots k and k+4 still collide (bit 24 is ignored): please keep a reference and its reconstruction target out of slots 4 apart; the replay chooses the final function.
+2. **EMRS.** Settled from the datasheet text (the sibling sheet AS4C32M16MS-6BIN Rev 1.0, power-on section): the Mode Register and Extended Mode Register Set commands "must be issued"; two auto refreshes before or after them. The PHY always programs it (`BA=10, A=0x000`). `SDRAM_PART_FACTS.md` is corrected. The old player controller omits it (a finding for the chip-model baseline). The MSA sheet is still to be diffed.
+3. **Stale numbers.** Contract v0.2 uses tRFC 10 cycles and an urgent bound of about L_max + 27 (estimate). The earlier review carries a "superseded" banner; the order is Tau V first.
+4. **`sched_v` ownership (owner's decision D-T10).** This project builds everything: the PHY, the chip model, the replay tools and `sched_v` v1 as the reference. From the `sched_v` tag Tau V owns it and may change it; Tau Alpha owns `sched_a` and the common elements (PHY, chip model, replay tools). You copy the tags and record path, commit and SHA-256 in `docs/UPSTREAM_TAU_ALPHA.md`; no shared files.
+5. **100 MHz CL2 capture.** Recorded: the falling-edge capture mode applies to the baseline too; `sdram_fb` working at 100 MHz is noted as your report, not re-verified here, and `RISE` mode must reproduce it. The default stays `FALL` until the chip model and a Pocket sweep show otherwise.
+
+**Agents.** The chip-model agent of the first round left nothing, the replay agent left unfinished fragments: no contradictions to report. A new clean-room chip-model author started 2026-10-28 with commit checkpoints. The replay harness is not restarted until your markers exist.
+
+**What we need from you** (dates to follow, as you wrote): macroblock and picture markers and dependencies in the timed `.treq` format (16 bytes: port, direction, words, address, release time ns, flags; bit 0 fence), deadlines, decode-ahead depth, worst-case traces, the four-vector profile decision, the write-buffer line length, the 2D request decision, the client-side load cuts, and the † placeholders of §5 (WRR weights, queue depth, batching watermark). No phase or delay sweep is needed from memtest; the 150 MHz CL3 read data is welcome when it exists (a data point, not margin proof, since the SDRAM interface has no SDC).
+
+## Update after the PHY (2026-10-28 later): contract v0.4
+The chip model and the PHY now exist in simulation (88 PHY tests and mutants, 65 chip-model tests; nothing on a Pocket, no Quartus run). Two findings that affect how you plan around the scheduler:
+* **Read to write costs more than v0.2 said.** A read burst must be ended by the scheduler (`BST`, `RD` or `PRE`) before any `WR`; the earliest `WR` is `BST` + 3 clocks at CL2 and CL3. Your direction batching (one turnaround per batch) still holds and matters more.
+* **A forced refresh sets a sticky fault in the PHY.** Treat it as a scheduler bug, never as normal operation.
+
+**The one answer we need first: do you want 2D requests (`req_w`, `req_h`, `req_stride`) in `sched_v`?** It changes the scheduler's interface and test scope; a "no" removes it, a "yes" needs your field widths. Then, before the `sched_v` tag: the write-buffer line length (sets the decoder ports' maximum grant), the † placeholders of §5 (WRR weights, queue depth, batching watermark); and for the real-time replay: markers, deadlines, decode-ahead depth, fences, worst-case traces, the four-vector decision, the load cuts. Contract: `docs/features/SDRAM_CONTROLLER_CONTRACT.md` at the commit this reply's commit is in or later.

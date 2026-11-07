@@ -1,0 +1,104 @@
+# Quartus build artefacts
+.DS_Store
+
+src/fpga/db/
+src/fpga/incremental_db/
+src/fpga/output_files/
+src/fpga/ap_core_assignment_defaults.qdf
+src/fpga/c5_pin_model_dump.txt
+*.qws
+*.rpt
+*.summary
+*.smsg
+*.jdi
+*.jditmp
+*.done
+quartus_build.log
+compile.log
+
+# Firmware build outputs (regenerable from fw/ via build.sh)
+fw/fw.elf
+fw/build.log
+*.rom
+
+# ...except the shipped firmware image. It is THIS PROJECT'S OWN compiled code,
+# not a game ROM, and the core does not start without it -- a release zip built
+# from a checkout that lacks it is a broken release. The blanket *.rom rule above
+# still covers everything else.
+!dist/Assets/tau/alfatreze.TAU/tau.rom
+
+# Simulation outputs
+sim/*.vvp
+*.vcd
+
+# Stage 0 benchmark firmware -- regenerable by sim/build_fw.sh, ~4 MB of hex
+sim/fw_*/*.elf
+sim/fw_*/*.bin
+sim/fw_*/*.hex
+
+# Never commit audio or archives
+*.mp3
+*.zip
+
+__pycache__/
+*.pyc
+
+# Recovery scratch from the 2026-08-01 truncation incident
+fw/player.c.truncated-survivor
+fw/player.c.snapshot-0724
+fw/tail.c
+
+# Downloaded RISC-V toolchain (xPack) -- ~1GB, re-installable, not our source
+toolchain/
+
+# Simulation captures
+sim/*.bin
+sim/*.txt
+
+# Regenerable design-review captures. `make visual-review` writes the exact
+# decoded packaged splash here, alongside the authored source for comparison.
+work/previews/
+work/triad/
+
+# Vendored upstreams that carry their own .git (would become gitlinks, not
+# content). Re-clone per README; only the ones we build against matter:
+#   libhelix-mp3, pythondata-cpu-vexriscv  -> required
+#   minimp3, picorv32                      -> evaluated and rejected (Stage 0)
+third_party/libhelix-mp3/.git/
+third_party/minimp3/
+third_party/picorv32/
+# upstream clone; the build uses src/fpga/rtl/VexRiscv_Full.v
+third_party/pythondata-cpu-vexriscv/
+
+# The playlist is the USER'S file, not a build output. Shipping one meant a
+# full sync to the card overwrote whatever they had written in it.
+dist/Assets/tau/common/playlist.m3u
+
+# Card snapshots from tools/card_snapshot.py -- measurement scratch, and they
+# name the user's own files.
+tools/_snapshots/
+
+sim/*.vvp
+
+# Stray bitstream copies at the repo root -- the shipped one lives in
+# dist/Cores/alfatreze.TAU/ and is written there by package.py.
+/bitstream.rbf_r
+/*.rbf
+fw/*.o
+.aider*
+
+# Local incremental HDL build cache.
+/build/rtl/
+/.venv-cptr/
+/.cptr-data/
+
+# Local scratch/tooling that has never actually belonged in the repo -- these were simply never added
+# here before, so every session's `git status` has been showing them as untracked "changes" (work/ alone
+# is 15 GB / ~10,800 files at the time this was added). Purely additive: nothing here is deleted, git
+# just stops tracking it as unstaged.
+/work/
+/.claude/
+/.codex/
+/UniClaudeProxy/
+/build/
+/release/

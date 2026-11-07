@@ -1,0 +1,164 @@
+"""
+package.py — Package the compiled TAU core for the Analogue Pocket.
+
+Steps:
+  1. Verify the bitstream exists in src/fpga/output_files/
+  2. Convert .rbf -> .rbf_r (BIT-REVERSED bitstream for Pocket -- mandatory)
+  3. Copy bitstream to dist/Cores/alfatreze.TAU/bitstream.rbf_r
+  4. Verify the firmware image is present (built separately by fw/build.sh)
+  5. Print copy instructions for the Pocket SD card
+
+The .rbf_r suffix LITERALLY MEANS bit-reversed. Do NOT just rename .rbf to
+.rbf_r -- the Pocket will configure the FPGA but the bridge handler will
+never respond ("Error in framework RS: BRIDGE not responding").
+
+Usage:
+  python package.py [--skip-rom]   # --skip-rom: package without the firmware check
+  python package.py --rbf PATH --rbf-sha256 HASH   # package a specific raw RBF
+  python package.py --release-library   # also declare the library (slot 5) and cold-image (slot 6) data slots
+  python package.py --library --cold    # the same two flags, separately
+"""
+
+import os
+import pathlib
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools"))
+import tau_data_slots
+
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+BITSTREAM_SRC = os.path.join(PROJECT_ROOT, "src", "fpga", "output_files", "ap_core.rbf")
+DIST_CORE     = os.path.join(PROJECT_ROOT, "dist", "Cores", "alfatreze.TAU")
+BITSTREAM_DST = os.path.join(DIST_CORE, "bitstream.rbf_r")
+ROM_DST       = os.path.join(PROJECT_ROOT, "dist", "Assets", "tau", "alfatreze.TAU", "tau.rom")   # core-specific (tools/tau_layout.py)
+README_PATH   = os.path.join(PROJECT_ROOT, "README.md")
+
+
+def rbf_to_rbf_r(src, dst):
+    """Reverse the bit order of each byte in the .rbf.
+
+    Pocket bootloader expects the bitstream in bit-reversed format (the _r
+    suffix). Skipping this step produces a bitstream that the FPGA loads but
+    whose bridge handler is silent -- "BRIDGE not responding" on game launch.
+    """
+    with open(src, "rb") as f:
+        data = f.read()
+
+    rev = bytearray(len(data))
+    for i, b in enumerate(data):
+        rev[i] = int(f"{b:08b}"[::-1], 2)
+
+    with open(dst, "wb") as f:
+        f.write(bytes(rev))
+
+    print(f"  bitstream: {src}")
+    print(f"  -> rbf_r : {dst}  ({len(rev)} bytes)")
+
+
+def check_readme():
+    """Warn (don't fail) if README.md still has unfilled TODO markers."""
+    if not os.path.exists(README_PATH):
+        print("\n!! README.md MISSING.")
+        return
+    text = open(README_PATH, encoding="utf-8", errors="ignore").read()
+    todos = text.count("<!-- TODO")
+    if todos:
+        print(f"\n{'!' * 60}")
+        print(f"!! README.md still has {todos} unfilled <!-- TODO --> marker(s).")
+        print("!! Fill them in before shipping.")
+        print(f"{'!' * 60}")
+
+
+def main():
+    global BITSTREAM_SRC
+    skip_rom = "--skip-rom" in sys.argv
+    # Audited override: package a specific raw RBF (for example the probe-free window build from
+    # work/) instead of src/fpga/output_files/ap_core.rbf; the hash must match.
+    if "--rbf" in sys.argv:
+        import hashlib
+        i = sys.argv.index("--rbf")
+        want = sys.argv[sys.argv.index("--rbf-sha256") + 1] if "--rbf-sha256" in sys.argv else None
+        if not want:
+            print("ERROR: --rbf requires --rbf-sha256 (refusing an unaudited bitstream)")
+            sys.exit(1)
+        path = sys.argv[i + 1]
+        path = path if os.path.isabs(path) else os.path.join(PROJECT_ROOT, path)
+        got = hashlib.sha256(open(path, "rb").read()).hexdigest()
+        if got != want:
+            print(f"ERROR: RBF hash mismatch: expected {want}, got {got}")
+            sys.exit(1)
+        BITSTREAM_SRC = path
+
+    print("=== TAU Pocket Core Packager ===\n")
+
+    # 1. Bitstream
+    if os.path.exists(BITSTREAM_SRC):
+        os.makedirs(DIST_CORE, exist_ok=True)
+        print("Converting bitstream...")
+        rbf_to_rbf_r(BITSTREAM_SRC, BITSTREAM_DST)
+    elif os.path.exists(BITSTREAM_DST):
+        # Branding and firmware-only builds intentionally reuse the pinned,
+        # hardware-tested bitstream. Quartus is unavailable on macOS and an
+        # identity change does not justify an FPGA rebuild.
+        print(f"Using existing bitstream: {BITSTREAM_DST}")
+    else:
+        print(f"ERROR: neither source nor packaged bitstream exists: {BITSTREAM_SRC}")
+        print("Run Quartus compilation first:")
+        print(f"  quartus_sh --flow compile {os.path.join(PROJECT_ROOT, 'src', 'fpga', 'ap_core.qpf')}")
+        sys.exit(1)
+
+    # 2. Firmware. Not built here -- fw/build.sh owns that, and it is a separate
+    #    toolchain. Just refuse to call the package complete without it, since
+    #    the core does not start when the firmware is missing.
+    if not skip_rom:
+        if os.path.exists(ROM_DST):
+            print(f"\nFirmware present: {ROM_DST} ({os.path.getsize(ROM_DST):,} bytes)")
+        else:
+            print(f"\nERROR: firmware missing: {ROM_DST}")
+            print("Build it first:")
+            print("  bash fw/build.sh")
+            sys.exit(1)
+
+    # 2b. Media library and cold-image data slots (--library, --cold; both on with --release-library).
+    #     The library index itself is never shipped -- it is built from the user's own music by
+    #     tools/sync_media.py -- but the slot must still be declared so a locally-built one is found.
+    #     The cold image IS a firmware asset and is copied in when the build produced one.
+    add_library = "--library" in sys.argv or "--release-library" in sys.argv
+    add_cold = "--cold" in sys.argv or "--release-library" in sys.argv
+    if add_library:
+        tau_data_slots.add_library_slot(pathlib.Path(DIST_CORE))
+        print("Added data slot 5 (media library index)")
+    if add_cold:
+        cold_src = os.path.join(os.path.dirname(ROM_DST), "tau-cold.bin")
+        if not os.path.exists(cold_src):
+            print(f"\nERROR: --cold requested but {cold_src} is missing (build with COLD_PACK=1, e.g. fw/build.sh release)")
+            sys.exit(1)
+        tau_data_slots.add_cold_slot(pathlib.Path(DIST_CORE))
+        print("Added data slot 6 (cold image)")
+        tau_data_slots.add_assets_slot(pathlib.Path(DIST_CORE))
+        print("Added data slot 8 (tau-assets.bin, optional themes and meter presets file)")
+        tau_data_slots.add_cover_slot(pathlib.Path(DIST_CORE))     # firmware built with TAU_ART_TIMG (the default since B-325) opens covers through slot 7
+        print("Added data slot 7 (TIM1 cover image)")
+
+    # 3. Summary
+    print("\n=== Package contents ===")
+    for root, dirs, files in os.walk(os.path.join(PROJECT_ROOT, "dist")):
+        level = root.replace(os.path.join(PROJECT_ROOT, "dist"), "").count(os.sep)
+        indent = "  " * level
+        print(f"{indent}{os.path.basename(root)}/")
+        for f in files:
+            fpath = os.path.join(root, f)
+            size = os.path.getsize(fpath)
+            print(f"{indent}  {f}  ({size:,} bytes)")
+
+    # 4. README completeness (non-fatal — packaging still succeeds)
+    check_readme()
+
+    print("\n=== Copy to Pocket SD card ===")
+    print("Copy the contents of dist/ to the root of your Pocket SD card:")
+    print(f"  xcopy /E /Y \"{os.path.join(PROJECT_ROOT, 'dist')}\\*\" X:\\")
+    print("(replace X: with your Pocket SD card drive letter)")
+
+
+if __name__ == "__main__":
+    main()

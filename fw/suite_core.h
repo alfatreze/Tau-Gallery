@@ -1,0 +1,257 @@
+/* Diagnostics report record (docs/TEST_SUITE_SPEC.md sections 2, 7, 8). Portable C, no libc, no globals: the caller
+ * supplies the buffers. Built into the firmware by fw/suite.inc and into tools/host/suite_harness.c, which
+ * sim/test_suite.py checks against tools/decode_tau_suite.py.
+ *
+ * Record   : 'T' 'D' fmt(1) profile(1) then TLV entries {tag u8, len u8, value}, then CRC32 (LE) of all bytes before it.
+ * Text     : "TAUD1:" + base64url (no padding) of the record: what the QR code carries.
+ * Persist  : four 31-bit words (APF stores signed int32): a summary that survives Quit without any QR (sp_pack).
+ * Short    : 36 characters, Crockford base32, of a 22-byte summary with a CRC16 (fallback when only a photo exists). */
+#ifndef TAU_SUITE_CORE_H
+#define TAU_SUITE_CORE_H
+#include <stdint.h>
+
+#ifndef SR_FN
+#define SR_FN static      /* firmware: cold code */
+#endif
+#define SR_FMT 1u
+enum { SR_T_BUILD = 1, SR_T_MEM, SR_T_TEST, SR_T_SDRAM, SR_T_PSRAM, SR_T_COLD, SR_T_TIME, SR_T_AUDIO, SR_T_LIB,
+       SR_T_SET, SR_T_ERR, SR_T_NOTE, SR_T_DECPROF, SR_T_DECSWEEP, SR_T_BLITTEST, SR_T_STACK, SR_T_WVIZCFG,
+       SR_T_METERSWEEP, SR_T_INFOEXPORT, SR_T_METERCFG, SR_T_METERTRACE, SR_T_DECPROF2, SR_T_HEAP, SR_T_LOAD, SR_T_LOAD2, SR_T_INFOTEXT, SR_T_NOWPLAYING, SR_T_TRACKINFO };
+/* SR_T_HEAP (B-514, PHASE_F_SPEC.md section 4.1's other half): u32 x 2 -- peak heap bytes in use since boot, heap region size in bytes. The firmware's
+ * _sbrk (fw/sysio.c) only ever grows, so heap_used() IS the high-water mark. Present on every Check run, like SR_T_STACK. A NEW tag (23) rather than a longer
+ * SR_T_STACK so an older decoder skips it as unknown instead of misreading a 4-word stack record. */
+/* SR_T_LOAD (Cymo C0, 2026-10-04): u16 x 6 -- CPU load over the Check audio (CT_AUD) window: busy_pct (100 minus the mean idle share, idle = time the decode
+ * loop was blocked on a full FIFO, the same measure as Info > CPU LOAD / HEADROOM), busy_worst_pct (busiest latched second), io_pct (mean share blocked on
+ * file reads), secs (latched seconds counted), sub_fdct_pct and sub_hw_pct (MP3 only, profile build, else 0: percent of window realtime spent in the two
+ * software FDCT32 calls per slot and in the hardware-window handoff; Subband total s_pct minus these = the rest). Compare busy_pct with the decode-stage
+ * sum (h+i+s of SR_T_DECPROF) to see how much of the CPU is NOT decode (push/resample, meters, UI, file I/O). Always present in a Check record. */
+/* SR_T_LOAD2 (Cymo C0 follow-up, B-589): u16 x 5, each a percent of the CT_AUD window's realtime, MP3 main loop only (0 on FLAC): dec (MP3Decode, incl. the profile ticks'
+ * own small cost in the profile build), feed (meters_feed), push (the sample push loop NET of the time blocked on a full FIFO: volume, fade, FIFO status read, write),
+ * ui (ui_draw_dynamic), wait (blocked on a full FIFO: idle, plus the input/refill work done while waiting, which is also counted as idle by the load latch).
+ * busy_pct of SR_T_LOAD minus dec+feed+push+ui = what is left (file reads and refill outside the wait, input polling, tag/clock bookkeeping). */
+/* SR_T_DECPROF2 (2026-09-28, owner request after the alpha.12 packaging incident: get the finer
+ * decode-stage split into Check's QR directly, instead of needing a separate screenshot of the
+ * bench-only row; widened same day, B-361, before anything else depended on the original 4-field
+ * shape; widened again B-381/B-382 for lpc_max_ms): u16 x 7 -- d_pct, a_pct, x_pct (MP3 Dequantize/AntiAlias/HybridTransform, same
+ * percent-of-CT_AUD-window-realtime units as SR_T_DECPROF's h/i/s; a_pct+x_pct should read close to
+ * SR_T_DECPROF's own i_pct, which is IMDCT() alone -- d_pct is the piece i_pct's old meaning hid,
+ * B-345), u_pct (FLAC unary()/__clzdi2 estimated share of the SAME res+lpc denominator SR_T_DECPROF's
+ * r_pct uses, B-342/B-343 -- directly comparable to r_pct, not a separate ratio), t_pct (FLAC's TRUE
+ * total percent-of-realtime: channel 0's res+lpc pass PLUS channel 1's own whole cost -- the first
+ * real apples-to-apples figure against MP3's h+i+s+d+a+x sum; r_pct/u_pct are only ratios within
+ * channel 0), c1_pct (channel 1's own percent-of-realtime alone -- bit-read + reconstruction +
+ * decorrelation fused, flac.c cannot time them apart; 0 on mono, where channel 1 never runs; this is
+ * the real check of flac.c's own inherited "channel 1 does the same work, so the ratio carries"
+ * assumption, B-361), lpc_max_ms (B-381/B-382: the single WORST real-LPC call seen in the window --
+ * one call covers a whole block's remaining samples (n - order of them), not one tap, so this is
+ * already on the order of 100,000+ cycles even for a perfectly normal block; milliseconds, not raw
+ * cycles (the first version of this field used raw cycles capped at 65535 and pegged on every real
+ * call regardless of hardware/software -- a real bug in the first cut, corrected before it was relied
+ * on for anything). Exists because t_pct/c1_pct are AVERAGES over the whole window and can stay flat
+ * even if a rare, data-dependent high-order subframe spikes further past real time than the average
+ * suggests; this is the direct test of a reported microstuttering fix, which an averaged percent alone
+ * cannot see). A separate tag from
+ * SR_T_DECPROF (same size class, but a different, later-added shape) rather than widening THAT one,
+ * matching this project's own SR_T_DECSWEEP/SR_T_DECPROF precedent of not overloading an existing
+ * tag's meaning. Present only when MP3_PROFILE/FLAC_PROFILE are compiled in, same gate as SR_T_DECPROF;
+ * an old decoder skips it unrecognised; a decoder built for the 6-field shape (before B-381) will
+ * refuse the new 7-field record (tools/decode_tau_suite.py handles both widths explicitly). */
+/* SR_T_METERSWEEP (B-301, docs/METER_MODULE_SPEC.md section 15 "meter sweep as a standing
+ * regression"): ONE entry per selectable meter (repeatable, same convention as SR_T_DECSWEEP),
+ * appended in viz_order[] order while music keeps playing underneath -- the real point is that each
+ * meter's own normal tick()/draw runs for real during its window, so the numbers are a real cost
+ * measurement, not a model. 9 bytes: meter_id(u8, the VIZ_* enum value), sdram_busy_permille(u16 LE,
+ * R_SDR_BUSY delta over the window), draw_stall_ms(u16 LE, R_FB_STALL delta, saturates), cpu_pct(u8,
+ * ui_cpu_pct() sampled at window end), late_underruns(u8, pcm_under_n delta, saturates),
+ * yield_worst_growth_s(u8, growth in meter_yield_worst during this window -- 0 does NOT mean no
+ * yielding happened, only that no NEW record streak did; see fw/suite.inc's mw_sample()),
+ * audio_full(u8, 1 if playback never stopped/paused during the window, the same honesty flag
+ * B-139 added for CT_AUD/CT_BLT -- a window with audio_full=0 measured mostly silence, not the
+ * meter under real load). */
+/* SR_T_INFOEXPORT (B-301): a one-off export of the Info page's own live values, on demand (Settings
+ * > Diagnostics > Info > EXPORT QR), not part of a Check run. 20 bytes: fw_major(u8), fw_minor(u8),
+ * fw_patch(u8) (parsed from APP_VER), fpga_rev(u32 LE, REG(R_VERSION)), window_read_cyc(u16 LE),
+ * free_ram(u32 LE), underruns(u16 LE, pcm_under_n), draw_stall_ms(u16 LE, R_FB_STALL/(CLK_HZ/1000)),
+ * load_ms(u16 LE, the LOAD MS row's own total), cpu_pct(u8, ui_cpu_pct()). */
+/* SR_T_INFOTEXT (2026-10-04, tag 26, repeatable, Info export only): one entry per Info page row, exactly as shown on screen: row_index(u8), label (ASCII),
+ * 0, value (ASCII, no terminator; the entry length ends it). Self-describing, so a new Info row needs no decoder change. */
+/* SR_T_NOWPLAYING (2026-10-04, tag 27, once per report, grid builds): what was playing when the report was made: state(u8: 0 nothing loaded, 1 stopped, 2 paused,
+ * 3 playing), queue_pos(u16 LE, 1-based, 0 = no library queue), queue_len(u16 LE), then title, 0, artist, 0, album (ASCII/UTF-8, each cut at 40 bytes, no
+ * terminator after the album: the entry length ends it). */
+/* SR_T_TRACKINFO (tag 28, repeatable, grid reports): one field of the track-details page for the track that is playing (which = 0) or the one played before it
+ * (which = 1): which(u8), field(u8, the details page order), label (ASCII), 0, value (UTF-8, no terminator; the entry length ends it, cut at 100 bytes). Empty fields are
+ * left out. Self-describing, like SR_T_INFOTEXT: a new details field needs no decoder change. */
+/* SR_T_METERCFG (M2, docs/METER_MODULE_SPEC.md section 5): generic replacement for SR_T_WVIZCFG. A one-off export of the meter being edited on
+ * the Configure page, for ANY meter that has parameters: meter_id(u8, the VIZ_* id), schema(u8, 1), preset_idx(u8, 0xFF = custom),
+ * nparams(u8), then the values in manifest order, one byte per u8/bool/enum parameter and two (u16 LE) per u16 parameter. Widths and
+ * names come from tools/meters_schema.json, so a new meter needs no decoder change. */
+/* SR_T_METERTRACE (M3, docs/METER_MODULE_SPEC.md section 15 "traces as test assets"): what the meters saw on real audio, for replay in the preview
+ * lab, the golden-frame tests and the native harnesses. Repeatable, one entry per DISPLAYED meter frame in order: dt_ms(u16 LE, since the previous
+ * captured frame, 0 for the first), spec_lvl[16] (u8, after the firmware ballistics), wav_v[64] (i8). 82 bytes each, 20 frames per record. */
+/* SR_T_WVIZCFG (B-218, superseded by SR_T_METERCFG; still decodable): a one-off export of the Winamp Bars/Scope config page's live wviz_cfg
+ * (fw/settingsui.inc), NOT part of a Check run -- built and shown on demand from Settings >
+ * Appearance > Meter > Configure > Export QR. 13 raw bytes, no sub-length prefix beyond the TLV's
+ * own: mode(u8: 0=bars,1=scope), preset_idx(u8: 0xFF=custom), bands(u8), ease_mode(u8: 0=instant
+ * 1=linear 2=exponential 3=spring), attack(u8), release(u8), peak_on(u8), peak_gravity(u8: 0=linear
+ * 1=gravity), peak_hold_ms(u16 LE), peak_fall(u8), scope_smooth(u8), scope_trail(u8). */
+/* SR_T_STACK (B-204, PHASE_F_SPEC.md section 4.1): u32 x 2 -- peak bytes used (the high-water mark,
+ * measured by painting the whole stack region with a sentinel at boot and scanning for where it was
+ * first disturbed), stack region size in bytes (currently 16384, `_stack_size` in fw/link.ld) so the
+ * decoder never has to hardcode that constant. Present on every Check run (not gated on CHK_DEV,
+ * unlike most `SR_T_*` extras) since it answers a safety question relevant to every build, not just
+ * developer diagnostics. */
+/* SR_T_DECPROF (B-088/B-089, docs/TEST_SUITE_SPEC.md section 11): u16 x 4 --
+ * h_pct, i_pct, s_pct (MP3 Huffman/IMDCT/Subband, percent of the CT_AUD
+ * window's real time, uncapped), r_pct (FLAC bit-reader share of channel 0's
+ * decode, 0-100). Present only when MP3_PROFILE/FLAC_PROFILE are compiled in
+ * -- a normal Check build never emits this tag, and an old decoder skips it
+ * unrecognised either way. */
+/* SR_T_DECSWEEP (B-090/B-091, docs/TEST_SUITE_SPEC.md section 12): ONE entry
+ * PER TRACK of a Decode Profile Sweep, repeated -- track_idx u8, speed_pct u8
+ * (the active playback speed as a percent, e.g. 125 = 1.25x; B-092), then
+ * h_pct/i_pct/s_pct/r_pct u16 each (10 bytes fixed), then a TRUNCATED TITLE
+ * (up to SW_TITLE_MAX bytes, ASCII, not NUL-terminated -- its length is
+ * whatever is left of the TLV entry's own length byte minus 10) so a reading
+ * can be matched back to a file without guessing from queue order (B-096:
+ * track_idx alone was not enough -- confirmed reading a real sweep off the
+ * card, with the queue order affected by a since-fixed bug and no way to
+ * tell which entry was which file). A separate tag from SR_T_DECPROF
+ * (different wire size, and now variable-length besides) rather than
+ * overloading it by length, because a sweep record and a single Check sample
+ * are different concerns with no reason to share a format. */
+/* SR_T_BLITTEST (B-166, Blit Test): ONE entry per (opcode, level) combination, repeated -- op_id u8
+ * (0=RUN 1=RECT 2=CHAR 3=COPY 4=BLIT 5=BAR 6=SBLIT 7=CBLIT, matching mp3_fb.sv's own OP_* encoding),
+ * level u8 (0-2, concurrency depth -- how many commands are queued ahead before waiting), result u8
+ * (SR_PASS/SR_FAIL, see below -- FAIL means the fixed window did not complete, which in practice
+ * means it hung, since there is no timeout on fb_wait() to recover from a real one), stall_pct u8
+ * (R_FB_STALL delta over the window / window cycles * 100 -- the fraction of the window the CPU
+ * spent blocked because the draw FIFO was full, this test's "how loaded" number, the same busy-
+ * cycle convention B7/R_SDR_BUSY established for SDRAM), ops_done u16 LE (draw-engine commands
+ * actually issued in the window, the throughput number). 6 bytes fixed. */
+/* SR_T_TEST entries (len 6): id u8, result u8 (0 pass, 1 fail, 2 skipped, 3 not applicable), value u32 (test specific). */
+enum { SR_PASS = 0, SR_FAIL = 1, SR_SKIP = 2, SR_NA = 3 };
+
+typedef struct { uint8_t *b; uint32_t n, cap; int over; } sr_t;
+
+SR_FN uint32_t sr_crc32(const uint8_t *p, uint32_t n)
+{
+    uint32_t c = 0xFFFFFFFFu;
+    for (uint32_t i = 0; i < n; i++) {
+        c ^= p[i];
+        for (int k = 0; k < 8; k++) c = (c >> 1) ^ (0xEDB88320u & (uint32_t)-(int32_t)(c & 1u));
+    }
+    return ~c;
+}
+
+SR_FN void sr_put(sr_t *s, uint8_t v) { if (s->n < s->cap) s->b[s->n++] = v; else s->over = 1; }
+
+SR_FN void sr_init(sr_t *s, uint8_t *buf, uint32_t cap, uint32_t profile)
+{
+    s->b = buf; s->n = 0; s->cap = cap; s->over = 0;
+    sr_put(s, 'T'); sr_put(s, 'D'); sr_put(s, (uint8_t)SR_FMT); sr_put(s, (uint8_t)profile);
+}
+
+SR_FN void sr_tlv(sr_t *s, uint8_t tag, const uint8_t *v, uint32_t len)
+{
+    sr_put(s, tag); sr_put(s, (uint8_t)len);
+    for (uint32_t i = 0; i < len; i++) sr_put(s, v[i]);
+}
+
+/* little-endian fields of 1, 2 and 4 bytes, up to eight values per entry */
+SR_FN void sr_vals(sr_t *s, uint8_t tag, uint32_t width, const uint32_t *v, uint32_t count)
+{
+    uint8_t t[32]; uint32_t n = 0;
+    for (uint32_t i = 0; i < count && n + width <= sizeof(t); i++)
+        for (uint32_t k = 0; k < width; k++) t[n++] = (uint8_t)(v[i] >> (8u * k));
+    sr_tlv(s, tag, t, n);
+}
+
+SR_FN void sr_test(sr_t *s, uint32_t id, uint32_t result, uint32_t value)
+{
+    uint8_t t[6] = { (uint8_t)id, (uint8_t)result, (uint8_t)value, (uint8_t)(value >> 8), (uint8_t)(value >> 16), (uint8_t)(value >> 24) };
+    sr_tlv(s, SR_T_TEST, t, 6);
+}
+
+/* Appends the CRC32; returns the record length, or 0 if anything did not fit. */
+SR_FN uint32_t sr_finish(sr_t *s)
+{
+    uint32_t c = sr_crc32(s->b, s->n);
+    for (int k = 0; k < 4; k++) sr_put(s, (uint8_t)(c >> (8 * k)));
+    return s->over ? 0u : s->n;
+}
+
+/* "TAUD1:" + base64url; returns the string length (out must hold 6 + 4*ceil(len/3) + 1), 0 if it does not fit. */
+SR_FN uint32_t sr_text(const uint8_t *rec, uint32_t len, char *out, uint32_t cap)
+{
+    static const char a[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    uint32_t need = 6u + ((len * 4u + 2u) / 3u) + 1u;
+    if (need > cap) return 0;
+    uint32_t o = 0;
+    for (const char *p = "TAUD1:"; *p; p++) out[o++] = *p;
+    for (uint32_t i = 0; i < len; i += 3) {
+        uint32_t v = (uint32_t)rec[i] << 16;
+        if (i + 1 < len) v |= (uint32_t)rec[i + 1] << 8;
+        if (i + 2 < len) v |= rec[i + 2];
+        out[o++] = a[(v >> 18) & 63u]; out[o++] = a[(v >> 12) & 63u];
+        if (i + 1 < len) out[o++] = a[(v >> 6) & 63u];
+        if (i + 2 < len) out[o++] = a[v & 63u];
+    }
+    out[o] = 0;
+    return o;
+}
+
+/* ---- persisted summary: four 31-bit words ---- */
+typedef struct {
+    uint32_t profile;      /* 3 bits */
+    uint32_t run;          /* 8 bits, wraps */
+    uint32_t verdict;      /* 2 bits: 0 none, 1 all passed, 2 something failed, 3 incomplete */
+    uint32_t pass, fail;   /* 15-bit masks over test ids 0..14 */
+    uint32_t worst;        /* 9 bits, cycles, saturating */
+    uint32_t cold10;       /* 9 bits, cycles per instruction word x 10 */
+    uint32_t late;         /* 6 bits saturating */
+    uint32_t stall;        /* 7 bits, ms, saturating */
+    uint32_t load100;      /* 12 bits, tenths of a second of the last track load, saturating */
+    uint32_t lib_err;      /* 6 bits */
+    uint32_t cold_err;     /* 6 bits */
+    uint32_t fw_minor;     /* 7 bits */
+} sp_t;
+
+SR_FN uint32_t sp_sat(uint32_t v, uint32_t bits) { uint32_t m = (1u << bits) - 1u; return v > m ? m : v; }
+
+SR_FN void sp_pack(const sp_t *p, uint32_t w[4])
+{
+    w[0] = (SR_FMT & 15u) | ((p->profile & 7u) << 4) | ((p->run & 255u) << 7) | ((p->verdict & 3u) << 15);
+    w[1] = (p->pass & 0x7FFFu) | ((p->fail & 0x7FFFu) << 15);
+    w[2] = sp_sat(p->worst, 9) | (sp_sat(p->cold10, 9) << 9) | (sp_sat(p->late, 6) << 18) | (sp_sat(p->stall, 7) << 24);
+    w[3] = sp_sat(p->load100, 12) | (sp_sat(p->lib_err, 6) << 12) | (sp_sat(p->cold_err, 6) << 18) | (sp_sat(p->fw_minor, 7) << 24);
+}
+
+/* ---- short code: 22 bytes -> 36 Crockford base32 characters, grouped by the caller ---- */
+SR_FN uint32_t sr_crc16(const uint8_t *p, uint32_t n)
+{
+    uint32_t c = 0xFFFFu;
+    for (uint32_t i = 0; i < n; i++) {
+        c ^= (uint32_t)p[i] << 8;
+        for (int k = 0; k < 8; k++) c = (c & 0x8000u) ? ((c << 1) ^ 0x1021u) & 0xFFFFu : (c << 1) & 0xFFFFu;
+    }
+    return c;
+}
+
+/* w = the four persisted words, bitstream = FPGA revision; out gets 36 characters plus a NUL. */
+SR_FN void sp_short(const uint32_t w[4], uint32_t bitstream, char *out)
+{
+    static const char a[] = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+    uint8_t b[22];
+    for (uint32_t i = 0; i < 4; i++) for (uint32_t k = 0; k < 4; k++) b[i * 4 + k] = (uint8_t)(w[i] >> (8 * k));
+    for (uint32_t k = 0; k < 4; k++) b[16 + k] = (uint8_t)(bitstream >> (8 * k));
+    uint32_t c = sr_crc16(b, 20);
+    b[20] = (uint8_t)c; b[21] = (uint8_t)(c >> 8);
+    uint32_t acc = 0, nb = 0, o = 0;
+    for (uint32_t i = 0; i < 22; i++) {
+        acc = (acc << 8) | b[i]; nb += 8;
+        while (nb >= 5) { out[o++] = a[(acc >> (nb - 5)) & 31u]; nb -= 5; }
+    }
+    if (nb) out[o++] = a[(acc << (5 - nb)) & 31u];
+    out[o] = 0;
+}
+#endif

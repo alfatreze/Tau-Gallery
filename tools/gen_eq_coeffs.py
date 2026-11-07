@@ -1,0 +1,349 @@
+"""Generate the preset EQ coefficient table, and prove it before any RTL exists.
+
+    python tools/gen_eq_coeffs.py            # report + ASCII response curves
+
+docs/EQ_DESIGN.md fixes the plan this implements, and the reason it is fixed:
+a hand-written sine table for the VU needle produced a 45-degree sweep instead
+of 100 and cost a hardware round. Filter coefficients are far less forgiving
+than that was, so nothing here is written by hand.
+
+What this does that a coefficient calculator does not:
+
+  * Everything is measured on the QUANTISED integers, never on the float
+    design. Q2.16 rounding shifts a filter's response, and the whole point is
+    to know the shipped curve rather than the intended one.
+  * The Q2.16 range is checked per coefficient and the script FAILS rather
+    than silently wrapping. a1 legitimately approaches -2, which is exactly
+    why the format has two integer bits, so the margin is worth watching.
+  * The preamp is LOUDNESS-MATCHED (pink-weighted RMS), not peak-matched.
+    Peak-matching cannot clip, but it left every preset 3-6 dB quieter than
+    FLAT, which reads as "someone turned it down" rather than "the EQ is on"
+    and loses every A/B on level alone. Loudness-matching keeps presets at the
+    same apparent volume; the cost is that a tone near full scale in a boosted
+    band can exceed full scale, so the output saturation is now load-bearing
+    and MUST clamp rather than wrap. Both numbers are reported.
+"""
+
+import argparse
+import cmath
+import os
+import math
+import sys
+
+try:
+    import numpy as np          # only the offline matched design needs it; the cookbook path stays dependency-free
+except ImportError:
+    np = None
+
+FS = 48000.0            # fixed output rate; see EQ_DESIGN "what rate it runs at"
+# Coefficient word. 18-bit Q2.16 is what ships. EQ_COEF_BITS=24 selects 24-bit Q2.22 (B-608 / docs/features/CYMO_AUDIO_STACK_REVIEW.md F1): the 100 Hz and
+# 220 Hz stages of Sound Shaping have their poles close to z = 1 and need the extra bits (response error 0.6 dB -> under 0.02 dB, uniform gain steps).
+CW = int(os.environ.get("EQ_COEF_BITS", "18"))
+assert CW in (18, 24), "EQ_COEF_BITS must be 18 or 24"
+QF = CW - 2             # Q2.(CW-2): 16 fractional bits at 18, 22 at 24
+QSCALE = 1 << QF
+QMIN, QMAX = -(1 << (CW - 1)), (1 << (CW - 1)) - 1        # signed
+
+# Five bands: low shelf, three peaks, high shelf. Classic preset shape, and
+# what the named curves in EQ_DESIGN are actually describing.
+BANDS = [
+    ("lowshelf",   80.0,   0.70),
+    ("peak",       250.0,  1.00),
+    ("peak",       1000.0, 1.00),
+    ("peak",       4000.0, 1.00),
+    ("highshelf",  12000.0, 0.70),
+]
+
+# Gains in dB per band. FLAT is a true bypass in the RTL, not a unity biquad --
+# a unity biquad still rounds, so "off" would not be bit-identical to today.
+PRESETS = [
+    ("FLAT",      [0, 0, 0, 0, 0]),
+    ("BASS",      [+6, +3, 0, -1, 0]),
+    ("ROCK",      [+5, +2, -2, +2, +4]),
+    ("POP",       [-1, 0, +2, +3, +1]),
+    ("JAZZ",      [+3, +1, 0, -1, +2]),
+    # Was [0,0,0,0,+2]: dead flat to ~8 kHz with a -0.21 dB preamp, i.e. audibly
+    # IDENTICAL to FLAT on any real material, which reads as a broken control
+    # rather than a subtle one. Now an actual voicing -- a little hall warmth,
+    # neutral mids so timbre stays honest, upper mids eased so massed strings
+    # do not get edgy, air on top.
+    ("CLASSICAL", [+2, 0, 0, -2, +3]),
+    ("VOCAL",     [-3, -1, +3, +2, 0]),
+    ("TREBLE",    [0, 0, 0, +2, +6]),
+]
+
+
+def design(kind, f0, q, gain_db):
+    """RBJ audio EQ cookbook. Returns (b0,b1,b2,a1,a2) normalised by a0."""
+    A = 10.0 ** (gain_db / 40.0)
+    w0 = 2.0 * math.pi * f0 / FS
+    cw, sw = math.cos(w0), math.sin(w0)
+
+    if kind == "peak":
+        alpha = sw / (2.0 * q)
+        b0, b1, b2 = 1 + alpha * A, -2 * cw, 1 - alpha * A
+        a0, a1, a2 = 1 + alpha / A, -2 * cw, 1 - alpha / A
+    else:
+        # Shelf slope S expressed through Q, per the cookbook's note.
+        alpha = sw / 2.0 * math.sqrt((A + 1.0 / A) * (1.0 / q - 1.0) + 2.0)
+        tsa = 2.0 * math.sqrt(A) * alpha
+        if kind == "lowshelf":
+            b0 = A * ((A + 1) - (A - 1) * cw + tsa)
+            b1 = 2 * A * ((A - 1) - (A + 1) * cw)
+            b2 = A * ((A + 1) - (A - 1) * cw - tsa)
+            a0 = (A + 1) + (A - 1) * cw + tsa
+            a1 = -2 * ((A - 1) + (A + 1) * cw)
+            a2 = (A + 1) + (A - 1) * cw - tsa
+        else:
+            b0 = A * ((A + 1) + (A - 1) * cw + tsa)
+            b1 = -2 * A * ((A - 1) + (A + 1) * cw)
+            b2 = A * ((A + 1) + (A - 1) * cw - tsa)
+            a0 = (A + 1) - (A - 1) * cw + tsa
+            a1 = 2 * ((A - 1) - (A + 1) * cw)
+            a2 = (A + 1) - (A - 1) * cw - tsa
+    return (b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0)
+
+
+def analog_response(kind, f0, q, gain_db, f):
+    """Complex response of the analog prototype the cookbook imitates (RBJ Audio EQ Cookbook, public). For shelves `q` is the slope S, as in design()."""
+    A = 10.0 ** (gain_db / 40.0)
+    s = 1j * f / f0
+    if kind == "peak":
+        return (s * s + s * (A / q) + 1) / (s * s + s / (A * q) + 1)
+    r = math.sqrt(A)
+    iq = math.sqrt((A + 1.0 / A) * (1.0 / q - 1.0) + 2.0)
+    if kind == "lowshelf":
+        return A * (s * s + (r * iq) * s + A) / (A * s * s + (r * iq) * s + 1)
+    return A * (A * s * s + (r * iq) * s + 1) / (s * s + (r * iq) * s + A)
+
+
+def _digital(c, f):
+    z = np.exp(-2j * np.pi * f / FS)
+    b0, b1, b2, a1, a2 = c
+    return (b0 + b1 * z + b2 * z * z) / (1 + a1 * z + a2 * z * z)
+
+
+def design_matched(kind, f0, q, gain_db, f_hi=20000.0, n=200):
+    """Analog-magnitude-matched design (B-614, D-H02). Starts from the cookbook coefficients and refines the five of them by Levenberg-Marquardt so the digital
+    log-magnitude follows the analog prototype from 20 Hz to f_hi on a log grid (the cookbook response cramps toward Nyquist: up to 1.14 dB at the 10 kHz shelf).
+    Offline only: the tables are data, so this costs nothing in hardware. numpy only, our own method (see docs/PROVENANCE.md); returns the cookbook design if the
+    refinement is not stable or not better."""
+    if abs(gain_db) < 1e-9 or np is None:
+        return design(kind, f0, q, gain_db)
+    c0 = np.array(design(kind, f0, q, gain_db), dtype=float)
+    f = 20.0 * (f_hi / 20.0) ** (np.arange(n) / (n - 1.0))
+    target = 20.0 * np.log10(np.abs(analog_response(kind, f0, q, gain_db, f)))
+
+    def resid(c):
+        return 20.0 * np.log10(np.abs(_digital(c, f))) - target
+
+    def stable_c(c):
+        return np.all(np.abs(np.roots([1.0, c[3], c[4]])) < 0.9999)
+
+    c, lam = c0.copy(), 1e-3
+    r = resid(c)
+    cost = float(r @ r)
+    for _ in range(80):
+        J = np.empty((n, 5))
+        for k in range(5):                      # forward differences, step scaled to the coefficient
+            h = 1e-7 * max(1.0, abs(c[k]))
+            d = c.copy(); d[k] += h
+            J[:, k] = (resid(d) - r) / h
+        step = np.linalg.solve(J.T @ J + lam * np.eye(5), -J.T @ r)
+        cn = c + step
+        if not stable_c(cn):
+            lam *= 10.0
+            continue
+        rn = resid(cn)
+        costn = float(rn @ rn)
+        if costn < cost:
+            c, r, cost, lam = cn, rn, costn, lam * 0.3
+            if np.max(np.abs(step)) < 1e-12:
+                break
+        else:
+            lam *= 10.0
+    if cost >= float(resid(c0) @ resid(c0)) or not stable_c(c):
+        return tuple(float(v) for v in c0)
+    return tuple(float(v) for v in c)
+
+
+def clamp_slope(S):
+    """Shelf stages use the slope form: the square root in design() goes negative (the design fails) for S > 1 once the gain is large, and S <= 1 is the monotonic
+    range. Any tool that edits a shelf stage must clamp to (0, 1] (lesson from FreeEQ8's published shelf-slope NaN bug, see PROVENANCE.md)."""
+    return max(0.1, min(1.0, S))
+
+
+def design_stage(kind, f0, q, gain_db, matched=True):
+    """The one entry for a written stage: clamps shelf S, designs (matched by default) and returns floats."""
+    if kind != "peak":
+        q = clamp_slope(q)
+    return (design_matched if matched else design)(kind, f0, q, gain_db)
+
+
+def quantise_checked(coefs, where, errors):
+    """Quantise a raw biquad (b0 b1 b2 a1 a2, floats, a0 = 1) at the build's real width and verify the QUANTISED poles. Returns the integer tuple. This is the check any
+    imported or hand-written stage (a raw biquad list, e.g. from Equalizer APO / AutoEQ) must pass: the 18-bit format goes unstable for 40 Hz +-24 dB, 24-bit does not."""
+    qc = tuple(quantise(v, where, errors) for v in coefs)
+    if not stable([qc]):
+        errors.append("%s: a pole is on or outside the unit circle after quantisation to Q2.%d" % (where, QF))
+    return qc
+
+
+def quantise(c, where, errors):
+    q = int(round(c * QSCALE))
+    if not (QMIN <= q <= QMAX):
+        errors.append("%s: %.6f -> %d is outside Q2.%d [%d,%d]"
+                      % (where, c, q, QF, QMIN, QMAX))
+        q = max(QMIN, min(QMAX, q))
+    return q
+
+
+def response_db(qcoefs, f):
+    """Magnitude of the QUANTISED cascade at f, in dB."""
+    z = cmath.exp(-2j * math.pi * f / FS)
+    h = 1.0 + 0j
+    for (b0, b1, b2, a1, a2) in qcoefs:
+        b0, b1, b2 = b0 / QSCALE, b1 / QSCALE, b2 / QSCALE
+        a1, a2 = a1 / QSCALE, a2 / QSCALE
+        num = b0 + b1 * z + b2 * z * z
+        den = 1.0 + a1 * z + a2 * z * z
+        if abs(den) < 1e-12:
+            return float("inf")
+        h *= num / den
+    return 20.0 * math.log10(abs(h)) if abs(h) > 0 else -999.0
+
+
+def loudness_preamp_db(qcoefs):
+    """Preamp that keeps APPARENT loudness equal to bypass.
+
+    Pink-weighted: equal energy per octave, which is roughly how music is
+    distributed and how hearing integrates it. A peak-weighted preamp is the
+    safe alternative and is reported alongside, but it makes every preset
+    audibly quieter than FLAT."""
+    num = den = 0.0
+    for i in range(1, len(FREQS)):
+        w = math.log(FREQS[i] / FREQS[i - 1])        # equal weight per octave
+        h = 10.0 ** (response_db(qcoefs, FREQS[i]) / 20.0)
+        num += h * h * w
+        den += w
+    return -10.0 * math.log10(num / den) if num > 0 else 0.0
+
+
+def stable(qcoefs):
+    """Poles inside the unit circle, checked on the quantised values."""
+    for (_b0, _b1, _b2, a1, a2) in qcoefs:
+        a1f, a2f = a1 / QSCALE, a2 / QSCALE
+        disc = a1f * a1f - 4.0 * a2f
+        if disc >= 0:
+            r = [(-a1f + math.sqrt(disc)) / 2, (-a1f - math.sqrt(disc)) / 2]
+            mags = [abs(x) for x in r]
+        else:
+            mags = [math.sqrt(a2f)] * 2      # complex pair, |p| = sqrt(a2)
+        if max(mags) >= 1.0:
+            return False
+    return True
+
+
+FREQS = [20 * (10 ** (i / 24.0)) for i in range(int(24 * math.log10(20000 / 20)) + 1)]
+
+
+def ascii_curve(name, qcoefs, preamp_db):
+    """The shipped curve, drawn. Reading the shape is the whole point of this,
+    so the grid stays out of the way: only the trace and the 0 dB line."""
+    lo, hi, rows, width = -14.0, 4.0, 19, 61
+    fmin, fmax = 20.0, 20000.0
+    cols = []
+    for x in range(width):
+        f = fmin * (fmax / fmin) ** (x / (width - 1.0))
+        cols.append(response_db(qcoefs, f) + preamp_db)
+
+    print("  %s   preamp %+.2f dB" % (name, preamp_db))
+    step = (hi - lo) / (rows - 1)
+    for r in range(rows):
+        db = hi - step * r
+        line = "".join("*" if abs(v - db) < step / 2
+                       else ("-" if abs(db) < step / 2 else " ")
+                       for v in cols)
+        label = "%+5.1f" % db if (r % 3 == 0) else "     "
+        print("   %s |%s" % (label, line))
+    axis = [" "] * width
+    for f in (100, 1000, 10000):
+        x = int(round(math.log10(f / fmin) / math.log10(fmax / fmin) * (width - 1)))
+        tag = "%dk" % (f // 1000) if f >= 1000 else str(f)
+        for i, ch in enumerate(tag):
+            if x + i < width:
+                axis[x + i] = ch
+    print("         +" + "-" * width)
+    print("          " + "".join(axis) + "   (20 Hz .. 20 kHz, log)")
+    print()
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    args = ap.parse_args()
+
+    errors, table = [], []
+    print("Preset EQ coefficients -- Q2.%d (%d-bit signed), Fs = %g Hz" % (QF, CW, FS))
+    print("Bands: " + ", ".join("%s %gHz Q%.2f" % (k, f, q) for k, f, q in BANDS))
+    print()
+
+    worst_margin = None
+    for name, gains in PRESETS:
+        qcoefs = []
+        for (kind, f0, q), g in zip(BANDS, gains):
+            c = design(kind, f0, q, g)
+            qc = tuple(quantise(v, "%s/%gHz" % (name, f0), errors) for v in c)
+            qcoefs.append(qc)
+            for v in qc:
+                m = min(QMAX - v, v - QMIN)
+                if worst_margin is None or m < worst_margin[0]:
+                    worst_margin = (m, "%s %gHz" % (name, f0))
+
+        peak = max(response_db(qcoefs, f) for f in FREQS)
+        peak_pre = -peak if peak > 0 else 0.0
+        preamp_db = loudness_preamp_db(qcoefs)
+        preamp_q = quantise(10 ** (preamp_db / 20.0), "%s/preamp" % name, errors)
+
+        if not stable(qcoefs):
+            errors.append("%s: a pole is on or outside the unit circle" % name)
+
+        # How far a full-scale tone at the worst frequency can now exceed full
+        # scale. This is the price of loudness-matching and the saturation
+        # stage is what absorbs it -- so it is reported, not hidden.
+        over = max(response_db(qcoefs, f) + preamp_db for f in FREQS)
+        table.append((name, qcoefs, preamp_q, preamp_db))
+        print("  %-10s preamp %+6.2f dB (peak-match would be %+6.2f) "
+              "-> worst-case tone %+5.2f dB %s"
+              % (name, preamp_db, peak_pre, over,
+                 "" if over <= 0.01 else "-> saturates"))
+        if over > 6.0:
+            errors.append("%s can exceed full scale by %.1f dB -- too much to "
+                          "leave to saturation" % (name, over))
+
+    print()
+    print("Tightest Q2.%d margin: %d counts (%s) -- 0 would mean the format is "
+          "too narrow." % (QF, worst_margin[0], worst_margin[1]))
+    print()
+
+    print("=== magnitude response of the QUANTISED cascade, preamp applied ===")
+    print()
+    for name, qcoefs, _pq, pdb in table:
+        if name == "FLAT":
+            print("  FLAT        true bypass in the RTL -- not evaluated here,"
+                  " and not a unity biquad (which would still round).")
+            print()
+            continue
+        ascii_curve(name, qcoefs, pdb)
+
+    print()
+    if errors:
+        print("FAIL -- %d problem(s):" % len(errors))
+        for e in errors:
+            print("  - %s" % e)
+        return 1
+    print("all coefficient checks pass")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

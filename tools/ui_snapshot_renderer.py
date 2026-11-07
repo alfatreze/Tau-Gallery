@@ -1,0 +1,942 @@
+#!/usr/bin/env python3
+"""Render reproducible Tau framebuffer fixtures from production UI inputs.
+
+This host-side model deliberately has no dependency on Pillow.  It reads the
+same 4bpp font ROM and advances used by ``mp3_fb.sv``, reproduces RGB565
+blending and the fractional type scale, then writes the native 400x360 frame.
+It is a fixture renderer, not a claim to capture the Pocket OLED: the packaged
+loading asset remains the only asset-exact capture, while these screens model
+the firmware's framebuffer commands from its source of truth.
+"""
+
+import argparse
+import math
+import re
+from pathlib import Path
+
+from capture_splash_frame import WIDTH, HEIGHT, write_capture
+
+
+ROOT = Path(__file__).resolve().parent.parent
+PLAYER = (ROOT / "fw/player.c").read_text(encoding="utf-8")
+# The VIZ_* enum and viz_order[] moved out of player.c into generated headers (meter module M0,
+# tools/gen_meters.py); splice them in so the #include lines still resolve for the regexes below.
+PLAYER += (ROOT / "fw/meter_gen_enum.h").read_text(encoding="utf-8")
+PLAYER += (ROOT / "fw/meter_gen_order.h").read_text(encoding="utf-8")
+PLAYER += (ROOT / "fw/theme.h").read_text(encoding="utf-8")   # default theme colours (TH_DEF_*), theme step 0a
+METRICS = (ROOT / "fw/font_metrics.h").read_text(encoding="utf-8")
+ROM = (ROOT / "src/fpga/core/font_rom.v").read_text(encoding="utf-8")
+
+FB_W, FB_H = WIDTH, HEIGHT
+HALF = {"TS_1X": 2, "TS_15X": 3, "TS_2X": 4, "TS_3X": 6}
+COV_WEIGHT = (0, 4, 6, 7, 8, 10, 10, 11, 12, 13, 13, 14, 15, 15, 16, 16)
+
+
+def c_uint(name):
+    match = re.search(r"#define\s+" + re.escape(name) + r"\s+0x([0-9A-Fa-f]+)u", PLAYER)
+    if not match:
+        raise RuntimeError(f"could not read {name} from fw/player.c")
+    return int(match.group(1), 16)
+
+
+def c_dec(name):
+    match = re.search(r"#define\s+" + re.escape(name) + r"\s+\(?([0-9]+)u?\)?", PLAYER)
+    if not match:
+        raise RuntimeError(f"could not read {name} from fw/player.c")
+    return int(match.group(1))
+
+
+def read_advances():
+    match = re.search(r"font_adv\[95\]\s*=\s*\{(.*?)\};", METRICS, re.S)
+    values = [int(n) for n in re.findall(r"\d+", match.group(1))]
+    if len(values) != 95:
+        raise RuntimeError("font metrics are not the expected 95 glyph advances")
+    return values
+
+
+def read_rom():
+    words = {}
+    for index, value in re.findall(r"mem\[\s*(\d+)\]\s*=\s*32'h([0-9A-Fa-f]{8})", ROM):
+        words[int(index)] = int(value, 16)
+    if len(words) != 3040:
+        raise RuntimeError("font ROM is incomplete")
+    return words
+
+
+ADV = read_advances()
+FONT = read_rom()
+
+
+def glyph(ch):
+    code = ord(ch)
+    return code if 0x20 <= code <= 0x7E else 0x20
+
+
+def rgb565_parts(color):
+    return ((color >> 11) & 31, (color >> 5) & 63, color & 31)
+
+
+def blend(fg, bg, weight):
+    fr, fgc, fb = rgb565_parts(fg)
+    br, bgc, bb = rgb565_parts(bg)
+    return (((fr * weight + br * (16 - weight)) >> 4) << 11 |
+            ((fgc * weight + bgc * (16 - weight)) >> 4) << 5 |
+            ((fb * weight + bb * (16 - weight)) >> 4))
+
+
+class Frame:
+    def __init__(self):
+        self.pixels = [0] * (FB_W * FB_H)
+
+    def rect(self, x, y, width, height, color):
+        x0, x1 = max(0, x), min(FB_W, x + width)
+        y0, y1 = max(0, y), min(FB_H, y + height)
+        for yy in range(y0, y1):
+            self.pixels[yy * FB_W + x0:yy * FB_W + x1] = [color] * (x1 - x0)
+
+    def text(self, x, y, message, scale, fg, bg, max_width):
+        """Mirror fb_text_clipped: advance budget and painted-cell edge differ."""
+        half = HALF[scale]
+        cell = 16 * half // 2
+        limit = x + max_width
+        for ch in message:
+            code = glyph(ch)
+            advance = ADV[code - 0x20] * half // 2
+            if x + advance > limit or x + cell > FB_W:
+                break
+            self.char(x, y, code, half, fg, bg)
+            x += advance
+
+    def char(self, x, y, code, half, fg, bg):
+        out = 16 * half // 2
+        base = (code - 0x20) * 32
+        for oy in range(out):
+            sy = min(15, oy * 2 // half)
+            lo = FONT[base + sy * 2]
+            hi = FONT[base + sy * 2 + 1]
+            row = lo | (hi << 32)
+            for ox in range(out):
+                px, py = x + ox, y + oy
+                if not (0 <= px < FB_W and 0 <= py < FB_H):
+                    continue
+                sx = min(15, ox * 2 // half)
+                coverage = (row >> (sx * 4)) & 15
+                self.pixels[py * FB_W + px] = blend(fg, bg, COV_WEIGHT[coverage])
+
+    def png_pixels(self):
+        result = []
+        for color in self.pixels:
+            r, g, b = rgb565_parts(color)
+            result.append((r * 255 // 31, g * 255 // 63, b * 255 // 31))
+        return result
+
+
+UI_PANEL = c_uint("TH_DEF_SURFACE")
+UI_BG = c_uint("TH_DEF_BASE")
+UI_WHITE = c_uint("TH_DEF_TEXT_PRIMARY")
+UI_DIM = c_uint("TH_DEF_TEXT_SECONDARY")
+UI_RED = c_uint("TH_DEF_ERROR")
+UI_ACCENT = c_uint("UI_ACCENT")
+UI_TRACK = c_uint("TH_DEF_SURFACE_TRACK")
+UI_FAINT = c_uint("TH_DEF_FAINT")
+UI_MARGIN = c_dec("UI_MARGIN")
+UI_TITLE_Y = c_dec("UI_TITLE_Y")
+UI_CARD_H = c_dec("UI_CARD_H")
+UI_SPL_VER_Y = UI_TITLE_Y - 14 + UI_CARD_H - 14 - 16
+APP_VER_MATCH = re.search(r'#define\s+APP_VER\s+"([^"]+)"', PLAYER)
+if not APP_VER_MATCH:
+    raise RuntimeError("could not read APP_VER from fw/player.c")
+APP_VER = APP_VER_MATCH.group(1)
+
+
+def gradient_top(accent=UI_ACCENT):
+    r, g, b = rgb565_parts(accent)
+    r, g, b = r * 255 // 31, g * 255 // 63, b * 255 // 31
+    luma = (2126 * r + 7152 * g + 722 * b) // 10000 or 1
+    r, g, b = ((r * 45 + luma // 2) // luma,
+               (g * 45 + luma // 2) // luma,
+               (b * 45 + luma // 2) // luma)
+    r, g, b = ((r + 46) // 2, (g + 46) // 2, (b + 46) // 2)
+    return (min(31, (min(255, r) * 31 + 127) // 255) << 11 |
+            min(63, (min(255, g) * 63 + 127) // 255) << 5 |
+            min(31, (min(255, b) * 31 + 127) // 255))
+
+
+GRAD_TOP = gradient_top()
+
+
+def grad_at(y):
+    y = min(FB_H - 1, y)
+    rem, den, threshold = FB_H - 1 - y, FB_H - 1, (1, 5, 3, 7)[y & 3]
+    values = []
+    for level in rgb565_parts(GRAD_TOP):
+        num = level * rem
+        base = num // den
+        values.append(base + int((num - base * den) * 8 > threshold * den))
+    return values[0] << 11 | values[1] << 5 | values[2]
+
+
+def rounded_rect(frame, x, y, width, height, radius, color):
+    frame.rect(x, y, width, height, color)
+    for i in range(radius):
+        dy, inner = radius - i, 0
+        while (inner + 1) ** 2 + dy ** 2 <= radius ** 2:
+            inner += 1
+        cut = radius - inner
+        if cut:
+            for xx in (x, x + width - cut):
+                frame.rect(xx, y + i, cut, 1, grad_at(y + i))
+                frame.rect(xx, y + height - 1 - i, cut, 1, grad_at(y + height - 1 - i))
+
+
+def rounded_rect_on(frame, x, y, width, height, radius, color, background):
+    """Mirror fb_round_rect_on(), whose corner cuts reveal its parent panel."""
+    frame.rect(x, y, width, height, color)
+    for i in range(radius):
+        dy, inner = radius - i, 0
+        while (inner + 1) ** 2 + dy ** 2 <= radius ** 2:
+            inner += 1
+        cut = radius - inner
+        if cut:
+            for xx in (x, x + width - cut):
+                frame.rect(xx, y + i, cut, 1, background)
+                frame.rect(xx, y + height - 1 - i, cut, 1, background)
+
+
+def source_idle_lines():
+    body = PLAYER.split("static void ui_idle_screen(", 1)[1].split("\n}", 1)[0]
+    colors = {"UI_WHITE": UI_WHITE, "UI_DIM": UI_DIM, "ui_accent": UI_ACCENT}
+    return [(int(y), message, colors[color], scale)
+            for y, message, color, scale in re.findall(
+                r'ui_gs_line\(\s*(\d+)u,\s*"([^"]*)"\s*,\s*(\w+)\s*,\s*(TS_\w+)\s*\)', body)]
+
+
+def idle(reason=None):
+    frame = Frame()
+    for y in range(FB_H):
+        frame.rect(0, y, FB_W, 1, grad_at(y))
+    rounded_rect(frame, UI_MARGIN - 8, UI_TITLE_Y - 14, FB_W - 2 * UI_MARGIN + 16,
+                 UI_CARD_H, 8, UI_PANEL)
+    frame.text(UI_MARGIN, UI_SPL_VER_Y, "v" + APP_VER, "TS_1X", UI_DIM, UI_PANEL,
+               FB_W - 2 * UI_MARGIN)
+    frame.text(UI_MARGIN, UI_TITLE_Y, "TAU", "TS_2X", UI_ACCENT, UI_PANEL, FB_W - 2 * UI_MARGIN)
+    if reason:
+        frame.text(UI_MARGIN, 144, reason, "TS_1X", UI_RED, grad_at(144), FB_W - 2 * UI_MARGIN)
+    for y, message, color, scale in source_idle_lines():
+        frame.text(UI_MARGIN, y, message, scale, color, grad_at(y), FB_W - 2 * UI_MARGIN)
+    return frame
+
+
+def paint_gradient(frame):
+    for y in range(FB_H):
+        frame.rect(0, y, FB_W, 1, grad_at(y))
+
+
+def draw_progress(frame, done):
+    """Static representative of ui_draw_dynamic()'s progress-bar branch."""
+    x, y, width, height = UI_MARGIN, 334, FB_W - 2 * UI_MARGIN, 5
+    bg = grad_at(y)
+    frame.rect(x, y - 3, width, height + 6, bg)
+    if done:
+        frame.rect(x, y, done, height, UI_ACCENT)
+        frame.rect(x, y, done, 1, blend(UI_WHITE, UI_ACCENT, 5))
+    frame.rect(x + done, y, width - done, height, UI_TRACK)
+    radius = height // 2
+    for i in range(radius):
+        dy, inner = radius - i, 0
+        while (inner + 1) ** 2 + dy ** 2 <= radius ** 2:
+            inner += 1
+        cut = radius - inner
+        if cut:
+            for xx in (x, x + width - cut):
+                frame.rect(xx, y + i, cut, 1, bg)
+                frame.rect(xx, y + height - 1 - i, cut, 1, bg)
+    knob = max(x + 2, min(x + width - 3, x + done))
+    frame.rect(knob - 2, y - 3, 5, height + 6, UI_WHITE)
+
+
+def draw_visualizer(frame, mode):
+    """Frozen review instances for the firmware's eleven meter families."""
+    x0, y0, width, height = UI_MARGIN, 173, FB_W - 2 * UI_MARGIN, 72
+    def background():
+        for yy in range(y0, y0 + height):
+            frame.rect(x0, yy, width, 1, grad_at(yy))
+    def level(index, count=36):
+        return 6 + ((index * 19 + 13) % 57)
+    background()
+    if mode == "bars":
+        count, gap = 36, 2
+        bar_w = (width - gap * (count - 1)) // count
+        for index in range(count):
+            x, h = x0 + index * (bar_w + gap), level(index)
+            frame.rect(x, y0 + height - h, bar_w, h,
+                       blend(UI_ACCENT, UI_TRACK, (index + 1) * 16 // count))
+    elif mode == "waterfall":
+        for xx in range(width):
+            h = 3 + ((xx * 11 + 23) % height)
+            color = blend(UI_ACCENT, UI_TRACK, h * 16 // height)
+            frame.rect(x0 + xx, y0 + height - h, 1, h, color)
+            frame.rect(x0 + xx, y0 + height - h, 1, 1, UI_WHITE)
+    elif mode == "phase-scope":
+        cx, cy = x0 + width // 2, y0 + height // 2
+        frame.rect(cx, y0, 1, height, UI_TRACK)
+        frame.rect(x0, cy, width, 1, UI_TRACK)
+        for i in range(96):
+            a = i * math.pi * 2 / 96
+            px = cx + int(math.sin(a * 3) * width * .22)
+            py = cy - int(math.sin(a * 2) * height * .38)
+            frame.rect(px, py, 2, 2, blend(UI_ACCENT, grad_at(py), 12))
+    elif mode == "oscilloscope":
+        cy = y0 + height // 2
+        frame.rect(x0, cy, width, 1, UI_TRACK)
+        previous = cy
+        for xx in range(width):
+            yy = cy - int(math.sin(xx * .15) * 22 + math.sin(xx * .043) * 9)
+            top, bottom = min(previous, yy), max(previous, yy)
+            frame.rect(x0 + xx, top, 1, bottom - top + 2,
+                       blend(UI_ACCENT, UI_TRACK, xx * 16 // width))
+            previous = yy
+    elif mode == "waveform":
+        cy = y0 + height // 2
+        for xx in range(width):
+            h = 1 + int((math.sin(xx * .10) + 1) * 13)
+            frame.rect(x0 + xx, cy - h, 1, h * 2 + 1,
+                       blend(UI_ACCENT, UI_TRACK, h * 16 // 28))
+    elif mode == "peak-dots":
+        count, gap = 36, 2
+        bar_w = (width - gap * (count - 1)) // count
+        for index in range(count):
+            h, x = level(index), x0 + index * (bar_w + gap)
+            frame.rect(x, y0 + height - h, bar_w, 2,
+                       blend(UI_ACCENT, UI_TRACK, (index + 1) * 16 // count))
+    elif mode == "spectrum":
+        columns, rows = 8, 8
+        col_w = width // columns
+        for col in range(columns):
+            lit = 2 + ((col * 5 + 3) % 7)
+            for row in range(rows):
+                color = (blend(UI_ACCENT, UI_TRACK, min(16, (row + 2) * 16 // rows))
+                         if row < lit else UI_TRACK)
+                frame.rect(x0 + col * col_w, y0 + height - (row + 1) * 8,
+                           col_w - 3, 6, color)
+    elif mode == "vu":
+        half = width // 2
+        for channel, needle in enumerate((.36, .69)):
+            ox, pivot_x, pivot_y = x0 + channel * half, x0 + channel * half + half // 2, y0 + height - 4
+            radius = height - 14
+            for tick in range(81):
+                theta = -1.05 + 2.10 * tick / 80
+                px = pivot_x + int(math.sin(theta) * radius)
+                py = pivot_y - int(math.cos(theta) * radius)
+                color = UI_ACCENT if tick >= 60 else blend(UI_ACCENT, grad_at(py), 6)
+                frame.rect(px, py, 2, 2, color)
+            for tick in range(5):
+                theta = -1.05 + 2.10 * tick / 4
+                for distance in range(radius - 4, radius):
+                    px = pivot_x + int(math.sin(theta) * distance)
+                    py = pivot_y - int(math.cos(theta) * distance)
+                    frame.rect(px, py, 1, 1, UI_ACCENT if tick >= 3 else blend(UI_ACCENT, grad_at(py), 9))
+            frame.text(ox + 6, y0 + 2, "L" if channel == 0 else "R", "TS_1X",
+                       UI_ACCENT, grad_at(y0 + 2), 16)
+            theta = -1.05 + 2.10 * needle
+            for step in range(2, 29):
+                distance = (radius - 6) * step // 28
+                px = pivot_x + int(math.sin(theta) * distance)
+                py = pivot_y - int(math.cos(theta) * distance)
+                frame.rect(px, py, 2 if step < 23 else 1, 2 if step < 23 else 1, UI_ACCENT)
+            frame.rect(pivot_x - 2, pivot_y - 2, 5, 5, UI_ACCENT)
+    else:
+        raise ValueError(f"unsupported visualizer mode: {mode}")
+
+
+def now_playing_base(state="playing", seeking=False, title="NIGHT DRIVE",
+                     artist="Tau Test Artist", album="TAU TESTS - 2026",
+                     format_line="320 kbps - 44.1 kHz - LAME", toast=None,
+                     visualizer="bars"):
+    """Deterministic no-art instance of ui_draw_chrome + dynamic UI rows."""
+    if state not in {"playing", "paused", "stopped"}:
+        raise ValueError(f"unsupported transport state: {state}")
+    frame = Frame()
+    paint_gradient(frame)
+    # ui_draw_chrome's 352px text card.  This no-art fixture keeps the full
+    # waveform width, matching art_shown == 0 in the firmware.
+    rounded_rect(frame, UI_MARGIN - 8, UI_TITLE_Y - 14, 368, UI_CARD_H, 8, UI_PANEL)
+    frame.text(UI_MARGIN, UI_TITLE_Y, title, "TS_2X", UI_WHITE, UI_PANEL, 352)
+    info_y = 68
+    if artist:
+        frame.text(UI_MARGIN, info_y, artist, "TS_15X", UI_DIM, UI_PANEL, 352)
+        info_y += 27
+    if album:
+        frame.text(UI_MARGIN, info_y, album, "TS_1X", UI_DIM, UI_PANEL, 352)
+        info_y += 18
+    if format_line:
+        frame.text(UI_MARGIN, info_y, format_line, "TS_1X", UI_FAINT, UI_PANEL, 352)
+
+    draw_visualizer(frame, visualizer)
+    transport_color = (UI_ACCENT if state == "playing" else
+                       (UI_WHITE if state == "stopped" else blend(UI_WHITE, UI_PANEL, 16)))
+    frame.text(UI_MARGIN, 262, state.upper(), "TS_1X", transport_color, grad_at(262), 80)
+    # The three chevrons are the same geometry-driven affordance as the RTL UI;
+    # at a frozen review moment, all use the steady accent rather than animation.
+    if state == "playing":
+        for base in (110, 122, 134):
+            for row in range(13):
+                inset = abs(6 - row) // 2
+                frame.rect(base + inset, 262 + row, max(1, 8 - inset * 2), 1, UI_ACCENT)
+    elif state == "paused":
+        frame.rect(110, 263, 4, 12, transport_color)
+        frame.rect(117, 263, 4, 12, transport_color)
+    else:
+        frame.rect(110, 264, 10, 10, transport_color)
+    frame.text(UI_MARGIN, 288, "1:12 / 3:48", "TS_15X", UI_WHITE, grad_at(288), 360)
+    done = 126 if seeking else 113
+    draw_progress(frame, done)
+    if seeking:
+        toast_y = 314
+        frame.text(UI_MARGIN, toast_y, "SEEK +10s", "TS_1X", UI_WHITE, grad_at(toast_y),
+                   FB_W - 2 * UI_MARGIN)
+    elif toast:
+        toast_y = 314
+        frame.text(UI_MARGIN, toast_y, toast, "TS_1X", UI_WHITE, grad_at(toast_y),
+                   FB_W - 2 * UI_MARGIN)
+    return frame
+
+
+SETTINGS_SRC = (ROOT / "fw/settingsui.inc").read_text(encoding="utf-8")
+# set_viz[] moved into a generated header (meter module M0, tools/gen_meters.py); splice it in.
+SETTINGS_SRC += (ROOT / "fw/meter_gen_names.h").read_text(encoding="utf-8")
+# Fixtures model the standard (non-cold) build: take the #else branch of "#if TAU_COLD ... #else ... #endif" blocks.
+SETTINGS_SRC = re.sub(r"#if TAU_COLD\n(.*?)#else\n(.*?)#endif\n", r"\2", SETTINGS_SRC, flags=re.S)
+# The fixtures model the default build, where TAU_TEMPO is 0 (B-558): drop the "#if TAU_TEMPO ... #endif" blocks (the TEMPO row).
+SETTINGS_SRC = re.sub(r"#if TAU_TEMPO\n.*?#endif\n", "", SETTINGS_SRC, flags=re.S)
+
+
+def ui_mix(a, b, t, n):
+    """Mirror ui_mix() in fw/player.c (per-channel integer lerp)."""
+    ra, ga, ba = rgb565_parts(a)
+    rb, gb, bb = rgb565_parts(b)
+    return ((((ra * (n - t) + rb * t) // n) << 11) | (((ga * (n - t) + gb * t) // n) << 5) |
+            ((ba * (n - t) + bb * t) // n))
+
+
+def text_width(message, scale="TS_1X"):
+    half = HALF[scale]
+    return sum(ADV[glyph(ch) - 0x20] * half // 2 for ch in message)
+
+
+def overlay_geometry():
+    """PL_UI_* from fw/player.c (the expressions use FB_W/FB_H and earlier names)."""
+    env = {"FB_W": FB_W, "FB_H": FB_H}
+    for name in ("PL_UI_ROWS", "PL_UI_X", "PL_UI_W", "PL_UI_Y", "PL_UI_H", "PL_UI_ROW_H",
+                 "PL_UI_LIST_Y", "PL_UI_TEXT_X", "PL_UI_PAD_B"):
+        match = re.search(r"#define\s+" + name + r"\s+(.+)", PLAYER)
+        if not match:
+            raise RuntimeError(f"could not read {name} from fw/player.c")
+        expr = re.sub(r"(\d+)u\b", r"\1", match.group(1).split("/*")[0]).strip()
+        env[name] = eval(expr, {}, env)
+    return env
+
+
+def viz_rows():
+    """The Settings > Meter list, top to bottom, as enum values: read from viz_order[] in fw/player.c (the list is no longer in
+    enum order, and retired meters have no row)."""
+    enum = re.sub(r"/\*.*?\*/", "", re.search(r"enum \{ VIZ_BARS = 0,(.*?)VIZ_COUNT \};", PLAYER, re.S).group(1), flags=re.S)
+    names = ["VIZ_BARS"] + re.findall(r"\b(VIZ_[A-Z_]+)\b", enum)
+    order = re.findall(r"\b(VIZ_[A-Z_]+)\b", re.search(r"viz_order\[[A-Z_]+\] = \{(.*?)\};", PLAYER, re.S).group(1))
+    return [names.index(n) for n in order]
+
+
+def meter_thumb(viz):
+    """Decode preview `viz` from fw/meter_thumbs.h the way set_draw_thumb() paints it: (x, y, w, h,
+    RGB565) rectangles relative to the top-left corner, dominant-colour fill first."""
+    src = (ROOT / "fw/meter_thumbs.h").read_text(encoding="utf-8")
+    w = int(re.search(r"METER_THUMB_W (\d+)u", src).group(1))
+    h = int(re.search(r"METER_THUMB_H (\d+)u", src).group(1))
+    pal = re.search(r"meter_thumb_pal\[\d+\]\[\d+\](?: COLD_DATA)? = \{(.*?)\n\};", src, re.S).group(1)
+    pals = [[int(v, 16) for v in re.findall(r"0x([0-9A-Fa-f]{4})u", row)] for row in pal.split("},")[:-1]]
+    offs = [int(v) for v in re.search(r"meter_thumb_off\[\d+\](?: COLD_DATA)? = \{(.*?)\};", src, re.S).group(1).split("*/")[-1].split(",")]
+    rle = [int(v, 16) for v in re.findall(r"0x([0-9A-Fa-f]{2})", re.search(r"meter_thumb_rle\[\d+\](?: COLD_DATA)? = \{(.*?)\};", src, re.S).group(1))]
+    rects, pos = [(0, 0, w, h, pals[viz][0])], 0
+    for b in rle[offs[viz]:offs[viz + 1]]:
+        idx, n = b >> 5, (b & 31) + 1
+        if idx:
+            at, left = pos, n
+            while left:
+                col = at % w
+                seg = min(w - col, left)
+                rects.append((col, at // w, seg, 1, pals[viz][idx]))
+                at += seg; left -= seg
+        pos += n
+    return rects
+
+
+def disc(frame, cx, cy, d, color, background):
+    rounded_rect_on(frame, cx - d // 2, cy - d // 2, d, d, d // 2, color, background)
+
+
+def ov_frame(title, right="", hint=""):
+    """Mirror ov_frame() in fw/player.c on an otherwise empty frame."""
+    g = overlay_geometry()
+    frame = Frame()
+    frame.rect(0, 0, FB_W, FB_H, UI_BG)
+    rounded_rect_on(frame, g["PL_UI_X"], g["PL_UI_Y"], g["PL_UI_W"], g["PL_UI_H"], 8, UI_PANEL, UI_BG)
+    frame.text(g["PL_UI_TEXT_X"], g["PL_UI_Y"] + 16, title, "TS_1X", UI_ACCENT, UI_PANEL, 230)
+    if right:
+        w = text_width(right)
+        frame.text(g["PL_UI_X"] + g["PL_UI_W"] - 16 - w, g["PL_UI_Y"] + 16, right, "TS_1X",
+                   UI_DIM, UI_PANEL, w + 2)
+    frame.rect(g["PL_UI_X"] + 12, g["PL_UI_Y"] + 34, g["PL_UI_W"] - 24, 1,
+               ui_mix(UI_PANEL, UI_DIM, 1, 3))
+    frame.text(g["PL_UI_TEXT_X"], g["PL_UI_Y"] + g["PL_UI_H"] - 26, hint, "TS_1X", UI_FAINT,
+               UI_PANEL, g["PL_UI_W"] - 32)
+    return frame, g
+
+
+LIBRARY_INC = (ROOT / "fw/library.inc").read_text(encoding="utf-8")
+
+
+def library_list(title, right, hint, rows, selected, count, top=0, mq=0, arrows=False):
+    """lib_ui_draw_body() fixture: the library browse overlay, drawn like the Settings menu (LIB_ROW_H = SET_MENU_ROW_H
+    rows, 7 visible, bar 4 px shorter than the row, text 8 px down, ">" at the right of rows that open a level).
+    `rows` are (label, tile number or None, right-hand number)."""
+    tile_w = int(re.search(r"#define LIB_TILE_W\s+(\d+)u", LIBRARY_INC).group(1))
+    tile_h = int(re.search(r"#define LIB_TILE_H\s+(\d+)u", LIBRARY_INC).group(1))
+    row_h = int(re.search(r"#define LIB_ROW_H\s+(\d+)u", LIBRARY_INC).group(1))
+    nrows = int(re.search(r"#define LIB_ROWS\s+(\d+)u", LIBRARY_INC).group(1))
+    frame, g = ov_frame(title, right, hint)
+    x, width, list_y = g["PL_UI_X"], g["PL_UI_W"], g["PL_UI_LIST_Y"]
+    bar = count > nrows
+    if bar:
+        track_x, track_y, track_h = x + width - 11, list_y, nrows * row_h - 4
+        frame.rect(track_x, track_y, 3, track_h, ui_mix(UI_PANEL, UI_DIM, 1, 3))
+        thumb_h = max(8, track_h * nrows // count)
+        frame.rect(track_x, track_y + (track_h - thumb_h) * top // (count - nrows), 3, thumb_h, UI_ACCENT)
+    rw = width - 8 - (12 if bar else 0)
+    for i, (label, tile, year) in enumerate(rows[:nrows]):
+        y = list_y + i * row_h
+        sel = (top + i) == selected
+        bg = UI_ACCENT if sel else UI_PANEL
+        if sel:
+            rounded_rect_on(frame, x + 4, y, rw, row_h - 4, 5, bg, UI_PANEL)
+        ty = y + 8
+        tx = g["PL_UI_TEXT_X"]
+        right_x = x + width - 16 - (12 if bar else 0)
+        if arrows:
+            right_x -= 12
+            frame.text(right_x, ty, ">", "TS_1X", UI_PANEL if sel else UI_DIM, bg, 12)
+            right_x -= 8
+        if tile is not None:
+            n = min(tile, 99)
+            tile_y = y + (row_h - 4 - tile_h) // 2
+            if sel:
+                rounded_rect_on(frame, x + 9, tile_y - 1, tile_w + 2, tile_h + 2, 4, UI_PANEL, UI_ACCENT)
+            rounded_rect_on(frame, x + 10, tile_y, tile_w, tile_h, 3, UI_ACCENT, UI_PANEL)
+            d = f"{n:02d}"
+            w = text_width(d)
+            frame.text(x + 10 + (tile_w - w) // 2, tile_y + (tile_h - 16) // 2, d, "TS_1X", 0x0000, UI_ACCENT, w + 2)
+            tx = x + 10 + tile_w + 8
+        if year:
+            yb = str(year)
+            w = text_width(yb)
+            frame.text(right_x - w, ty, yb, "TS_1X", UI_PANEL if sel else UI_DIM, bg, w + 2)
+            right_x -= w + 8
+        frame.text(tx, ty, label[mq:] if sel else label, "TS_1X", UI_PANEL if sel else UI_WHITE, bg, right_x - tx)
+    return frame
+
+
+_LIB_TRACKS = (("Opening Theme", 1), ("Stampede of the Ohmu", 2), ("The Valley of the Wind", 3),
+               ("The Princess Who Loves Insects", 4), ("The Invasion of Kushana", 5), ("Battle", 6),
+               ("Contact with the Ohmu", 7), ("In the Sea of Corruption", 8), ("Annihilation of Pejite", 9),
+               ("The Battle between Mehve and Corvette", 10), ("The Resurrection of the Giant Warrior", 11),
+               ("Nausicaa Requiem", 12))
+
+
+def library_home(selected=0, playlist=True):
+    rows = [("ARTISTS", None, 0), ("ALBUMS", None, 0), ("TRACKS", None, 0), ("SHUFFLE ALL", None, 0)]
+    if playlist:
+        rows.append(("PLAYLISTS", None, 0))
+    return library_list("LIBRARY", "", "A OPEN   B CLOSE", rows, selected, len(rows), arrows=True)
+
+
+def library_artists():
+    names = ("Aurora", "Beck", "Bjork", "Blur", "Boards of Canada", "Bonobo", "Burial", "Caribou", "Daft Punk",
+             "Deftones", "Four Tet", "Godspeed You! Black Emperor")
+    return library_list("ARTISTS", "4 / 300", "A OPEN  X PLAY  L R A-Z", [(n, None, 0) for n in names], 3, 300, arrows=True)
+
+
+def library_albums():
+    rows = (("Alpha", 1999), ("Amber Blue", 2004), ("Blue Hours", 2011), ("Cold Dawn", 2015),
+            ("Echoes of the Harbor", 2018), ("Glass Meadow", 2020))
+    return library_list("ALBUMS", "3 / 800", "A OPEN  X PLAY  B BACK", [(a, None, y) for a, y in rows], 2, 800, arrows=True)
+
+
+def library_tracks():
+    return library_list("Nausicaa of the Valley of the Wind Soundtrack", "6 / 13", "A PLAY   B BACK",
+                        [(t, n, 0) for t, n in _LIB_TRACKS], 5, 13)
+
+
+def library_lists():
+    rows = (("Road Trip", 42), ("Evening Jazz", 18), ("Audiobook Ch 1-12", 12), ("Workout", 65), ("Sleep", 9))
+    return library_list("PLAYLISTS", "2 / 5", "A OPEN  X PLAY  B BACK", [(n, None, c) for n, c in rows], 1, 5, arrows=True)
+
+
+def library_list_tracks():
+    """A playlist: the tile numbers the position in the list, tracks come from different albums."""
+    rows = (("Opening Theme", 1), ("Blue Hours", 2), ("Static Bloom", 3), ("Battle", 4), ("Harbor Lights", 5),
+            ("Nausicaa Requiem", 6))
+    return library_list("Evening Jazz", "3 / 18", "A PLAY   B BACK", [(t, n, 0) for t, n in rows], 2, 18)
+
+
+def library_tracks_scrolled():
+    """A long title scrolling in the selected row (marquee offset 6), single- and double-digit tiles side by side."""
+    return library_list("TRACKS", "10 / 7180", "A PLAY   B BACK", [(t, n, 0) for t, n in _LIB_TRACKS], 9, 7180,
+                        top=0, mq=6)
+
+
+def _rows(name):
+    body = re.search(rf"{name}\[\] = \{{(.*?)\}};", SETTINGS_SRC, re.S).group(1)
+    return re.findall(r'\{\s*"([^"]*)",\s*(RT_\w+),\s*(\w+)\s*\}', body)
+
+
+def _names(source, name):
+    body = re.search(rf"{name}[^=]*=\s*\{{(.*?)\}};", source, re.S).group(1)
+    return re.findall(r'"([^"]*)"', body)
+
+
+def _sconst(name):
+    return int(re.search(rf"#define\s+{name}\s+(\d+)u", SETTINGS_SRC).group(1))
+
+
+SAMPLE_VALUE = {"COLOUR": "AMBER", "THEME": "TAU", "MODE": "DARK", "METER": "OSCILLOSCOPE", "EQUALIZER": "FLAT", "REPLAYGAIN": "OFF",
+                "REPEAT": "OFF", "SCREEN BLANK": "NEVER", "ALBUM ART": "ON", "SHUFFLE": "ON",
+                "RESUME": "ON", "SPEED": "1.00X", "VOLUME": "65%",
+                "WINDOW TEST": "PASS 89", "READ CYCLES": "48/50/362", "WRITE CYCLES": "47/49/361",
+                "PLAYLIST CHECK": "PASS 13", "COLD CODE TEST": "PASS 31.6 C/W", "CLEAR COUNTERS": "DONE",
+                "LEVEL": "R2  8 OP BURSTS", "SOAK": "15 MIN", "ALL SPEEDS": "OFF", "ACCEPT ALL RATES": "OFF",
+                "CYMO RESAMPLER": "OFF", "16-BIT OUTPUT": "OFF", "HW GAIN": "NO UNIT", "HALCYON EQ": "NO UNIT"}
+
+
+def settings_menu(page, selected):
+    """set_draw_menu() fixture. page: 0 home, 1 appearance, 2 audio, 3 playback."""
+    rows = _rows(("set_home_rows", "set_appear_rows", "set_audio_rows", "set_play_rows",
+                  "set_tests_rows", "set_stress_rows", "set_dgn_rows")[page])
+    title = _names(SETTINGS_SRC, "set_menu_title")[page]
+    hint = ("A OPEN   B CLOSE" if page == 0 else "A OPEN   B BACK" if page in (5, 6)
+            else "A RUN   B BACK" if page == 4 else "A CHANGE   B BACK")
+    frame, g = ov_frame(title, "", hint)
+    row_h = _sconst("SET_MENU_ROW_H")
+    for i, (label, kind, _arg) in enumerate(rows):
+        y = g["PL_UI_LIST_Y"] + i * row_h
+        sel = i == selected
+        bg = UI_ACCENT if sel else UI_PANEL
+        if sel:
+            rounded_rect_on(frame, g["PL_UI_X"] + 4, y, g["PL_UI_W"] - 8, row_h - 4, 5, bg, UI_PANEL)
+        ty = y + 8
+        fg = UI_PANEL if sel else UI_WHITE
+        frame.text(g["PL_UI_TEXT_X"], ty, label, "TS_1X", fg, bg, 200)
+        right = g["PL_UI_X"] + g["PL_UI_W"] - 16
+        if kind in ("RT_GROUP", "RT_CHOICE"):
+            right -= 12
+            frame.text(right, ty, ">", "TS_1X", UI_PANEL if sel else UI_DIM, bg, 12)
+            right -= 8
+        value = "" if kind == "RT_GROUP" else SAMPLE_VALUE[label]
+        if value:
+            w = text_width(value)
+            frame.text(right - w, ty, value, "TS_1X", UI_PANEL if sel else UI_DIM, bg, w + 2)
+    return frame
+
+
+INFO_SAMPLE = ("0.1.0", "4D503317", "OK", "52 CYC", "16112 B", "NO",
+               "MP3 320K 44.1K", "OK", "0", "0 MS", "12/8/41/118", "7180 TRK 1.2 S", "OK", "60/S", "HW W42", "OK 23% WAITED", "OK 214 DRAWN 3 SKIP", "23%", "4 LOADED 31 MS E0", "HW 5120 SLOTS 0 BAD 0 TMO", "NONE", "NONE", "READY 42 OK 0 FAIL", "OK 7BEF/7BEF 0000/0000 F800/F800", "S 000000 D 000000", "CPU 0 DISP 0 OK", "A 153", "0861/0000 0861/0000 0861/0000 W0861", "OFF", "278/279 AVG 278 N40100", "LIVE - S0 D0 Q2", "D812 O812 K40 15187/51824US S2", "C312 CPU 41234 UNW 3210 PRES 900US", "1.00x I63/51 O4 WS2.1X", "TRACK -6.5 DB", "HW T30581 C30581 F0", "LAST 412 MAX 412 N1 BUF 43", "150:0 300:1 600:0 1K:0 2K:0 +:0 A412", "LAST 118 MAX 118 N1 A118 T3", "4/2/1/0 X212", "F31420 M18200 C482100 H0 U0", "N2 F600 HO1 +412MS", "N1 T12/12 D40 F48000 FL0", "N2 PUT 530437 EXP 530437 D0")
+STAT_SAMPLE = ("R2", "RUNNING", "3", "786432", "0", "4", "0", "372 CYC", "0 MS", "13.4K OPS/S",
+               "12:41 LEFT")
+
+
+def settings_readonly(title, label_array, samples):
+    """set_draw_ro() fixture: labels parsed from fw/settingsui.inc, sample values."""
+    labels = _names(SETTINGS_SRC, label_array)
+    frame, g = ov_frame(title, "", "B BACK")
+    for i, label in enumerate(labels):
+        y = g["PL_UI_LIST_Y"] + i * g["PL_UI_ROW_H"]
+        frame.text(g["PL_UI_TEXT_X"], y, label, "TS_1X", UI_DIM, UI_PANEL, 170)
+        w = text_width(samples[i])
+        frame.text(g["PL_UI_X"] + g["PL_UI_W"] - 16 - w, y, samples[i], "TS_1X", UI_WHITE,
+                   UI_PANEL, w + 2)
+    return frame
+
+
+def settings_info():
+    return settings_readonly("INFO", "set_info_label", INFO_SAMPLE)
+
+
+
+CHECK_SRC = (Path(__file__).resolve().parent.parent / "fw/suite.inc").read_text()
+
+
+def check_strings():
+    """The Check page's text: one NUL-separated blob in fw/suite.inc (chk_blob), fetched by index like chk_s()."""
+    body = re.search(r"chk_blob\[\] =(.*?);", CHECK_SRC, re.S).group(1)
+    return "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', body)).split("\\0")
+
+
+def check_page(state, results, running_step=None, countdown=0, code=("J60000 3Z0000 1ZG100", "09C000 0CBK6M 2D1Q4G")):
+    """chk_draw() fixture. state: idle, run, done. results: seven of PASS/FAIL/SKIPPED/N/A."""
+    t = check_strings()
+    hint = t[21] if state == "idle" else t[22] if state == "run" else t[23]
+    frame, g = ov_frame(t[24], t[20] if state == "run" else "", hint)
+    if state == "idle":
+        for i in range(9):
+            frame.text(g["PL_UI_TEXT_X"], g["PL_UI_LIST_Y"] + i * g["PL_UI_ROW_H"], t[11 + i], "TS_1X", UI_WHITE,
+                       UI_PANEL, g["PL_UI_W"] - 32)
+        return frame
+    for i in range(7):
+        y = g["PL_UI_LIST_Y"] + i * g["PL_UI_ROW_H"]
+        if state == "run" and i > running_step:
+            value = ""
+        elif state == "run" and i == running_step:
+            value = f"{countdown} S" if countdown else t[25]
+        else:
+            value = results[i]
+        frame.rect(g["PL_UI_X"] + 4, y - 2, g["PL_UI_W"] - 8, g["PL_UI_ROW_H"], UI_PANEL)
+        frame.text(g["PL_UI_TEXT_X"], y, t[i], "TS_1X", UI_DIM, UI_PANEL, 170)
+        w = text_width(value)
+        frame.text(g["PL_UI_X"] + g["PL_UI_W"] - 16 - w, y, value, "TS_1X", UI_WHITE, UI_PANEL, w + 2)
+    if state == "done":
+        fails = sum(r == "FAIL" for r in results)
+        skips = sum(r == "SKIPPED" for r in results)
+        verdict = (f"{fails}{t[27] if fails == 1 else t[28]}" if fails else (t[29] if skips else t[30]))
+        frame.text(g["PL_UI_TEXT_X"], g["PL_UI_LIST_Y"] + 8 * g["PL_UI_ROW_H"], verdict, "TS_1X",
+                   UI_WHITE if fails else UI_ACCENT, UI_PANEL, g["PL_UI_W"] - 32)
+        for k, line in enumerate(code):
+            frame.text(g["PL_UI_TEXT_X"], g["PL_UI_LIST_Y"] + (9 + k) * g["PL_UI_ROW_H"] + 4, line, "TS_1X", UI_DIM,
+                       UI_PANEL, g["PL_UI_W"] - 32)
+    return frame
+
+
+def settings_stress_status():
+    return settings_readonly("STRESS STATUS", "set_stat_label", STAT_SAMPLE)
+
+
+def settings_choice(choice, cursor, active, top=0):
+    """set_draw_choice() fixture. choice: colour, meter, repeat, blank."""
+    titles = _names(SETTINGS_SRC, "set_ch_title")
+    idx = ("colour", "meter", "repeat", "blank", "speed", "stress", "soak").index(choice)
+    want = {"colour": "COLOUR", "meter": "METER", "repeat": "REPEAT", "blank": "SCREEN BLANK", "speed": "SPEED", "stress": "STRESS LEVEL", "soak": "SOAK"}[choice]
+    assert titles[idx] == want, f"settings fixture index {idx} is {titles[idx]!r}, expected {want!r}: the choice order in this file no longer matches set_ch_title[]"
+    if choice == "colour":
+        names = _names(PLAYER, "ui_palette_name")
+        colours = [int(v, 16) for v in re.findall(r"0x([0-9A-Fa-f]{4})u,\s*/\*", PLAYER.split("ui_palette[] = {")[1].split("};")[0])]
+    else:
+        names = {"meter": lambda: [_names(SETTINGS_SRC, "set_viz")[m] for m in viz_rows()],
+                 "repeat": lambda: _names(SETTINGS_SRC, "set_rep"),
+                 "blank": lambda: _names(SETTINGS_SRC, "set_blank_nm"),
+                 "speed": lambda: _names(SETTINGS_SRC, "set_speed_nm"),
+                 "stress": lambda: _names(SETTINGS_SRC, "set_stress_nm"),
+                 "soak": lambda: _names(SETTINGS_SRC, "set_soak_nm")}[choice]()
+    frame, g = ov_frame(titles[idx], "", "A SELECT   B BACK")
+    row_h = _sconst("SET_TH_ROW_H") if choice == "meter" else _sconst("SET_CH_ROW_H")
+    list_h = g["PL_UI_ROWS"] * g["PL_UI_ROW_H"]
+    vis, n = list_h // row_h, len(names)
+    if n > vis:
+        tx, th = g["PL_UI_X"] + g["PL_UI_W"] - 11, list_h * vis // n
+        frame.rect(tx, g["PL_UI_LIST_Y"] - 2, 3, list_h, ui_mix(UI_PANEL, UI_DIM, 1, 3))
+        frame.rect(tx, g["PL_UI_LIST_Y"] - 2 + (list_h - th) * top // (n - vis), 3, th, UI_ACCENT)
+    for k in range(min(vis, n - top)):
+        i, y = top + k, g["PL_UI_LIST_Y"] + k * row_h
+        cy = y + (row_h - 2) // 2
+        sel, on = i == cursor, i == active
+        bg = UI_ACCENT if sel else UI_PANEL
+        if sel:
+            rounded_rect_on(frame, g["PL_UI_X"] + 4, y, g["PL_UI_W"] - 20, row_h - 2, 5, bg, UI_PANEL)
+        mx = g["PL_UI_TEXT_X"] + 10
+        if choice == "colour":
+            ring = UI_WHITE if on else (UI_PANEL if sel else ui_mix(UI_PANEL, UI_DIM, 1, 3))
+            disc(frame, mx, cy, 20, ring, bg)
+            disc(frame, mx, cy, 14, colours[i], ring)
+        else:
+            ring = UI_PANEL if sel else UI_WHITE
+            disc(frame, mx, cy, 18, ring, bg)
+            disc(frame, mx, cy, 12, bg, ring)
+            if on:
+                disc(frame, mx, cy, 8, UI_PANEL if sel else UI_ACCENT, bg)
+        tx = mx + 24
+        if choice == "meter":
+            ty = y + (row_h - 2 - _sconst("SET_TH_H")) // 2
+            for rx, ry, rw, rh, rc in meter_thumb(viz_rows()[i]):
+                frame.rect(tx + rx, ty + ry, rw, rh, rc)
+            tx += _sconst("SET_TH_W") + 14
+        frame.text(tx, y + (row_h - 2 - 16) // 2, names[i], "TS_1X",
+                   UI_PANEL if sel else UI_WHITE, bg, g["PL_UI_X"] + g["PL_UI_W"] - 24 - tx)
+    return frame
+
+
+def sdram_diagnostic(state, cpu_window=False, running_label="FIXED PATTERNS"):
+    """Mirror the Phase 1 mailbox or Phase 2 CPU-window diagnostic UI."""
+    if state not in {"running", "pass", "fail", "version-mismatch"}:
+        raise ValueError(f"unsupported SDRAM diagnostic state: {state}")
+    frame = Frame()
+    frame.rect(0, 0, FB_W, FB_H, UI_BG)
+    frame.rect(12, 18, 376, 324, UI_PANEL)
+    title = "TAU CPU SDRAM TEST" if cpu_window else "TAU SDRAM DIAGNOSTIC"
+    frame.text(28, 38, title, "TS_1X", UI_ACCENT, UI_PANEL, 360)
+    if state == "version-mismatch":
+        frame.text(28, 78, "RTL VERSION MISMATCH", "TS_1X", UI_RED, UI_PANEL, 360)
+        frame.text(28, 120, "EXPECTED", "TS_1X", UI_DIM, UI_PANEL, 180)
+        frame.text(220, 120, "4D503316", "TS_1X", UI_WHITE, UI_PANEL, 150)
+        frame.text(28, 146, "ACTUAL", "TS_1X", UI_DIM, UI_PANEL, 180)
+        frame.text(220, 146, "00000000", "TS_1X", UI_RED, UI_PANEL, 150)
+        frame.text(28, 306, "REBUILD OR REINSTALL RBF", "TS_1X", UI_DIM, UI_PANEL, 350)
+        return frame
+    if state == "running":
+        frame.text(28, 78, "PHASE 2 UNCACHED WINDOW" if cpu_window else "PHASE 1 MAILBOX TEST",
+                   "TS_1X", UI_WHITE, UI_PANEL, 360)
+        frame.text(28, 112, "SAFE REGION 2-3 MIB" if cpu_window else "SAFE REGION 1-2 MIB",
+                   "TS_1X", UI_DIM, UI_PANEL, 360)
+        frame.text(28, 138, "CPU LOAD STORE LANES" if cpu_window else "PLAYER DATA UNCHANGED",
+                   "TS_1X", UI_DIM, UI_PANEL, 360)
+        frame.rect(20, 177, 360, 10, UI_TRACK)
+        frame.rect(20, 204, 360, 18, UI_BG)
+        frame.text(20, 204, running_label, "TS_1X", UI_DIM, UI_BG, 360)
+        return frame
+
+    passed = state == "pass"
+    result_color = 0x4F49 if passed else UI_RED
+    frame.text(28, 72, "PASS" if passed else "FAIL", "TS_1X",
+               result_color, UI_PANEL, 360)
+    frame.text(28, 110, "READBACK CHECKS", "TS_1X", UI_DIM, UI_PANEL, 180)
+    frame.text(220, 110, "183", "TS_1X", UI_WHITE, UI_PANEL, 150)
+    frame.text(28, 136, "FAILURES", "TS_1X", UI_DIM, UI_PANEL, 180)
+    frame.text(220, 136, "0" if passed else "1", "TS_1X",
+               result_color, UI_PANEL, 150)
+    if passed:
+        frame.text(28, 190, "CPU WINDOW 2-3 MIB" if cpu_window else "TEST REGION ABOVE 1 MIB",
+                   "TS_1X", UI_DIM, UI_PANEL, 350)
+        frame.text(28, 216, "WORD BYTE HALFWORD LANES" if cpu_window else "FIXED WALK ADDRESS LANES",
+                   "TS_1X", UI_DIM, UI_PANEL, 350)
+    else:
+        for y, label, value in ((180, "FIRST BYTE ADDR" if cpu_window else "FIRST WORD ADDR",
+                                 "A0200800" if cpu_window else "00080800"),
+                                (206, "EXPECTED", "A5A5A5A5"),
+                                (232, "ACTUAL", "A5A4A5A5")):
+            frame.text(28, y, label, "TS_1X", UI_DIM, UI_PANEL, 180)
+            frame.text(220, y, value, "TS_1X", UI_WHITE if y != 232 else result_color,
+                       UI_PANEL, 150)
+    frame.text(28, 306, "A  RUN AGAIN", "TS_1X", UI_DIM, UI_PANEL, 350)
+    return frame
+
+
+def sdram_cpu_preflight_failure():
+    """Mirror the Phase 2 mailbox-preflight failure before CPU access."""
+    frame = Frame()
+    frame.rect(0, 0, FB_W, FB_H, UI_BG)
+    frame.rect(12, 18, 376, 324, UI_PANEL)
+    frame.text(28, 38, "TAU CPU SDRAM TEST", "TS_1X", UI_ACCENT, UI_PANEL, 360)
+    frame.text(28, 78, "MAILBOX PREFLIGHT FAIL", "TS_1X", UI_RED, UI_PANEL, 360)
+    frame.text(28, 112, "MUX OR CDC BRIDGE PATH", "TS_1X", UI_DIM, UI_PANEL, 360)
+    frame.text(28, 138, "CPU WINDOW NOT ATTEMPTED", "TS_1X", UI_DIM, UI_PANEL, 360)
+    frame.text(28, 180, "ACTUAL", "TS_1X", UI_DIM, UI_PANEL, 180)
+    frame.text(220, 180, "DEAD0001", "TS_1X", UI_RED, UI_PANEL, 150)
+    frame.text(28, 306, "REBUILD REQUIRED", "TS_1X", UI_DIM, UI_PANEL, 350)
+    return frame
+
+
+def sdram_cpu_preflight_readback_failure():
+    """A-060 firmware-only mailbox-to-CPU readback discriminator failure."""
+    frame = Frame()
+    frame.rect(0, 0, FB_W, FB_H, UI_BG)
+    frame.rect(12, 18, 376, 324, UI_PANEL)
+    frame.text(28, 38, "TAU CPU SDRAM TEST", "TS_1X", UI_ACCENT, UI_PANEL, 360)
+    frame.text(28, 78, "CPU PREFLIGHT READ FAIL", "TS_1X", UI_RED, UI_PANEL, 360)
+    frame.text(28, 112, "MAILBOX WROTE 2 MIB", "TS_1X", UI_DIM, UI_PANEL, 360)
+    frame.text(28, 138, "CPU READS SAME WORD", "TS_1X", UI_DIM, UI_PANEL, 360)
+    frame.text(28, 180, "EXPECTED", "TS_1X", UI_DIM, UI_PANEL, 180)
+    frame.text(220, 180, "43505550", "TS_1X", UI_WHITE, UI_PANEL, 150)
+    frame.text(28, 206, "ACTUAL", "TS_1X", UI_DIM, UI_PANEL, 180)
+    frame.text(220, 206, "00000000", "TS_1X", UI_RED, UI_PANEL, 150)
+    frame.text(28, 306, "REBUILD REQUIRED", "TS_1X", UI_DIM, UI_PANEL, 350)
+    return frame
+
+
+def sdram_cpu_probe_bar():
+    """Review fixture for the Phase 2 hardware-only progress overlay."""
+    frame = sdram_diagnostic("running", cpu_window=True, running_label="FIXED PATTERNS")
+    # A-073's successor probe preserves the A-066 controller observation and
+    # appends bridge-response evidence (seen/all-ones; zero remains red).
+    observed = ((1 << 49) - 1) & ~((0xF << 8) | (1 << 16) | (1 << 44) | (1 << 47))
+    for bit in range(49):
+        frame.rect(bit * 8, 0, 8, 8, 0x4F49 if (observed & (1 << bit)) else UI_RED)
+    return frame
+
+
+FIXTURES = {
+    "empty-library": lambda: idle(),
+    "now-playing": now_playing_base,
+    "library-home": library_home,
+    "library-artists": library_artists,
+    "library-albums": library_albums,
+    "library-tracks": library_tracks,
+    "library-tracks-scrolled": library_tracks_scrolled,
+    "library-lists": library_lists,
+    "library-list-tracks": library_list_tracks,
+    "settings-home": lambda: settings_menu(0, 1),
+    "settings-appearance": lambda: settings_menu(1, 0),
+    "settings-audio": lambda: settings_menu(2, 0),
+    "settings-playback": lambda: settings_menu(3, 1),
+    "settings-info": settings_info,
+    "settings-tests": lambda: settings_menu(4, 0),
+    "settings-stress": lambda: settings_menu(5, 0),
+    "settings-diagnostics-group": lambda: settings_menu(6, 0),
+    "settings-check-idle": lambda: check_page("idle", ()),
+    "settings-check-running": lambda: check_page("run", ["PASS"] * 5, running_step=5, countdown=9),
+    "settings-check-pass": lambda: check_page("done", ["PASS"] * 7),
+    "settings-check-fail": lambda: check_page(
+        "done", ["PASS", "FAIL", "PASS", "PASS", "PASS", "SKIPPED", "PASS"], code=("J40020 3WG00G 000000", "09G000 0CBK6M 2D2GA0")),
+    "settings-stress-level": lambda: settings_choice("stress", 2, 2),
+    "settings-soak": lambda: settings_choice("soak", 2, 0),
+    "settings-speed": lambda: settings_choice("speed", 4, 2),
+    "settings-stress-status": settings_stress_status,
+    "settings-colour": lambda: settings_choice("colour", 3, 0),
+    "settings-meter": lambda: settings_choice("meter", 4, 4),
+    "settings-repeat": lambda: settings_choice("repeat", 1, 0),
+    "settings-blank": lambda: settings_choice("blank", 2, 0),
+    "paused": lambda: now_playing_base("paused"),
+    "stopped": lambda: now_playing_base("stopped"),
+    "seeking": lambda: now_playing_base("playing", seeking=True),
+    "metadata-long": lambda: now_playing_base(
+        title="THE EXTREMELY LONG TITLE THAT STARTS A MARQUEE",
+        artist="A VERY LONG ARTIST NAME FOR FIXTURE REVIEW",
+        album="LONG ALBUM NAME - 2026"),
+    "metadata-missing": lambda: now_playing_base(
+        title="untagged-demo-track", artist="", album="", format_line=""),
+    "toast": lambda: now_playing_base(toast="VOLUME 70%"),
+    "sdram-diagnostic-running": lambda: sdram_diagnostic("running"),
+    "sdram-diagnostic-pass": lambda: sdram_diagnostic("pass"),
+    "sdram-diagnostic-fail": lambda: sdram_diagnostic("fail"),
+    "sdram-diagnostic-version-mismatch": lambda: sdram_diagnostic("version-mismatch"),
+    "sdram-cpu-diagnostic-running": lambda: sdram_diagnostic("running", cpu_window=True),
+    "sdram-cpu-diagnostic-pass": lambda: sdram_diagnostic("pass", cpu_window=True),
+    "sdram-cpu-diagnostic-fail": lambda: sdram_diagnostic("fail", cpu_window=True),
+    "sdram-cpu-diagnostic-version-mismatch": lambda: sdram_diagnostic(
+        "version-mismatch", cpu_window=True),
+    "sdram-cpu-preflight-running": lambda: sdram_diagnostic(
+        "running", cpu_window=True, running_label="MAILBOX PREFLIGHT"),
+    "sdram-cpu-preflight-fail": sdram_cpu_preflight_failure,
+    "sdram-cpu-preflight-readback-fail": sdram_cpu_preflight_readback_failure,
+    "sdram-cpu-probe-bar": sdram_cpu_probe_bar,
+    **{f"visualizer-{name}": (lambda mode=name: now_playing_base(visualizer=mode))
+       for name in ("bars", "waterfall", "phase-scope", "oscilloscope",
+                    "waveform", "peak-dots", "spectrum", "vu")},
+}
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("fixture", choices=FIXTURES)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    write_capture(args.output, FIXTURES[args.fixture]().png_pixels())
+    print(f"wrote {args.output}")
+
+
+if __name__ == "__main__":
+    main()

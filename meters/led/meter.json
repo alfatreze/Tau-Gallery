@@ -1,0 +1,13 @@
+{
+  "key": "led",
+  "enum": "VIZ_LED",
+  "index": 10,
+  "name": "SPECTRUM",
+  "selectable": true,
+  "sel_index": 10,
+  "needs_hw_spec": true,
+  "caps": [
+    "hw_spectrum"
+  ],
+  "cost_class": 1
+}

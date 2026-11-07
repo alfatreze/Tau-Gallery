@@ -1,0 +1,195 @@
+// =============================================================================
+// pcm_fifo.v -- decoupling buffer between the decoder and the DAC.
+//
+// WHY THIS EXISTS: decoding one MP3 frame costs ~1.1M cycles (~22 ms at 50 MHz)
+// and produces 1152 samples, but the DAC needs a sample every ~21 us. A
+// single-threaded CPU cannot both decode and feed the DAC on time, so firmware
+// pushes a whole frame in a burst and hardware drains it at the exact sample
+// rate. Without this, audio would gap on every frame boundary.
+//
+// The drain rate is PROGRAMMABLE via a fractional accumulator, because MP3 is
+// commonly 44.1 kHz while sound_i2s runs at a fixed 48 kHz. Firmware sets
+//     rate_inc = sample_rate * 2^32 / CLK_HZ
+// so the FIFO empties at the file's true rate and playback is at correct pitch;
+// sound_i2s then samples whatever is currently presented (zero-order hold).
+// That is crude resampling -- fine to prove playback, worth replacing with a
+// real interpolator later if it sounds rough.
+//
+// `underrun` is sticky: if the decoder ever falls behind, it latches so the
+// condition is visible on screen instead of being an intermittent click.
+// =============================================================================
+
+module pcm_fifo #(
+    parameter AW = 11,                 // 2048 entries = ~43 ms at 48 kHz
+    parameter UBUG = 0                 // test-only mutants of the underrun statistics (sim/tb_pcm_under.v): 1 counts while not primed, 2 counts events per tick instead of per run, 3 lets a flush clear them
+) (
+    input  wire        clk,
+    input  wire        rst,
+
+    // Drops all queued samples immediately (wptr = rptr = 0), independent of
+    // the global reset. Needed for track changes/seeks: without this, samples
+    // already queued from the PREVIOUS track keep draining out the DAC after
+    // firmware starts feeding the new one -- ring buffer and decoder both reset
+    // cleanly on a track change, but this FIFO does not unless told to.
+    input  wire        flush,
+
+    // ---- push side (CPU) ----
+    input  wire        push,
+    input  wire [31:0] pdata,          // {right[31:16], left[15:0]}
+    output wire        full,
+    output wire        empty,
+    output wire [AW:0] level,
+
+    // ---- drain side ----
+    input  wire [31:0] rate_inc,       // sample_rate * 2^32 / CLK_HZ
+    // SIGNED. The decay below does arithmetic on these, and the first attempt
+    // at it left them unsigned -- so >>> was a logical shift and negative
+    // samples diverged away from zero until they wrapped: noise on every
+    // track change instead of a fade. sim/tb_pcm_decay.v exists so that
+    // mistake cannot come back.
+    output reg signed [15:0] out_l,
+    output reg signed [15:0] out_r,
+    output reg         underrun,
+    // P6 (Player 2 S1): free-running underrun statistics, cleared only by reset (a flush does NOT clear them: they are the whole-session record). `under_ticks` counts output ticks that found
+    // the FIFO empty while primed (each is one lost sample pair), saturating; `under_events` counts runs of such ticks (an event ends at the next real sample), saturating.
+    output reg  [14:0] under_events,
+    output reg  [15:0] under_ticks,
+    output wire        sample_tick,    // the fractional-rate sample strobe (one clk pulse per output sample), for the spectrum bank
+    output wire        adv             // B-615: this tick delivers a real queued sample (primed, not empty, no flush): the gain stage's fade advances only on these
+);
+
+    localparam DEPTH = (1 << AW);
+    reg under_prev;                     // the previous tick was an underrun tick (so a run is counted once)
+
+    reg [31:0] mem [0:DEPTH-1];
+    reg [AW:0] wptr, rptr;
+
+    wire [AW:0] used = wptr - rptr;
+    assign level = used;
+    assign full  = (used == DEPTH[AW:0]);
+    assign empty = (used == 0);
+
+    // ---- start-up priming --------------------------------------------------
+    // Ported from HarpMudd upstream v1.5.0 (`4d396bf`, "wait for a cushion
+    // before the first sample of a track"). After a flush this FIFO used to
+    // drain the instant the first sample arrived, so the start of every track
+    // ran nearly empty: the decoder had not produced anything yet, the first
+    // tick found it empty, and the output decayed (per the glide below) and
+    // then jumped when audio finally caught up -- the click at second 0.
+    // Upstream measured this on hardware as an underrun at second 0 with a
+    // ~50-sample discontinuity, on tracks with no underrun anywhere else.
+    //
+    // So wait for a cushion before the first sample leaves. Half the FIFO is
+    // ~21 ms at 48 kHz (this FIFO's DEPTH differs from upstream's, so the
+    // absolute time differs too -- the fraction, and therefore the intent,
+    // is the same), inaudible as latency and far more than the decoder needs
+    // to get ahead.
+    //
+    // Cleared ONLY by flush or reset, never by running empty: a mid-track
+    // underrun keeps behaving exactly as before, including raising
+    // `underrun` for the firmware's fade. This is about the start of a
+    // track, and nothing else.
+    localparam [AW:0] PRIME = DEPTH[AW:0] >> 1;
+    reg primed;
+
+    // Fractional-rate tick: carry-out of the accumulator is the sample strobe.
+    reg [31:0] acc;
+    reg        tick;
+    assign sample_tick = tick;
+    assign adv = tick & primed & ~empty & ~flush & ~rst;
+    always @(posedge clk) begin
+        if (rst) begin
+            acc  <= 32'd0;
+            tick <= 1'b0;
+        end else begin
+            {tick, acc} <= {1'b0, acc} + {1'b0, rate_inc};
+        end
+    end
+
+    // Memory block: ONE always block, UNCONDITIONAL registered read, write
+    // guarded only by its enable. This exact shape is required for M10K
+    // inference. Reading mem[] inside `if (tick)` and slicing the result
+    // straight into out_l/out_r looks harmless but is NOT inferable -- Quartus
+    // built a 2048x32 register file instead and the fit went ~2x over the
+    // device (Error 170012, 3655 LABs vs 1848 available).
+    reg [31:0] q;
+    always @(posedge clk) begin
+        if (push && !full) mem[wptr[AW-1:0]] <= pdata;
+        q <= mem[rptr[AW-1:0]];
+    end
+
+    always @(posedge clk) begin
+        if (rst) begin
+            wptr     <= 0;
+            rptr     <= 0;
+            out_l    <= 16'd0;
+            out_r    <= 16'd0;
+            underrun <= 1'b0;
+            primed   <= 1'b0;
+            under_events <= 15'd0; under_ticks <= 16'd0; under_prev <= 1'b0;
+        end else if (flush) begin
+            // Same effect as reset on the pointers, but does NOT touch
+            // out_l/out_r: slamming those to 0 would produce an audible click,
+            // whereas holding the last sample for the ~21us until the next
+            // real one arrives is inaudible. underrun is cleared so a stale
+            // flag from the old track doesn't paint the new one as broken.
+            wptr     <= 0;
+            rptr     <= 0;
+            underrun <= 1'b0;
+            primed   <= 1'b0;
+            under_prev <= 1'b0;
+            if (UBUG == 3) begin under_events <= 15'd0; under_ticks <= 16'd0; end
+        end else begin
+            if (push && !full) wptr <= wptr + 1'b1;
+
+            if (!primed && used >= PRIME) primed <= 1'b1;
+
+            if (tick) begin
+                if (primed && !empty) begin
+                    // q trails rptr by one cycle, which is irrelevant here:
+                    // ticks are ~1041 cycles apart at 48 kHz / 50 MHz, so the
+                    // read has long since settled.
+                    out_l <= q[15:0];
+                    out_r <= q[31:16];
+                    rptr  <= rptr + 1'b1;
+                    under_prev <= 1'b0;
+                end else begin
+                    // Empty: GLIDE the output to zero rather than holding it.
+                    //
+                    // Holding was right for the gap this FIFO was designed
+                    // around -- a few samples between frame bursts. It is wrong
+                    // for the gap a track load opens: the output sits at an
+                    // arbitrary DC level for the best part of a second and then
+                    // steps to the new track's first sample, and that step is
+                    // the restart click. Firmware cannot reach this value, so
+                    // the glide has to live here.
+                    //
+                    // One shift per tick halves the level every ~90 samples:
+                    // a few-sample gap is still effectively a hold, a long one
+                    // reaches silence in ~15 ms. The window comparison snaps
+                    // the tail to exactly zero so a positive residue (x < 128
+                    // decays by 0) cannot stick.
+                    //
+                    // NOTE the pairing: firmware fades new audio in from zero
+                    // after every discontinuity INCLUDING unpause -- resume
+                    // used to rely on the held value being waveform-continuous
+                    // with the next sample, and this glide breaks that.
+                    if (out_l > -16'sd128 && out_l < 16'sd128) out_l <= 16'sd0;
+                    else                                       out_l <= out_l - (out_l >>> 7);
+                    if (out_r > -16'sd128 && out_r < 16'sd128) out_r <= 16'sd0;
+                    else                                       out_r <= out_r - (out_r >>> 7);
+                    // Priming is not an underrun: the glide above is carrying
+                    // silence on purpose. Raising the flag here would have the
+                    // firmware fade in every track start it is preventing.
+                    if (primed || UBUG == 1) begin
+                        if (primed) underrun <= 1'b1;
+                        if (under_ticks != 16'hFFFF) under_ticks <= under_ticks + 16'd1;
+                        if ((UBUG == 2 || !under_prev) && under_events != 15'h7FFF) under_events <= under_events + 15'd1;
+                        under_prev <= 1'b1;
+                    end
+                end
+            end
+        end
+    end
+
+endmodule

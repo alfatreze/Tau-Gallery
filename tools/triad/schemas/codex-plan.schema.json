@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["patch", "no_change"]
+    },
+    "task_packet": {
+      "type": "string",
+      "description": "Compact implementation packet for Qwen, including acceptance criteria, relevant source excerpts, constraints, and intended local test commands."
+    },
+    "allowed_files": {
+      "type": "array",
+      "description": "Repository-relative paths Qwen may change in its returned patch.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 0
+    }
+  },
+  "required": ["status", "task_packet", "allowed_files"],
+  "additionalProperties": false
+}

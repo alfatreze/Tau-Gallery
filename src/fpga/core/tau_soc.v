@@ -1,0 +1,1843 @@
+// =============================================================================
+// tau_soc.v -- VexRiscv + BRAM + memory-mapped peripherals.
+//
+// Memory map (BYTE addresses as seen by firmware):
+//   0x0000_0000 .. RAM_BYTES-1   RAM  (CACHED -- code, data, buffers)
+//   0x8000_0000 +                MMIO (UNCACHED)
+//
+// The 0x8000_0000 split is MANDATORY, not stylistic: VexRiscv decides
+// cacheability purely from physical address bit 31
+//   assign ..._isIoAccess     = ..._physicalAddress[31];
+//   assign stageB_bypassCache = (stageB_mmuRsp_isIoAccess || ...);
+// so a peripheral placed below 0x8000_0000 would be read through the D-cache
+// and firmware polling a status register would spin forever on a stale value.
+// RAM deliberately stays cached -- that is what produced the measured 1.65 CPI.
+//
+// MMIO registers:
+//   0x8000_0000  W  console character out (bits 7:0)
+//   0x8000_0004  W  sim/exit + halt marker (unused on HW)
+//   0x8000_0008  W  audio sample {right[31:16], left[15:0]}
+//   0x8000_000C  R  free-running clk cycle counter
+//   0x8000_0010  W  status word 0   (rendered on screen as 32 bit-blocks)
+//   0x8000_0014  W  status word 1
+//   0x8000_0018  W  status word 2
+//   0x8000_001C  W  status word 3
+//   0x8000_0020  W  target-cmd: id
+//   0x8000_0024  W  target-cmd: slot offset
+//   0x8000_0028  W  target-cmd: bridge address
+//   0x8000_002C  W  target-cmd: length
+//   0x8000_0030  W  target-cmd: go   (bit0 1=openfile 0=read -> starts command)
+//                R  target-cmd: status {err[2:0], done, busy}
+//
+// The loader port (ld_*) writes bytes into RAM on port B. It carries BOTH the
+// initial firmware image at boot AND, later, bytes streamed back by APF target
+// reads -- both arrive over the same APF bridge write bus.
+// =============================================================================
+
+// RAM sizing: measured Helix needs are firmware image ~63 KB + decoder instance
+// ~34 KB + MP3 read-ahead 32 KB + stack 16 KB = ~143 KB, so 128 KB is too small
+// and the next power of two is 256 KB.
+//
+// RAM_WORDS **MUST BE A POWER OF TWO**. A 49152-entry array addressed by a
+// 16-bit index cannot be mapped cleanly onto M10K, so Quartus built the memory
+// out of logic instead and the fit exploded:
+//   Error (170012): Fitter requires 3621 LABs ... device contains only 1848
+// At 65536 it infers correctly: 256 KB costs ~256 M10K blocks (byte-wide arrays
+// force x8 mode, ~80% bit efficiency), measured 271/308 total with the rest of
+// the core. pcm_fifo adds ~8 more.
+module tau_soc #(
+    parameter RAM_WORDS = 65536,           // 256 KB -- power of two, required
+    parameter RAM_AW    = 16,
+    // Phase 2 remains opt-in until its address map, uncached adapter, and
+    // owner-mux path have passed the full Quartus and Pocket gates.
+    parameter PHASE2_WINDOW_ENABLE = 0,
+    // Uncached PSRAM CPU window at 0xA400_0000..A5FF_FFFF (B-016). Needs the Phase 2
+    // decode (PHASE2_WINDOW_ENABLE): the legacy decode aliases that range onto MMIO.
+    parameter PSRAM_WINDOW_ENABLE = 0,
+    // Phase G2: instruction fetch from PSRAM. Cold code runs from the instruction alias 0x2400_0000..0x25FF_FFFF
+    // (32 MiB, PSRAM byte offset = address - 0x2400_0000), read-only, through a second tau_psram_bus and a two-client
+    // arbiter on the existing PSRAM port. Needs PSRAM_WINDOW_ENABLE. Inert (identical netlist) when 0.
+    parameter PSRAM_IFETCH_ENABLE = 0,
+    parameter IFETCH_GAP = 2,               // test hook: idle cycles after each PSRAM transaction (0 reproduces back-to-back requests)
+    // Phase F B7: SDRAM busy-cycle counter (PHASE_F_SPEC.md section 5). The counter itself lives
+    // outside this module, in clk_sdram, and is CDC'd in by the caller (tau_cdc_gray_ctr) -- this
+    // just gates whether 0xBC exposes it or reads zero. Inert (identical netlist) when 0.
+    parameter SDRAM_BUSY_ENABLE = 0,
+    // B-467 (Cymo 44.1 kHz investigation): gates whether 0x140-0x14C expose sound_i2s.v's own
+    // clk_audio->clk_mclk CDC jitter diagnostic, or read zero. Inert (identical netlist) when 0.
+    parameter I2S_DIAG_ENABLE = 0,
+    // Phase F B1 (PHASE_F_SPEC.md section 5): the sticky blit-state registers always exist (a few
+    // flops, harmless either way) but blt_src_base/stride and blt_dst_base/stride are only wired
+    // out to mp3_fb when this is set -- inert (identical netlist) when 0.
+    parameter BLIT_ENABLE = 0,
+    // Helios/Talos H0 (docs/HELIOS_SPEC.md section 9): vblank status. The synchroniser itself
+    // lives outside this module, in clk_vid, and is CDC'd in by the caller (tau_cdc_sync1) --
+    // this just gates whether 0xD0 exposes it or reads zero. Inert (identical netlist) when 0.
+    parameter VBLANK_ENABLE = 0,
+    // Spectrum filter bank (PHASE_F_SPEC.md section 7, B-263): tau_spec_bank.sv fed from the PCM FIFO's sample strobe;
+    // 16 band means readable at R_SPEC_IDX/R_SPEC_DATA, status/window counter at R_SPEC_ST. Inert (reads 0) when 0.
+    parameter SPEC_ENABLE = 0,
+    // Level and waveform meters (B-283): tau_wave_meter.sv fed from the same sample strobe. Peak L/R, and a 256-column
+    // min/max scope capture with its own zero-crossing trigger. Registers 0xEC-0xFC. Inert (reads 0) when 0.
+    parameter WAVE_ENABLE = 0,
+    parameter STATS_ENABLE = 0,          // audio statistics block (tau_audio_stats.sv): rms and stereo correlation sums for the meters
+    // MP3 synthesis-window unit (B-292): tau_mp3_poly.sv, registers 0x100-0x110. Inert (reads 0) when 0.
+    parameter POLY_ENABLE = 0,
+    // Helios H2 (B-340): double buffering via base-pointer swap in mp3_fb.sv. Registers 0x118-0x11C.
+    // Inert (reads 0, writes ignored) when 0.
+    parameter DBUF_ENABLE = 0,
+    // FLAC LPC/FIXED reconstruction unit (B-368, docs/research/FLAC_LPC_KERNEL_DESIGN.md): tau_flac_lpc.sv,
+    // registers 0x120-0x13C. Inert (reads 0, sample_rd tied off) when 0.
+    parameter LPC_ENABLE = 0,
+    // Cymo polyphase FIR resampler (B-471, docs/features/CYMO_AUDIO_ENGINE.md section 15): tau_cymo_resamp.sv,
+    // registers 0x150-0x160. Standalone -- not yet consumed by pcm_fifo.v/firmware. Inert (reads 0,
+    // out_rd tied off) when 0.
+    parameter CYMO_RESAMP_ENABLE = 0,
+    // B-602 (Cymo C3, F2): 16-bit I2S slot switch (register 0x164, sound_i2s.v full16). Inert (reads 0, no output) when 0.
+    parameter AUDIO16_ENABLE = 0,
+    // B-615 (Cymo C3 slice 2): hardware gain stage at the pcm_fifo output (tau_gain_stage.sv), registers 0x168-0x174. Inert (reads 0, audio path untouched) when 0.
+    parameter GAIN_ENABLE = 0,
+    // B-741 (gapless): the hardware PCM ring reader (tau_pcm_ring.sv, docs/features/PCM_RING_HW_DESIGN.md), registers 0x184-0x198. A third client of the PSRAM port next to the data window and the instruction
+    // fetch: needs PSRAM_IFETCH_ENABLE (the arbiter). With 0 the unit does not exist, reads 0 and the audio path is untouched.
+    parameter PCM_RING_ENABLE = 0,
+    parameter GAIN_BOOST = 0,           // B-720: the gain stage may exceed unity (target up to 65535, saturating product); read back in R_GAIN_CTRL bit 30
+    // B-639 (Halcyon): the Halcyon EQ engine (tau_halcyon.sv), registers 0x178-0x180; it is the only EQ (the preset EQ and its register 0x68 were removed). With 0 the audio is the unequalised path.
+    parameter HALCYON_ENABLE = 0,
+    // B-646 (wide EQ input): the Cymo resampler's output is 18 bits (the same LSB, two headroom bits: its +1 dB overshoot is no longer hard-clipped at +-32767) and the Halcyon engine takes
+    // all 18 bits; the MMIO read still sees the 16-bit clamp. Inert (0) = every path exactly as before.
+    parameter WIDE_EQ_ENABLE = 0,
+    // Writable font memory (docs/features/FONT_SPEC.md, TAU_FONT_RAM): registers 0x1A0-0x1A8 load the drawing engine's glyph RAM (Latin-1, 6,112 words). With 0 the registers read 0 (no unit) and the engine keeps its ROM font.
+    parameter FONT_RAM_ENABLE = 0,
+    // Wall clock (APF host command 0x0090 latched by tau_rtc_cdc.sv from the clk_74a bridge domain): registers 0x1C4-0x1D0. With 0 the registers read 0 and the module does not exist.
+    parameter RTC_ENABLE = 0,
+    parameter BUG_RTC = 0,              // mutation hook for sim/tb_rtc_soc.v / sim/tb_rtc_cdc.v (passed to tau_rtc_cdc)
+    // Per-port SDRAM statistics window (tau_sdr_stat_win.sv, outside this module; the counters live in clk_sdram): registers 0x1D4-0x1D8. With 0 they read 0 and writes are ignored.
+    parameter SDA_ENABLE = 0,
+    // Pack watchdog (tau_wdog.sv, docs/features/PACK_WATCHDOG_PLAN.md): registers 0x1DC-0x1E8; its expiry is the CPU's timer interrupt. With 0 the registers read 0, writes are ignored and the interrupt input stays tied to 0.
+    parameter WDOG_ENABLE = 0,
+    parameter BUG_FONT_NO_INC = 0,      // mutation hooks for sim/tb_font_soc.v (1 must make it fail): the index does not step after a data write / the completed-load counter never counts
+    parameter BUG_FONT_NO_GEN = 0
+) (
+    input  wire        clk,
+    input  wire        rst,                // active high, hold until firmware loaded
+    input  wire        clk_74a,            // for the dataslot_update CDC only
+
+    // Byte-write port for firmware load + streamed data (same clock domain)
+    input  wire        ld_wr,
+    input  wire [31:0] ld_addr,
+    input  wire [7:0]  ld_data,
+
+    // Controller + OS menu state (clk_74a domain; resynced internally)
+    input  wire [31:0] cont_key,
+    input  wire        in_menu,
+
+    // Fires when the user reloads the MP3 slot from the Core menu ("Load MP3"
+    // is User-Reloadable, parameters bit 0). Verified against Analogue's docs
+    // rather than assumed (see the 0192 mistake earlier in this project):
+    // "If the slot is marked User Reloadable, APF sends 008A Data slot update
+    // whenever the user picks a new file." clk_74a domain, one-cycle pulse.
+    input  wire        dataslot_update,
+    input  wire [15:0] dataslot_update_id,
+    input  wire [31:0] dataslot_update_size,
+
+    // "Data slot access all complete" (host command 008F). The BOOT path
+    // already depends on this -- core_game.vh holds the CPU in reset until it
+    // fires -- but the reload path only ever saw 008A, which APF sends when
+    // the user PICKS a file, not when the slot is ready to read. That is the
+    // whole asymmetry behind "the tag shows on boot but not after Load MP3".
+    input  wire        dataslot_allcomplete,
+
+    // Audio out -- driven by pcm_fifo, drained in hardware at the programmed
+    // sample rate. Firmware pushes bursts; it never has to meet DAC timing.
+    output wire [15:0] audio_l,
+    output wire [15:0] audio_r,
+    output wire        audio_full16,   // B-602: sound_i2s full16 (0 unless AUDIO16_ENABLE and firmware set it)
+
+    // Debug/status words rendered by the video block
+    output reg  [31:0] status0,
+    output reg  [31:0] status1,
+    output reg  [31:0] status2,
+    output reg  [31:0] status3,
+
+    // Console character stream (for a future text overlay / trace)
+    output reg         con_wr,
+    output reg  [7:0]  con_char,
+
+    // APF target-command request (clk domain; CDC handled in tgt_cmd.v)
+    output reg         tgt_go,             // 1-cycle pulse
+    output reg  [2:0]  tgt_cmd_sel,        // 0=0180 read 1=0192 openfile 2=0190 getfile 3=0184 write 4=0188 flush
+    output reg  [15:0] tgt_id,
+    output reg  [31:0] tgt_slotoffset,
+    output reg  [31:0] tgt_bridgeaddr,
+    output reg  [31:0] tgt_length,
+    input  wire        tgt_busy,
+    input  wire        tgt_done,
+    input  wire [7:0]  tgt_seq,
+    input  wire [2:0]  tgt_err,
+
+    // Framebuffer draw command -> mp3_fb.sv (rev 7). One command is now a whole
+    // primitive -- a run, a rect, or a complete anti-aliased glyph -- rather
+    // than a single row, so the CPU issues ~30x fewer of them. The parameter
+    // registers persist between pushes, so consecutive glyphs of the same
+    // colour and size cost just an address write plus the GO write.
+    // fb_cmd_full is checked before pushing; pushing while full is silently
+    // dropped by mp3_fb's FIFO.
+    output reg          fb_cmd_push,
+    output reg  [3:0]   fb_cmd_op,   // 4 bits: bit 2 was GO's unused padding bit (OP_BLIT, B1); bit 3 is
+                                     // R_FB_GO's dDAT_MOSI[14] (B11) -- free (glyph/sx/sy already occupy
+                                     // bits 3-13, so this needed no other field to move).
+    output reg  [18:0]  fb_cmd_addr,
+    output reg  [8:0]   fb_cmd_w,
+    output reg  [8:0]   fb_cmd_h,
+    output reg  [15:0]  fb_cmd_fg,
+    output reg  [15:0]  fb_cmd_bg,
+    output reg  [6:0]   fb_cmd_glyph,
+    output reg  [1:0]   fb_cmd_sx,
+    output reg  [1:0]   fb_cmd_sy,
+    output reg  [1:0]   fb_cmd_glyph_hi,   // B12 (B-454): BAR lit-count high bits, R_FB_GO bits 16:15 (CHAR: bit 15 is glyph bit 7 when FONT_RAM_ENABLE)
+    output reg          fb_font_we,        // FONT_RAM (clk_sys): one word write into the glyph RAM
+    output reg  [12:0]  fb_font_waddr,
+    output reg  [31:0]  fb_font_wdata,
+    input  wire         fb_cmd_full,
+    // Talos 2 T3 status from tau_gfx (clk_sys): R_GFX_FENCE/R_GFX_STATUS/R_GFX_COUNTS and R_FB_GO bit 1 (docs/features/TALOS_T3_SPEC.md)
+    input  wire         fb_gfx_idle,
+    input  wire [31:0]  fb_gfx_fence,
+    input  wire [8:0]   fb_gfx_free,
+    input  wire [15:0]  fb_gfx_ovf,
+    input  wire [15:0]  fb_gfx_underflow,
+
+    // core_bridge_cmd's datatable: a dual-port BRAM whose OTHER port APF can
+    // read and write over the bridge at 0xF8xx2xxx. That is what makes the
+    // 0190 getfile / 0192 openfile structs reachable at all -- the frozen
+    // shell's bridge_rd_data mux serves core_bridge_cmd alone, so a core
+    // cannot otherwise expose memory to a bridge READ. This BRAM already sits
+    // on both sides, and core_top leaves the user-side port undriven.
+    output reg  [9:0]   dt_addr,
+    output reg          dt_wren,
+    output reg  [31:0]  dt_wdata,
+    input  wire [31:0]  dt_q,
+
+    // Persistent settings words, published to / read from interact.json.
+    output reg  [4:0]   set_idx,   // B-346: widened 4 -> 5 bits (16 -> 32 persist words), see core_game.vh's set_reg
+    output reg          set_wr,
+    output reg  [31:0]  set_wdata,
+    input  wire [31:0]  set_rdata,
+
+    // Phase 1 SDRAM diagnostic mailbox.  This is intentionally MMIO-only:
+    // ordinary CPU instruction/data accesses still go to BRAM.
+    output reg          sdram_start,
+    output reg          sdram_write,
+    output reg  [24:0]  sdram_addr,
+    output reg  [31:0]  sdram_wdata,
+    output reg  [3:0]   sdram_byte_en,
+    input  wire         sdram_busy,
+    input  wire         sdram_done,
+    input  wire [31:0]  sdram_rdata,
+
+    // Phase 2 uncached CPU data-window client. Disabled by default; in the
+    // disabled build these outputs are tied inactive and inputs are ignored.
+    output wire         sdram_wb_req,
+    output wire         sdram_wb_write,
+    output wire [24:0]  sdram_wb_addr,
+    output wire [31:0]  sdram_wb_wdata,
+    output wire [3:0]   sdram_wb_byte_en,
+    input  wire         sdram_wb_accept,
+    input  wire         sdram_wb_done,
+    input  wire [31:0]  sdram_wb_rdata,
+
+    // Diagnostic-only visibility for the opt-in Phase 2 CPU-window probe.
+    // These ports are inert in release builds and deliberately expose only
+    // protocol metadata, never CPU data or program memory.
+    output wire         sdram_wb_debug_cpu_req,
+    output wire         sdram_wb_debug_we,
+    output wire [31:0]  sdram_wb_debug_wdata,
+    output wire [2:0]   sdram_wb_debug_cti,
+    output wire [3:0]   sdram_wb_debug_sel,
+    output wire         sdram_wb_debug_ack,
+    output wire         sdram_wb_debug_unsupported,
+    // Optional return-path probe visibility. These expose the adapter response
+    // and CPU-facing registered ACK/data pair; they are inert in legacy builds
+    // and exist only to isolate the diagnostic return boundary.
+    output wire [31:0]  sdram_wb_debug_adapter_rdata,
+    output wire         sdram_wb_debug_cpu_ack,
+    output wire [31:0]  sdram_wb_debug_cpu_rdata,
+
+    // Expansion MMIO (docs/MMIO_ALLOCATION.md): offsets 0x88..0xAC are handed to
+    // an optional peripheral (the PSRAM diagnostic mailbox). With nothing
+    // connected xm_rdata is not read, so legacy builds and testbenches are
+    // unaffected.
+    output wire [7:0]   xm_reg,
+    output wire         xm_wr,
+    output wire [31:0]  xm_wdata,
+    input  wire [31:0]  xm_rdata,
+
+    // PSRAM CPU window: controller-side request interface (single outstanding request,
+    // level held until psram_done). Inert unless PSRAM_WINDOW_ENABLE.
+    output wire         psram_req,
+    output wire         psram_we,
+    output wire [22:0]  psram_word,
+    output wire [31:0]  psram_wdata,
+    output wire [3:0]   psram_be,
+    input  wire         psram_done,
+    input  wire [31:0]  psram_rdata,
+    input  wire         psram_guard,
+
+    // Phase F B7: already-CDC'd SDRAM busy-cycle count (clk_sys domain, sourced from clk_sdram
+    // by the caller). Unread when SDRAM_BUSY_ENABLE is 0, so legacy builds and testbenches that
+    // do not wire this port are unaffected -- same convention as xm_rdata above.
+    input  wire [31:0]  sdram_busy_rd,
+
+    // Wall clock from the bridge domain (core_bridge_cmd's rtc_* outputs, clk_74a). Unread when RTC_ENABLE is 0.
+    input  wire         rtc_valid,
+    input  wire [31:0]  rtc_epoch_seconds,
+    input  wire [31:0]  rtc_date_bcd,
+    input  wire [31:0]  rtc_time_bcd,
+
+    // Per-port SDRAM statistics window: a select write pulse + {port[1:0], stat[2:0]}, and the window's already-CDC'd (clk_sys) status and value. Unread when SDA_ENABLE is 0.
+    output reg          sda_we,
+    output reg  [4:0]   sda_wd,
+    input  wire [31:0]  sda_status,
+    input  wire [31:0]  sda_val,
+
+    // B-467 (Cymo 44.1 kHz investigation): sound_i2s.v's own clk_mclk-domain toggle, flipping on every
+    // real DAC-domain sample-hold update. Synchronised into `clk` with tau_cdc_sync1 below and turned
+    // into a jitter measurement using this module's own free-running cycle_ctr -- no separate counter
+    // module needed. Unread when I2S_DIAG_ENABLE is 0.
+    input  wire         i2s_diag_toggle,
+
+    // Helios/Talos H0: already-CDC'd vblank level (clk_sys domain, sourced from clk_vid by the
+    // caller). Unread when VBLANK_ENABLE is 0, same convention as sdram_busy_rd above.
+    input  wire [9:0]   scan_rd,     // {present, vc[8:0]} video line counter (B-267), 0 when TAU_BEAM is off
+    input  wire [16:0]  vblank_rd,   // {frame count[15:0], level} from tau_vs_counter (B-260)
+
+    // Phase F B1: sticky blit-engine addressing state (section 9). Driven from tau_soc's own
+    // R_BLT_IDX/R_BLT_DATA registers regardless of BLIT_ENABLE; only OP_BLIT in mp3_fb.sv reads
+    // them, and that opcode does not exist unless TAU_BLIT is built there too.
+    // Theme/gamma: text weight table select (MMIO 0x114 bit 0), clk_sys domain; synchronised into clk_sdram by the caller.
+    output wire         text_light,
+    // Helios H2 (B-340): clk_sys-domain outputs to mp3_fb.sv (the caller synchronises dbuf_cpu_buf into
+    // clk_sdram exactly like text_light above; dbuf_flip_req_tgl is already a toggle, formally
+    // synchronised INSIDE mp3_fb.sv itself, same technique as fill_req_tgl). Inputs are mp3_fb's own
+    // clk_sdram-domain status, sampled here informally (a level changing at most once per vblank).
+    output wire         dbuf_cpu_buf,
+    output wire         dbuf_flip_req_tgl,
+    input  wire         dbuf_disp_buf,
+    input  wire         dbuf_flip_pending,
+    output wire [24:0]  blt_src_base,
+    output wire [9:0]   blt_src_stride,
+    output wire [24:0]  blt_dst_base,
+    output wire [9:0]   blt_dst_stride,
+
+    // Phase F B2: colour-key transparency, sticky field 4 (section 9's KEY).
+    output wire         blt_key_en,
+    output wire [15:0]  blt_key,
+
+    // Phase F B5: alpha blend, sticky field 5 (section 9's BLEND).
+    output wire         blt_blend_en,
+    output wire [2:0]   blt_blend_mode,
+    output wire [7:0]   blt_blend_alpha,
+
+    // Phase F B9 (Tier 2, section 5): palette re-index offset, sticky field 6
+    // (section 9's REINDEX). Added to OP_CBLIT's palette index before the CLUT
+    // lookup in mp3_fb.sv; default 0 is a true no-op, so there is no separate
+    // enable bit the way B2/B5 have one.
+    output wire [7:0]   blt_reindex,
+
+    // Phase F B8 ("B8 detailed design", PHASE_F_SPEC.md section 5): CLUT load,
+    // from tau_soc's own R_CLUT_IDX/R_CLUT_DATA. A plain indexed write, not one
+    // of the section-9 sticky fields (a 256-entry bulk table load is a
+    // different kind of write traffic than five mostly-static config fields,
+    // so it gets its own register pair rather than sharing BLT_IDX/DATA's).
+    // Driven regardless of BLIT_ENABLE, same convention as the sticky fields
+    // above; only OP_CBLIT in mp3_fb.sv reads the CLUT, and that opcode does
+    // not exist unless TAU_BLIT is built there too.
+    output wire         clut_wr,
+    output wire [7:0]   clut_waddr,
+    output wire [15:0]  clut_wdata,
+
+    // B11 (section 5): corner-cut lookup table, from tau_soc's own R_RC_IDX/R_RC_DATA -- a bulk
+    // table load, own register pair (same reasoning as R_CLUT_IDX/DATA above: a 16-entry table
+    // load is different write traffic from a handful of sticky per-command fields). Driven
+    // regardless of BLIT_ENABLE, same convention as every other blt_*/clut_* signal here.
+    output wire [79:0]  rc_cut_lut
+);
+
+    // ---------------------------------------------------------------- CPU ---
+    wire        iCYC, iSTB, iWE;
+    wire [29:0] iADR;
+    wire [31:0] iDAT_MOSI;
+    wire [3:0]  iSEL;
+    wire [2:0]  iCTI;
+    wire [1:0]  iBTE;
+    reg  [31:0] iDAT_MISO;
+    reg         iACK;
+
+    wire        dCYC, dSTB, dWE;
+    wire [29:0] dADR;
+    wire [31:0] dDAT_MOSI;
+    wire [3:0]  dSEL;
+    wire [2:0]  dCTI;
+    wire [1:0]  dBTE;
+    reg  [31:0] dDAT_MISO;
+    reg         dACK;
+    wire        sdram_wb_ack;
+    wire [31:0] sdram_wb_cpu_rdata;
+    wire        sdram_wb_unsupported;
+    wire        d_bus_err;
+    wire        d_req     = dCYC & dSTB & ~dACK;
+    wire        i_req     = iCYC & iSTB & ~iACK;
+
+    // ------------------------------------------------ pack watchdog (D-T15) ---
+    // The firmware arms it around a pack's draw tick (R_WDOG_ARM = limit in clk cycles, 0 disarms) and acknowledges the interrupt (R_WDOG_ACK); `wdog_irq` is the CPU's timer interrupt.
+    reg         wdog_arm_we = 1'b0, wdog_ack_we = 1'b0;
+    reg  [31:0] wdog_arm_d  = 32'd0;
+    wire        wdog_irq;
+    wire [31:0] wdog_status, wdog_counts;
+    generate
+        if (WDOG_ENABLE != 0) begin : g_wdog
+            tau_wdog u_wdog (.clk(clk), .rst(rst), .arm_wr(wdog_arm_we), .arm_val(wdog_arm_d), .ack_wr(wdog_ack_we), .irq(wdog_irq), .status(wdog_status), .counts(wdog_counts));
+        end else begin : g_nowdog
+            assign wdog_irq = 1'b0; assign wdog_status = 32'd0; assign wdog_counts = 32'd0;
+        end
+    endgenerate
+
+    VexRiscv cpu (
+        .externalResetVector   (32'h00000000),
+        .timerInterrupt        (wdog_irq),
+        .softwareInterrupt     (1'b0),
+        .externalInterruptArray(32'b0),
+
+        .iBusWishbone_CYC      (iCYC),
+        .iBusWishbone_STB      (iSTB),
+        .iBusWishbone_ACK      (iACK),
+        .iBusWishbone_WE       (iWE),
+        .iBusWishbone_ADR      (iADR),
+        .iBusWishbone_DAT_MISO (iDAT_MISO),
+        .iBusWishbone_DAT_MOSI (iDAT_MOSI),
+        .iBusWishbone_SEL      (iSEL),
+        .iBusWishbone_ERR      (1'b0),
+        .iBusWishbone_CTI      (iCTI),
+        .iBusWishbone_BTE      (iBTE),
+
+        .dBusWishbone_CYC      (dCYC),
+        .dBusWishbone_STB      (dSTB),
+        .dBusWishbone_ACK      (dACK),
+        .dBusWishbone_WE       (dWE),
+        .dBusWishbone_ADR      (dADR),
+        .dBusWishbone_DAT_MISO (dDAT_MISO),
+        .dBusWishbone_DAT_MOSI (dDAT_MOSI),
+        .dBusWishbone_SEL      (dSEL),
+        .dBusWishbone_ERR      (d_bus_err),
+        .dBusWishbone_CTI      (dCTI),
+        .dBusWishbone_BTE      (dBTE),
+
+        .clk                   (clk),
+        .reset                 (rst)
+    );
+
+    // ------------------------------------------------------- RAM (4 banks) ---
+    // Four byte-wide arrays so both ports get byte enables and Quartus infers
+    // true dual-port M10K without a read-modify-write.
+    //
+    // TAU_RAM_192K (opt-in, off by default, docs/PHASE_F_SPEC.md section 4/4.1):
+    // the proposed 256 KB -> 192 KB main-RAM shrink, factored out into
+    // tau_main_ram.sv (its own module, its own testbench) rather than inlined
+    // here a second time. RAM_WORDS itself does not change -- the module
+    // internally splits its backing store into two power-of-two-sized regions
+    // (32768 + 16384 words/lane = 192 KB total) instead of one 49152-word
+    // array, which is not synthesizable onto M10K cleanly (see that module's
+    // own header for the exact prior failure this avoids). Default (off):
+    // behaviourally and structurally identical to the single 65536-word array
+    // this replaces -- see tau_main_ram.sv's WORDS_B=0 case. NOT YET ENABLED
+    // in any build: a synthesis-only Quartus check (M10K/MLAB inference for
+    // both regions) is required before a real fit, and a real fit before any
+    // hardware install -- see docs/AUDIT_TRAIL.md B-223 and tau_main_ram.sv's
+    // own header for why this is a real, not theoretical, risk.
+`ifdef TAU_RAM_PROBE_A
+    // EXPERIMENT ONLY (B-226): isolates whether a module port boundary alone
+    // (no generate, no split-region logic -- a literal copy of the array
+    // below) still infers M10K. Delete tau_ram_probe_a.sv and this branch
+    // once the question is answered. Not a real feature.
+    tau_ram_probe_a #(.WORDS(RAM_WORDS), .AW(RAM_AW)) u_ram_probe_a (
+        .clk(clk), .addr(mem_addr), .wdata(mem_wdata), .be(mem_be), .we(mem_we), .rdata(a_rdata)
+    );
+`elsif TAU_RAM_192K_INLINE
+    // EXPERIMENT / fallback (B-226): the SAME two-region split as
+    // tau_main_ram.sv, but written directly here -- same file/scope as the
+    // original working array, no module port boundary, no `generate` block
+    // (both are open suspects for tau_main_ram.sv's synthesis failure).
+    // Region select is a plain runtime if/else in the always block below,
+    // not a generate-time choice -- both arrays always exist. If this
+    // infers cleanly where the module version did not, ship this shape
+    // instead and retire tau_main_ram.sv's module-based approach.
+    localparam RS_WORDS_A = 32768, RS_AW_A = 15;
+    localparam RS_WORDS_B = 16384, RS_AW_B = 14;
+    reg [7:0] ra0 [0:RS_WORDS_A-1];
+    reg [7:0] ra1 [0:RS_WORDS_A-1];
+    reg [7:0] ra2 [0:RS_WORDS_A-1];
+    reg [7:0] ra3 [0:RS_WORDS_A-1];
+    reg [7:0] rb0 [0:RS_WORDS_B-1];
+    reg [7:0] rb1 [0:RS_WORDS_B-1];
+    reg [7:0] rb2 [0:RS_WORDS_B-1];
+    reg [7:0] rb3 [0:RS_WORDS_B-1];
+`elsif TAU_RAM_192K
+    tau_main_ram #(.WORDS_A(32768), .WORDS_B(16384), .AW(RAM_AW)) u_main_ram (
+        .clk(clk), .addr(mem_addr), .wdata(mem_wdata), .be(mem_be), .we(mem_we), .rdata(a_rdata)
+    );
+`else
+    reg [7:0] ram0 [0:RAM_WORDS-1];
+    reg [7:0] ram1 [0:RAM_WORDS-1];
+    reg [7:0] ram2 [0:RAM_WORDS-1];
+    reg [7:0] ram3 [0:RAM_WORDS-1];
+`endif
+
+    // Port A: CPU (dBus has priority; iBus retries while stalled)
+    //
+    // Address decode (BYTE addresses; dADR is a WORD address so byte bit N maps
+    // to dADR[N-2]):
+    //   0x0000_0000  RAM, CACHED    -- code/data/stack, gives the good CPI
+    //   0x8000_0000  MMIO           -- uncached (bit31), peripherals
+    //   0xC000_0000  RAM, UNCACHED  -- same physical RAM, aliased
+    //
+    // The uncached alias exists because APF target reads DMA straight into RAM
+    // over the bridge, behind the CPU's back. Reading that buffer through the
+    // cached window could return stale lines with no way to tell. Firmware reads
+    // streamed bytes via 0xC000_0000 and gets the real memory every time.
+    wire        d_is_mmio;
+    wire        d_is_ram;
+    wire        d_is_sdram;
+    wire        d_is_sdram_cached;
+    wire [24:0] d_sdram_addr;
+
+    wire dec_bram_cached, dec_bram_uncached, dec_mmio;
+    wire dec_sdram_cached, dec_sdram_uncached;
+    wire [24:0] dec_sdram_addr;
+    wire        dec_psram;
+    wire [22:0] dec_psram_word;
+    wire        d_is_psram;
+    wire        psram_wb_ack, psram_wb_unsupported;
+    wire [31:0] psram_wb_dat;
+    // The data-window client's controller-side signals (the port outputs are driven by the arbiter below).
+    wire        dctl_req, dctl_we, dctl_done;
+    wire [22:0] dctl_word;
+    wire [31:0] dctl_wdata;
+    wire [3:0]  dctl_be;
+    // Phase G2 instruction-fetch client and its counters
+    wire        i_is_psram = (PSRAM_IFETCH_ENABLE != 0) && (iADR[29:23] == 7'h12);   // 0x2400_0000..0x25FF_FFFF
+    wire        ipsram_ack;
+    wire [31:0] ipsram_dat;
+    wire [31:0] if_n_rd, if_cyc_rd;
+    tau_sdram_addr_decode u_sdram_addr_decode (
+        .dadr(dADR), .bram_cached(dec_bram_cached),
+        .bram_uncached(dec_bram_uncached), .mmio(dec_mmio),
+        .sdram_cached(dec_sdram_cached), .sdram_uncached(dec_sdram_uncached),
+        .sdram_addr(dec_sdram_addr),
+        .psram_uncached(dec_psram), .psram_word(dec_psram_word)
+    );
+
+    generate
+        if (PHASE2_WINDOW_ENABLE != 0) begin : g_phase2_window
+            assign d_is_mmio        = dec_mmio;
+            assign d_is_ram         = dec_bram_cached | dec_bram_uncached;
+            assign d_is_sdram       = dec_sdram_uncached;
+            assign d_is_sdram_cached= dec_sdram_cached;
+            assign d_sdram_addr     = dec_sdram_addr;
+            assign sdram_wb_debug_cpu_req = d_req & dec_sdram_uncached;
+            assign sdram_wb_debug_we      = dWE;
+            assign sdram_wb_debug_wdata   = dDAT_MOSI;
+            assign sdram_wb_debug_cti     = dCTI;
+            assign sdram_wb_debug_sel     = dSEL;
+            assign sdram_wb_debug_ack     = sdram_wb_ack;
+            assign sdram_wb_debug_unsupported = sdram_wb_unsupported;
+            assign sdram_wb_debug_adapter_rdata = sdram_wb_cpu_rdata;
+            assign sdram_wb_debug_cpu_ack = dACK;
+            assign sdram_wb_debug_cpu_rdata = dDAT_MISO;
+
+            tau_sdram_wb_adapter u_sdram_wb_adapter (
+                .clk(clk), .rst(rst),
+                .wb_cyc(dCYC & d_is_sdram), .wb_stb(dSTB), .wb_we(dWE),
+                .wb_cti(dCTI), .wb_sdram_addr(d_sdram_addr),
+                .wb_wdata(dDAT_MOSI), .wb_sel(dSEL),
+                .wb_rdata(sdram_wb_cpu_rdata), .wb_ack(sdram_wb_ack),
+                .wb_unsupported(sdram_wb_unsupported),
+                .bridge_req(sdram_wb_req), .bridge_write(sdram_wb_write),
+                .bridge_addr(sdram_wb_addr), .bridge_wdata(sdram_wb_wdata),
+                .bridge_byte_en(sdram_wb_byte_en),
+                .bridge_accept(sdram_wb_accept), .bridge_done(sdram_wb_done),
+                .bridge_rdata(sdram_wb_rdata)
+            );
+
+`ifdef TAU_SIGNALTAP
+            // SignalTap proof tap (docs/JTAG_DEBUG_ACCESS.md section 5); diagnostic builds only.
+            // Bit map is mirrored in tools/gen_signaltap_stp.py: keep both in step.
+            tau_signaltap_tap u_stp_tap (
+                .clk(clk),
+                .d({sdram_wb_rdata[0], rst, d_bus_err, dACK,
+                    sdram_wb_addr[19:0],
+                    sdram_wb_done, sdram_wb_accept, sdram_wb_write, sdram_wb_req,
+                    sdram_wb_unsupported, sdram_wb_ack, dWE, (dCYC & d_is_sdram & dSTB)})
+            );
+`endif
+
+            // Unsupported bursts and unmapped data addresses terminate as a
+            // Wishbone error instead of silently hanging the CPU bus.
+            assign d_is_psram = dec_psram && (PSRAM_WINDOW_ENABLE != 0);
+            if (PSRAM_WINDOW_ENABLE != 0) begin : g_psram
+                // One CPU beat = one controller request (KB-024 release timing); a guard-word
+                // access ACKs with data 0 (the CPU has no bus-error handler) and sets the
+                // controller's sticky guard flag.
+                tau_psram_bus #(.REL_CYC(2), .GUARD_ERR(0)) u_psram_bus (
+                    .clk(clk), .rst(rst),
+                    .wb_cyc(dCYC & d_is_psram), .wb_stb(dSTB), .wb_we(dWE), .wb_cti(dCTI),
+                    .wb_adr(dec_psram_word), .wb_dat_i(dDAT_MOSI), .wb_sel(dSEL),
+                    .wb_dat_o(psram_wb_dat), .wb_ack(psram_wb_ack), .wb_err(),
+                    .wb_unsupported(psram_wb_unsupported),
+                    .ctl_req(dctl_req), .ctl_we(dctl_we), .ctl_word(dctl_word),
+                    .ctl_wdata(dctl_wdata), .ctl_be(dctl_be),
+                    .ctl_done(dctl_done), .ctl_rdata(psram_rdata), .ctl_guard(psram_guard)
+                );
+            end else begin : g_no_psram
+                assign psram_wb_dat = 32'd0;
+                assign psram_wb_ack = 1'b0;
+                assign psram_wb_unsupported = 1'b0;
+                assign dctl_req = 1'b0;   assign dctl_we = 1'b0;
+                assign dctl_word = 23'd0; assign dctl_wdata = 32'd0;
+                assign dctl_be = 4'd0;
+            end
+
+            assign d_bus_err = sdram_wb_unsupported | psram_wb_unsupported |
+                (d_req & (dec_sdram_cached |
+                          ~(d_is_mmio | d_is_ram | d_is_sdram | d_is_psram)));
+        end else begin : g_legacy_window
+            assign d_is_mmio         = dADR[29] & ~dADR[28];
+            assign d_is_ram          = ~dADR[29] | dADR[28];
+            assign d_is_sdram        = 1'b0;
+            assign d_is_sdram_cached = 1'b0;
+            assign d_is_psram        = 1'b0;
+            assign psram_wb_dat      = 32'd0;
+            assign psram_wb_ack      = 1'b0;
+            assign psram_wb_unsupported = 1'b0;
+            assign dctl_req = 1'b0;   assign dctl_we = 1'b0;
+            assign dctl_word = 23'd0; assign dctl_wdata = 32'd0;
+            assign dctl_be = 4'd0;
+            assign d_sdram_addr      = 25'd0;
+            assign sdram_wb_req      = 1'b0;
+            assign sdram_wb_write    = 1'b0;
+            assign sdram_wb_addr     = 25'd0;
+            assign sdram_wb_wdata    = 32'd0;
+            assign sdram_wb_byte_en  = 4'd0;
+            assign sdram_wb_ack      = 1'b0;
+            assign sdram_wb_cpu_rdata= 32'd0;
+            assign sdram_wb_unsupported = 1'b0;
+            assign sdram_wb_debug_cpu_req = 1'b0;
+            assign sdram_wb_debug_we      = 1'b0;
+            assign sdram_wb_debug_wdata   = 32'd0;
+            assign sdram_wb_debug_cti     = 3'd0;
+            assign sdram_wb_debug_sel     = 4'd0;
+            assign sdram_wb_debug_ack     = 1'b0;
+            assign sdram_wb_debug_unsupported = 1'b0;
+            assign sdram_wb_debug_adapter_rdata = 32'd0;
+            assign sdram_wb_debug_cpu_ack = 1'b0;
+            assign sdram_wb_debug_cpu_rdata = 32'd0;
+            assign d_bus_err         = 1'b0;
+        end
+    endgenerate
+
+    // Priority: loader > dBus > iBus. The loader must win because the APF
+    // bridge cannot be back-pressured -- a dropped byte would silently corrupt
+    // the firmware image or a streamed buffer. MMIO needs no RAM port, so a
+    // dBus MMIO access proceeds even while the loader holds the RAM.
+    wire        ld_req     = ld_wr;
+    wire        d_mmio_req = d_req & d_is_mmio;
+    wire        d_ram_req  = d_req & d_is_ram;
+    wire        serve_d    = d_ram_req & ~ld_req;
+    wire        serve_i    = i_req & ~i_is_psram & ~d_ram_req & ~ld_req;      // BRAM fetches only
+
+    // ONE always block, ONE address -> Quartus infers M10K cleanly.
+    //
+    // Originally the loader had its own write port in a second always block.
+    // That is a true-dual-port pattern, and because it did not match Quartus's
+    // inference template the whole 256 KB fell back to registers:
+    //   Error (276003): Cannot convert all sets of registers into RAM megafunctions
+    // Arbitrating the loader onto the single port avoids the issue entirely and
+    // costs nothing real: during boot the CPU is held in reset, and while
+    // streaming the bridge delivers only a few bytes per microsecond, so the
+    // occasional stolen cycle is invisible next to a 50 MHz CPU.
+    wire [RAM_AW-1:0] mem_addr = ld_req  ? ld_addr[RAM_AW+1:2]
+                               : serve_d ? dADR[RAM_AW-1:0]
+                                         : iADR[RAM_AW-1:0];
+    wire              mem_we    = ld_req | (serve_d & dWE);
+    wire [3:0]        mem_be    = ld_req ? (4'b0001 << ld_addr[1:0]) : dSEL;
+    wire [31:0]       mem_wdata = ld_req ? {4{ld_data}} : dDAT_MOSI;
+
+`ifdef TAU_RAM_PROBE_A
+    wire [31:0] a_rdata;   // driven structurally by u_ram_probe_a, EXPERIMENT ONLY
+`elsif TAU_RAM_192K_INLINE
+    // See the array declarations above (RS_WORDS_A/RS_AW_A/RS_WORDS_B/RS_AW_B)
+    // for why this addressing works without a subtractor. Plain runtime
+    // if/else, no generate -- both suspects removed at once, see the comment
+    // at this branch's array declarations.
+    reg [31:0] a_rdata;
+    wire       rs_sel_b = mem_addr[RS_AW_A];
+
+    always @(posedge clk) begin
+        if (mem_we & mem_be[0]) begin
+            if (rs_sel_b) rb0[mem_addr[RS_AW_B-1:0]] <= mem_wdata[7:0];
+            else          ra0[mem_addr[RS_AW_A-1:0]] <= mem_wdata[7:0];
+        end
+        if (mem_we & mem_be[1]) begin
+            if (rs_sel_b) rb1[mem_addr[RS_AW_B-1:0]] <= mem_wdata[15:8];
+            else          ra1[mem_addr[RS_AW_A-1:0]] <= mem_wdata[15:8];
+        end
+        if (mem_we & mem_be[2]) begin
+            if (rs_sel_b) rb2[mem_addr[RS_AW_B-1:0]] <= mem_wdata[23:16];
+            else          ra2[mem_addr[RS_AW_A-1:0]] <= mem_wdata[23:16];
+        end
+        if (mem_we & mem_be[3]) begin
+            if (rs_sel_b) rb3[mem_addr[RS_AW_B-1:0]] <= mem_wdata[31:24];
+            else          ra3[mem_addr[RS_AW_A-1:0]] <= mem_wdata[31:24];
+        end
+        a_rdata <= rs_sel_b
+                 ? {rb3[mem_addr[RS_AW_B-1:0]], rb2[mem_addr[RS_AW_B-1:0]], rb1[mem_addr[RS_AW_B-1:0]], rb0[mem_addr[RS_AW_B-1:0]]}
+                 : {ra3[mem_addr[RS_AW_A-1:0]], ra2[mem_addr[RS_AW_A-1:0]], ra1[mem_addr[RS_AW_A-1:0]], ra0[mem_addr[RS_AW_A-1:0]]};
+    end
+`elsif TAU_RAM_192K
+    // a_rdata is driven structurally by u_main_ram (declared above, alongside
+    // the array declarations it replaces) -- must be a net, not a reg, here.
+    wire [31:0] a_rdata;
+`else
+    reg  [31:0] a_rdata;
+
+    always @(posedge clk) begin
+        if (mem_we & mem_be[0]) ram0[mem_addr] <= mem_wdata[7:0];
+        if (mem_we & mem_be[1]) ram1[mem_addr] <= mem_wdata[15:8];
+        if (mem_we & mem_be[2]) ram2[mem_addr] <= mem_wdata[23:16];
+        if (mem_we & mem_be[3]) ram3[mem_addr] <= mem_wdata[31:24];
+        a_rdata <= {ram3[mem_addr], ram2[mem_addr], ram1[mem_addr], ram0[mem_addr]};
+    end
+`endif
+
+    // ------------------------------------------------------------- cycles ---
+    reg [31:0] cycle_ctr;
+    always @(posedge clk) cycle_ctr <= rst ? 32'd0 : cycle_ctr + 32'd1;
+
+    // ----------------------------------------------------- I2S CDC jitter ---
+    // B-467 (Cymo 44.1 kHz investigation, I2S_DIAG_ENABLE): a single bit crossing clk_mclk -> clk is
+    // safe with a plain synchroniser (tau_cdc_sync1 -- see its own header for why this differs from a
+    // multi-bit counter's Gray-code requirement); everything downstream of that -- edge detect, interval
+    // measurement, min/max/sum -- runs entirely in THIS domain against the free-running cycle_ctr above,
+    // so there is no further CDC risk anywhere in this diagnostic.
+    wire i2s_diag_toggle_s;
+    tau_cdc_sync1 #(.STAGES(3)) u_i2s_diag_sync (
+        .clk_dst(clk), .d_src(i2s_diag_toggle), .q_dst(i2s_diag_toggle_s)
+    );
+    reg        i2s_diag_prev;
+    reg        i2s_diag_first;
+    reg [31:0] i2s_diag_last_cyc;
+    reg [15:0] i2s_diag_min, i2s_diag_max;
+    reg [31:0] i2s_diag_cnt_r;
+    // The sum of the measured intervals is 48 bits wide (it was 32): an interval is at most 0xFFFF (saturated) but at a 48 kHz DAC word rate it is about 1,389 clk_sys cycles
+    // (66.667 MHz), so the sum grows by about 66.7 million a second and a 32-bit sum wrapped every 2^32 / 66.67e6 = 64.4 s -- the "average since reset" was wrong after the first minute
+    // (a delta between two reads was only right if they straddled at most one wrap). 48 bits at the same rate last 2^48 / 66.67e6 = 4.2 million s (48 days); even at the saturated
+    // maximum, 0xFFFF per event and one event per clk_sys cycle, they last 2^48 / 65,535 = 4.3e9 events. The low 32 bits are unchanged (R_I2S_DIAG_SUM); the high 16 bits are read at R_I2S_DIAG_ST[31:16].
+    reg [47:0] i2s_diag_sum_r;
+    wire [31:0] i2s_diag_interval_w = cycle_ctr - i2s_diag_last_cyc;
+    wire [15:0] i2s_diag_interval   = (i2s_diag_interval_w > 32'hFFFF) ? 16'hFFFF : i2s_diag_interval_w[15:0];
+    always @(posedge clk) begin
+        if (rst) begin
+            i2s_diag_prev     <= 1'b0;
+            i2s_diag_first    <= 1'b1;
+            i2s_diag_min      <= 16'hFFFF;
+            i2s_diag_max      <= 16'h0000;
+            i2s_diag_cnt_r    <= 32'd0;
+            i2s_diag_sum_r    <= 48'd0;
+        end else begin
+            i2s_diag_prev <= i2s_diag_toggle_s;
+            if (i2s_diag_toggle_s != i2s_diag_prev) begin
+                if (!i2s_diag_first) begin
+                    i2s_diag_cnt_r <= i2s_diag_cnt_r + 1'b1;
+                    i2s_diag_sum_r <= i2s_diag_sum_r + {32'd0, i2s_diag_interval};
+                    if (i2s_diag_interval < i2s_diag_min) i2s_diag_min <= i2s_diag_interval;
+                    if (i2s_diag_interval > i2s_diag_max) i2s_diag_max <= i2s_diag_interval;
+                end
+                i2s_diag_first    <= 1'b0;
+                i2s_diag_last_cyc <= cycle_ctr;
+            end
+        end
+    end
+
+    // -------------------------------------------------------------- input ---
+    // Two-stage resync from clk_74a. No bit-coherency requirement: these are
+    // human button presses, so a one-cycle skew between bits is meaningless.
+    reg [15:0] key_s0, key_s1;
+    reg        menu_s0, menu_s1;
+    always @(posedge clk) begin
+        key_s0  <= cont_key[15:0];  key_s1  <= key_s0;
+        menu_s0 <= in_menu;         menu_s1 <= menu_s0;
+    end
+
+    // ------------------------------------------------ dataslot_update CDC ---
+    // Same toggle-crossing idiom as tgt_cmd.v: dataslot_update is a one-cycle
+    // pulse on clk_74a, which a plain 2FF synchronizer would drop if it doesn't
+    // line up with a clk_sys edge. Convert to a toggle (glitch-proof across any
+    // clock ratio), latch the ID in the SAME clk_74a cycle so it is stable
+    // by the time clk_sys detects the toggle edge, then compare against our
+    // MP3 slot ID (2 -- must match data.json AND firmware's MP3_SLOT_ID).
+    localparam [15:0] MP3_SLOT_ID = 16'd2;
+    // Playlist slot ID (3 -- must match data.json AND firmware's PL_SLOT_ID).
+    localparam [15:0] PL_SLOT_ID  = 16'd3;
+
+    reg        upd_tgl_74 = 1'b0;
+    reg [15:0] upd_id_74;
+    reg [31:0] upd_size_74;
+    always @(posedge clk_74a) begin
+        if (dataslot_update) begin
+            upd_tgl_74  <= ~upd_tgl_74;
+            upd_id_74   <= dataslot_update_id;
+            upd_size_74 <= dataslot_update_size;
+        end
+    end
+
+    reg [2:0] upd_sync = 3'b0;
+    always @(posedge clk) upd_sync <= {upd_sync[1:0], upd_tgl_74};
+    wire mp3_reload_edge = (upd_sync[2] ^ upd_sync[1]) && (upd_id_74 == MP3_SLOT_ID);
+
+    // The playlist slot raises 008A exactly as the MP3 slot does, but the edge
+    // above is gated on the MP3 id -- so without this a "Load Playlist" pick is
+    // invisible to firmware and silently does nothing.
+    //
+    // This comment used to add that polling slot 3 was NOT an option, because
+    // touching another slot makes APF drop its fragment cache for the MP3 slot
+    // and every refill then re-walks the FAT cluster chain. That is true of a
+    // slot READ (0180) and was measured. It is NOT true of a 0190 getfile:
+    // firmware polls slot 3's identity every 3 s while streaming and no tic is
+    // audible (measured 2026-08-13). A metadata query does not walk the chain.
+    // The distinction matters -- the poll is the only recovery route that
+    // depends on neither this notification nor a menu edge.
+    wire pl_reload_edge = (upd_sync[2] ^ upd_sync[1]) && (upd_id_74 == PL_SLOT_ID);
+
+    reg mp3_reloaded, pl_reloaded;
+    // Acked PER BIT rather than by any write, so clearing one flag cannot drop
+    // the other -- a track change and a playlist change can land together.
+    wire wr_reload  = d_req & d_is_mmio & dWE & (mmio_reg == R_RELOAD);
+    wire ack_reload = wr_reload & dDAT_MOSI[0];
+    wire ack_pl     = wr_reload & dDAT_MOSI[4];
+    always @(posedge clk) begin
+        if (rst)                  mp3_reloaded <= 1'b0;
+        else if (mp3_reload_edge) mp3_reloaded <= 1'b1;
+        else if (ack_reload)      mp3_reloaded <= 1'b0;
+
+        if (rst)                 pl_reloaded <= 1'b0;
+        else if (pl_reload_edge) pl_reloaded <= 1'b1;
+        else if (ack_pl)         pl_reloaded <= 1'b0;
+    end
+
+    // dataslot_allcomplete is a LEVEL in clk_74a (set by 008F, cleared by the
+    // 0080/0082 request handlers), so a plain synchroniser is enough -- no
+    // toggle needed, unlike the one-cycle dataslot_update pulse above.
+    //
+    // slot_ready deliberately keys off a RISING edge after the reload rather
+    // than requiring a preceding fall: the exact 008A/0080/008F ordering APF
+    // uses for a deferload reload is not documented anywhere we have, so this
+    // works whichever way round they arrive. If APF never re-sequences
+    // allcomplete at all, slot_ready simply stays low and firmware falls
+    // through on its timeout -- i.e. no worse than the current behaviour.
+    // slot_fell is pure observability, so one hardware test can tell us which
+    // of those actually happens instead of another round of inference.
+    reg [2:0] ac_sync = 3'b0;
+    always @(posedge clk) ac_sync <= {ac_sync[1:0], dataslot_allcomplete};
+    wire ac_rise = ac_sync[1] & ~ac_sync[2];
+    wire ac_fall = ~ac_sync[1] & ac_sync[2];
+
+    reg slot_ready, slot_fell;
+    reg [31:0] slot_size;
+    always @(posedge clk) begin
+        if (rst) begin
+            slot_ready <= 1'b0; slot_fell <= 1'b0; slot_size <= 32'd0;
+        end else if (mp3_reload_edge) begin
+            slot_ready <= 1'b0; slot_fell <= 1'b0;
+            slot_size  <= upd_size_74;
+        end else begin
+            if (ac_fall) slot_fell  <= 1'b1;
+            if (ac_rise) slot_ready <= 1'b1;
+        end
+    end
+
+    // ------------------------------------------------ wall clock (0x0090) ---
+    // The host's real-time-clock command, latched from clk_74a by tau_rtc_cdc (a stable-payload handshake, see its header). Not reset by `rst`: the host may send it while the CPU is still held in reset.
+    wire        rtc_valid_s;
+    wire [31:0] rtc_epoch_s, rtc_date_s, rtc_time_s;
+    generate
+        if (RTC_ENABLE != 0) begin : g_rtc
+            tau_rtc_cdc #(.BUG(BUG_RTC)) u_rtc (
+                .clk_74a(clk_74a), .rtc_valid(rtc_valid), .rtc_epoch_seconds(rtc_epoch_seconds), .rtc_date_bcd(rtc_date_bcd), .rtc_time_bcd(rtc_time_bcd),
+                .clk_sys(clk), .valid_sys(rtc_valid_s), .epoch_sys(rtc_epoch_s), .date_sys(rtc_date_s), .time_sys(rtc_time_s));
+        end else begin : g_nortc
+            assign rtc_valid_s = 1'b0; assign rtc_epoch_s = 32'd0; assign rtc_date_s = 32'd0; assign rtc_time_s = 32'd0;
+        end
+    endgenerate
+
+    // --------------------------------------------------------------- MMIO ---
+    localparam [7:0] R_CONSOLE = 8'h00, R_EXIT    = 8'h04, R_AUDIO   = 8'h08,
+                     R_CYCLES  = 8'h0C, R_STAT0   = 8'h10, R_STAT1   = 8'h14,
+                     R_STAT2   = 8'h18, R_STAT3   = 8'h1C, R_TGT_ID  = 8'h20,
+                     R_TGT_OFF = 8'h24, R_TGT_ADR = 8'h28, R_TGT_LEN = 8'h2C,
+                     R_TGT_GO  = 8'h30, R_PCM_ST  = 8'h34, R_PCM_RATE= 8'h38,
+                     R_INPUT   = 8'h3C, R_VERSION = 8'h40, R_RELOAD  = 8'h44,
+                     R_FB_ADDR = 8'h48, R_FB_SIZE = 8'h4C, R_FB_COLOR= 8'h50,
+                     R_FB_GO   = 8'h54, R_FB_STALL= 8'h58, R_SLOT_SZ = 8'h5C,
+                     R_DT_ADDR = 8'h60, R_DT_DATA = 8'h64,
+                     R_SET_IDX = 8'h6C,
+                     R_SET_DAT = 8'h70, R_SDR_ADDR= 8'h74,
+                     R_SDR_DATA= 8'h78, R_SDR_CTRL= 8'h7C,
+                     R_SDR_RDATA=8'h80, R_SDR_STATUS=8'h84;
+    // Phase F section 9: sticky blit-engine state (source/dest base+stride, B2's
+    // colour key, B5's blend mode, B9's palette re-index), never entering the
+    // per-command FIFO. R_BLT_IDX selects a field (0=SRC_BASE, 1=SRC_STRIDE,
+    // 2=DST_BASE, 3=DST_STRIDE, 4=KEY: bit16=enable, bits[15:0]=RGB565 colour;
+    // 5=BLEND: bit0=enable, bits[3:1]=mode -- 0=DSP 0-255 alpha, 1=PSX B/2+F/2,
+    // 2=PSX B+F clamp, 3=PSX B-F clamp, 4=PSX B+F/4 clamp -- bits[15:8]=alpha
+    // level, DSP mode only; 6=REINDEX: bits[7:0]=offset added to OP_CBLIT's
+    // palette index, 0=no-op); each R_BLT_DATA write stores it and auto-
+    // increments the index, so a burst of 7 writes loads the whole state with
+    // one index write. Inert (no logic reads these) unless TAU_BLIT is built.
+    localparam [7:0] R_BLT_IDX = 8'hC0, R_BLT_DATA = 8'hC4;
+    // Phase F B8 ("B8 detailed design"): CLUT load. R_CLUT_IDX selects one of
+    // 256 entries; each R_CLUT_DATA write stores the RGB565 value there and
+    // auto-increments the index (wraps 255->0), so a burst of 256 DATA writes
+    // loads the whole palette after one index write -- same convenience as
+    // R_BLT_IDX/R_BLT_DATA's own auto-increment. Inert (no logic reads it)
+    // unless TAU_BLIT is built.
+    localparam [7:0] R_CLUT_IDX = 8'hC8, R_CLUT_DATA = 8'hCC;
+    // B-186 (docs/AUDIT_TRAIL.md): ISSP proved the draw engine is NOT the Blit Test hang --
+    // dispatch state cycled normally through idle/scanline-fill the whole time the CPU was
+    // stuck. This register is the CPU-side equivalent of that same idea: firmware writes a
+    // small checkpoint number here (fw/suite.inc's bt_crumb(), same call sites as its existing
+    // SDRAM-word crumb, now writing both), and TAU_ISSP wires it out to a second, independent
+    // probe instance -- readable live over JTAG regardless of whether the CPU itself is stuck,
+    // the same property that made the BLIT probe useful. Plain write-only register, no side
+    // effect if written on a bitstream without TAU_ISSP (same "inert unless built" convention
+    // every Phase F register already uses). Never in the release or the normal Diagnostic
+    // Build -- gated behind TAU_ISSP exactly like u_issp_blit in mp3_fb.sv.
+    localparam [7:0] R_DBG_MARK = 8'hD0;
+    // B11 (section 5): corner-cut LUT load. R_RC_IDX selects one of 16 entries; each R_RC_DATA
+    // write stores the 5-bit cut(dy) value there and auto-increments, same convention as
+    // R_CLUT_IDX/R_CLUT_DATA. Inert (no logic reads it) unless TAU_BLIT is built.
+    localparam [7:0] R_RC_IDX = 8'hD4, R_RC_DATA = 8'hD8;
+    // FLAC LPC unit (B-368, docs/research/FLAC_LPC_KERNEL_DESIGN.md section 5): R_LPC_CFG loads
+    // order/shift once per subframe; R_LPC_COEF_IDX/DATA and R_LPC_WARM_IDX/DATA load `order`
+    // coefficients and `order` warm-up samples via sticky auto-incrementing index+data pairs (same
+    // convention as R_CLUT_IDX/DATA, R_RC_IDX/DATA), index 0 = the tap paired with the MOST RECENT
+    // sample (fw/flac.c's own coef[0] convention). R_LPC_RESIDUAL starts one reconstruction; poll
+    // R_LPC_STATUS for done, then read R_LPC_SAMPLE (the read itself is the ack that lets the next
+    // residual be issued). Inert (reads 0, sample_rd tied off) unless LPC_ENABLE is built.
+    localparam [8:0] R_LPC_CFG      = 9'h120, R_LPC_COEF_IDX = 9'h124, R_LPC_COEF_DATA = 9'h128,
+                     R_LPC_WARM_IDX = 9'h12C, R_LPC_WARM_DATA = 9'h130, R_LPC_RESIDUAL  = 9'h134,
+                     R_LPC_SAMPLE   = 9'h138, R_LPC_STATUS    = 9'h13C;
+    // B-467 (Cymo 44.1 kHz investigation): I2S clk_audio->clk_mclk CDC jitter diagnostic. Free-running,
+    // never cleared (same convention as R_SDR_BUSY/R_CYCLES) -- firmware samples via delta or reads the
+    // worst-ever min/max directly. Reads 0/present-bit-0 unless I2S_DIAG_ENABLE is built.
+    localparam [8:0] R_I2S_DIAG_MINMAX = 9'h140, R_I2S_DIAG_CNT = 9'h144,
+                     R_I2S_DIAG_SUM    = 9'h148, R_I2S_DIAG_ST  = 9'h14C;
+    // Cymo resampler (B-471/B-476, docs/features/CYMO_AUDIO_ENGINE.md section 15): R_CYMO_CTRL bit 0 = clear
+    // (pulse), bit 1 = start (pulse, ignored while busy), bit 2 = LIVE_ENABLE -- STICKY, not a pulse: once
+    // set, the EQ's input switches from pcm_fifo's raw fifo_l/fifo_r to this unit's own out_l/out_r and
+    // push/start run fully automatically from hardware (pcm_sample_tick / the EQ's own 48kHz tick) with
+    // zero further CPU involvement, the same probe-then-adopt convention as POLY_FW/LPC_FW/BLIT_READY() --
+    // firmware sets this only after confirming bit 0 of R_CYMO_STATUS via a self-test, defaults to 0
+    // (byte-identical-to-today audio path) on every reset. R_CYMO_PUSH writes {push_r,push_l} and triggers
+    // one push_we pulse (for firmware self-test only; the live audio path never uses this register) --
+    // same convention the module's own header documents; R_CYMO_OUT reads {out_r,out_l} and the READ
+    // ITSELF acks `done` (same read-is-ack convention as R_LPC_SAMPLE above -- see tau_cymo_resamp.sv's own
+    // out_rd comment for why a bare one-cycle pulse would be unsafe for a firmware polling loop). Inert
+    // (reads 0, out_rd tied off, EQ unaffected) unless CYMO_RESAMP_ENABLE is built.
+    localparam [8:0] R_CYMO_CTRL = 9'h150, R_CYMO_PUSH = 9'h154, R_CYMO_OUT = 9'h158, R_CYMO_STATUS = 9'h15C, R_CYMO_DIAG = 9'h160, R_AUDIO_CFG = 9'h164;
+    // B-615 hardware gain stage (docs/features/CYMO_GAIN_STAGE_DESIGN.md). GAIN_CTRL write: bit 0 ENABLE (STICKY, reset 0), bit 1 SNAP pulse (cur = target), bit 2 FADE_NOW pulse,
+    // bits [5:4] fade length 256 << n samples (STICKY, reset 3 = 2048); read: bit 31 present, bit 0 enable, bit 2 fading, [5:4] shift. TARGET (Q15, 32768 = unity, STICKY, reset 32768),
+    // CUR (read: the gain in force), STEP (max change per sample, STICKY, reset 149). With ENABLE 0 the audio path is exactly what it was before this existed.
+    localparam [8:0] R_GAIN_CTRL = 9'h168, R_GAIN_TARGET = 9'h16C, R_GAIN_CUR = 9'h170, R_GAIN_STEP = 9'h174;
+    // B-639 Halcyon engine (docs/features/CYMO_HALCYON_SPEC.md). HAL_CTRL write: bit 0 ENABLE (STICKY, reset 0: audio comes from the Halcyon engine instead of the unequalised path), bit 1 BYPASS
+    // (STICKY), bit 2 COMMIT pulse (swap the shadow bank in at the next sample boundary, latching NACT), bit 3 CLEAR pulse (clear the filter state), bits [13:8] NACT (STICKY; the active
+    // stage count, sampled by COMMIT). IDX (STICKY): coefficient index, auto-increments on every DATA write. DATA write: bits [23:0] signed Q2.22 coefficient into the SHADOW bank at IDX
+    // (index NST*5 = 85 is the preamp). Read HAL_CTRL: bit 31 present, bit 2 busy, [13:8] nact, bit 1 bypass, bit 0 enable. Inert (reads 0) unless HALCYON_ENABLE.
+    localparam [8:0] R_HAL_CTRL = 9'h178, R_HAL_IDX = 9'h17C, R_HAL_DATA = 9'h180;
+    // B-741 PCM ring reader. BASE (RW): PSRAM word address of ring[0] (the CPU window is 0xA400_0000 + 4*word); SIZE (RW): pairs in the ring; WPTR (RW): the CPU's write index in [0, SIZE) (write it after the
+    // data is stored); RIDX (R): the reader's index; CNT (R): pairs pushed since reset; CTRL: write bit 0 ENABLE (STICKY, reset 0: the CPU's R_AUDIO write is then ignored and the FIFO is fed from the ring),
+    // read bit 31 present, bit 3 hold, bit 2 reading, bit 1 empty, bit 0 enable (write bit 1 = HOLD, sticky: no new read starts, the unread pairs are kept: the player's pause). A write to R_PCM_ST (the firmware's pcm_flush) also drops the unread pairs (RIDX = WPTR). Inert (reads 0) unless PCM_RING_ENABLE.
+    // Writable font memory (FONT_RAM_ENABLE). CTRL: write bit 0 = restart the write index at 0; read [31] present, [27:16] loads completed (counts wraps of the write index through the last word), [15:0] words.
+    // IDX (write index, sticky) and DATA (write a word at IDX, then IDX+1; after the last word IDX wraps to 0 and the load counter steps). Same convention as R_CLUT_IDX/DATA and R_HAL_IDX/DATA.
+    localparam [8:0] R_FONT_CTRL = 9'h1A0, R_FONT_IDX = 9'h1A4, R_FONT_DATA = 9'h1A8;
+    localparam [12:0] FONT_LAST = 13'd6111;
+    reg [12:0] font_idx = 13'd0; reg [11:0] font_gen = 12'd0;
+    localparam [8:0] R_RING_BASE = 9'h184, R_RING_SIZE = 9'h188, R_RING_WPTR = 9'h18C, R_RING_RIDX = 9'h190, R_RING_CTRL = 9'h194, R_RING_CNT = 9'h198, R_UNDER = 9'h19C;
+    reg         ring_en = 1'b0, ring_hold = 1'b0;
+    reg  [22:0] ring_base = 23'd0, ring_size = 23'd2, ring_wptr = 23'd0;
+    wire        ring_push, rctl_req, rctl_we, rctl_busy;
+    wire [31:0] ring_pdata, rctl_wdata, ring_cnt;
+    wire [22:0] rctl_word, ring_ridx;
+    wire [3:0]  rctl_be;
+    wire        rctl_done;
+    reg        hal_en = 1'b0, hal_bypass = 1'b0, hal_commit = 1'b0, hal_clr = 1'b0, hal_we = 1'b0;
+    reg  [5:0] hal_nact = 6'd0;
+    reg  [7:0] hal_idx = 8'd0, hal_widx = 8'd0;   // hal_widx: the index of the word being written (hal_idx has already stepped on by the time hal_we is seen)
+    reg signed [23:0] hal_data = 24'sd0;
+    wire       hal_busy;
+    reg        gain_en = 1'b0;
+    reg [15:0] gain_target = 16'd32768, gain_ramp = 16'd149;
+    reg [1:0]  gain_shift = 2'd3;
+    reg        gain_snap = 1'b0, gain_fade_we = 1'b0;
+    wire [15:0] gain_cur;
+    wire        gain_fading;
+    reg audio16_reg = 1'b0;   // B-602: STICKY, reset to 0 (15-bit mapping) in the if(rst) block
+    assign audio_full16 = (AUDIO16_ENABLE != 0) ? audio16_reg : 1'b0;
+
+    // Bitstream/firmware interlock. Firmware compares this against its own
+    // expected value and refuses to run on a mismatch.
+    //
+    // Rationale: the .rom loads from SD in seconds while the bitstream needs a
+    // ~6 minute Quartus compile, so it is very easy to flash new firmware onto
+    // stale RTL. That has already happened three times here, each time looking
+    // like a logic bug (dead peripheral, no audio, unresponsive buttons) rather
+    // than what it was. BUMP THIS whenever the MMIO map changes.
+`ifdef TAU_CLK66
+    // B-338: clk_sys 60 -> 66.667 MHz is also a different contract (every cycle-counted deadline in firmware runs 11.1% faster); a firmware
+    // linked for 60 MHz (CLK_HZ=60000000) must be refused here for the same reason RAM_192K refuses a 256 KB firmware.
+ `ifdef TAU_RAM_192K
+    // Combined bitstream (B-347): both contracts apply at once (64 KB less RAM AND 11.1% faster cycle-counted deadlines). This branch must be
+    // checked before the standalone `elsif TAU_RAM_192K` and the baseline `else` below so a build with BOTH macros defined lands here, not on
+    // rev 24 or rev 23 -- firmware built assuming only one of the two contracts must be refused by a combined bitstream, and vice versa
+    // (enforced in fw/player.c's own interlock, which checks the combined case first and strictest).
+ `ifdef TAU_FONT_RAM
+    // The writable Latin-1 font memory changes the glyph atlas (Space Grotesk, 191 glyphs) and the per-glyph advances the firmware must use: firmware written for the ROM font would draw
+    // overlapping or gapped text on it, so it is a different contract and a firmware that does not know it must stop at the interlock (CORE_VERSION, not a runtime probe).
+    localparam [31:0] CORE_VERSION = 32'h4D50331B;   // "MP3" + rev 27 (rev 26 + the writable Latin-1 font memory)
+ `else
+    localparam [31:0] CORE_VERSION = 32'h4D50331A;   // "MP3" + rev 26 (192 KB main RAM + clk_sys 66.667 MHz, combined)
+ `endif
+ `else
+    localparam [31:0] CORE_VERSION = 32'h4D503319;   // "MP3" + rev 25 (clk_sys 66.667 MHz)
+ `endif
+`elsif TAU_RAM_192K
+    // B-333: the 192 KB RAM-shrink bitstream is a different contract from the 256 KB one (64 KB less RAM). A firmware linked for 256 KB must
+    // refuse it at boot (the interlock in fw/player.c), because running on it would corrupt silently.
+    localparam [31:0] CORE_VERSION = 32'h4D503318;   // "MP3" + rev 24 (192 KB main RAM)
+`else
+    localparam [31:0] CORE_VERSION = 32'h4D503317;   // "MP3" + rev 23 (target data-slot flush)
+`endif
+
+    // MMIO is 128 word slots (512 bytes): bit 8 of the offset is new (B-287). Offsets 0x00-0xFF keep their meaning exactly, so nothing
+    // that already exists changes; new blocks take 0x100 upward. Every `8'hXX` compare below zero-extends against this 9-bit
+    // value, so it needs no edit. The two places that must know about bit 8 are the PSRAM probe's expansion window (its
+    // xm_reg is 8 bits: writes are gated below so a 0x1xx write can never alias into 0x0xx there) and xm_range (already
+    // bounded to 0x88-0xAC, which cannot match with bit 8 set). Before this the decode ignored dADR[6] entirely, so every
+    // register also answered at +0x100; nothing in the firmware used that.
+    wire [8:0] mmio_reg = {dADR[6:0], 2'b00};   // byte offset within the MMIO page
+
+    // Phase F section 9: sticky blit-engine state. Plain flops, no logic reads
+    // them unless BLIT_ENABLE -- see the port declarations above and the reset
+    // block below for the rest of this feature's tau_soc-side footprint.
+    reg  [2:0]  blt_idx = 3'd0;
+    reg         text_light_r = 1'b0;
+    assign text_light = text_light_r;
+    reg         dbuf_cpu_buf_r = 1'b0;
+    reg         dbuf_flip_req_tgl_r = 1'b0;
+    assign dbuf_cpu_buf      = dbuf_cpu_buf_r;
+    assign dbuf_flip_req_tgl = dbuf_flip_req_tgl_r;
+    reg  [24:0] blt_src_base_r = 25'd0, blt_dst_base_r = 25'd0;
+    reg  [9:0]  blt_src_stride_r = 10'd512, blt_dst_stride_r = 10'd512;
+    reg         blt_key_en_r = 1'b0;
+    reg  [15:0] blt_key_r = 16'd0;
+    reg         blt_blend_en_r = 1'b0;
+    reg  [2:0]  blt_blend_mode_r = 3'd0;
+    reg  [7:0]  blt_blend_alpha_r = 8'd0;
+    reg  [7:0]  blt_reindex_r = 8'd0;
+    assign blt_src_base   = (BLIT_ENABLE != 0) ? blt_src_base_r   : 25'd0;
+    assign blt_src_stride = (BLIT_ENABLE != 0) ? blt_src_stride_r : 10'd0;
+    assign blt_dst_base   = (BLIT_ENABLE != 0) ? blt_dst_base_r   : 25'd0;
+    assign blt_dst_stride = (BLIT_ENABLE != 0) ? blt_dst_stride_r : 10'd0;
+    assign blt_key_en     = (BLIT_ENABLE != 0) ? blt_key_en_r     : 1'b0;
+    assign blt_key        = (BLIT_ENABLE != 0) ? blt_key_r        : 16'd0;
+    assign blt_blend_en   = (BLIT_ENABLE != 0) ? blt_blend_en_r   : 1'b0;
+    assign blt_blend_mode = (BLIT_ENABLE != 0) ? blt_blend_mode_r : 3'd0;
+    assign blt_blend_alpha= (BLIT_ENABLE != 0) ? blt_blend_alpha_r: 8'd0;
+    assign blt_reindex    = (BLIT_ENABLE != 0) ? blt_reindex_r    : 8'd0;
+
+    // Phase F B8: CLUT load state. clut_wr_r is a one-cycle pulse (not a level),
+    // matching how mp3_fb.sv's own clut_wr port is meant to be driven -- a
+    // single dDAT_MOSI write should write exactly one CLUT entry, not hold the
+    // write-enable high across whatever the next unrelated MMIO write is.
+    // B-575: the index/pulse/address logic lives in tau_clut_wr (own testbench): the write address is registered WITH the pulse, so an
+    // entry lands in the slot the index named when it was written. The inline version let the address follow the index register, which had
+    // already advanced when the pulse was seen: every entry landed one slot too high (B-569).
+    reg         clut_idx_we = 1'b0, clut_data_we = 1'b0;
+    reg  [7:0]  clut_idx_d = 8'd0;
+    reg  [15:0] clut_data_d = 16'd0;
+    wire        clut_wr_m;
+    wire [7:0]  clut_waddr_m;
+    wire [15:0] clut_wdata_m;
+    tau_clut_wr u_clut_wr (.clk(clk), .idx_we(clut_idx_we), .idx_d(clut_idx_d), .data_we(clut_data_we), .data_d(clut_data_d),
+                           .wr(clut_wr_m), .waddr(clut_waddr_m), .wdata(clut_wdata_m));
+    assign clut_wr    = (BLIT_ENABLE != 0) ? clut_wr_m : 1'b0;
+    assign clut_waddr = clut_waddr_m;
+    assign clut_wdata = clut_wdata_m;
+
+    // B11: corner-cut LUT. 16 entries x 5 bits as one packed register (plain flops, no M10K --
+    // matches the table's own "0 M10K" budget); R_RC_IDX selects an entry, R_RC_DATA writes it
+    // and auto-increments, same convention as R_CLUT_IDX/DATA.
+    reg  [3:0]  rc_idx = 4'd0;
+    reg  [79:0] rc_cut_lut_r = 80'd0;
+    assign rc_cut_lut = (BLIT_ENABLE != 0) ? rc_cut_lut_r : 80'd0;
+
+    // B-186: plain CPU-write scratch register, read live by TAU_ISSP's second probe instance
+    // below. No enable gating (unlike clut_wr_r's pulse) -- this is meant to just SIT at its
+    // last-written value forever, which is exactly what makes it readable after a hang.
+    reg  [7:0]  dbg_mark = 8'd0;
+
+    // Expansion window 0x88..0xAC (see docs/MMIO_ALLOCATION.md).
+    assign xm_reg   = mmio_reg[7:0];
+    assign xm_wr    = d_req & d_is_mmio & dWE & ~mmio_reg[8];   // the expansion window is offsets 0x88-0xAC only
+    assign xm_wdata = dDAT_MOSI;
+    wire   xm_range = (mmio_reg >= 8'h88) && (mmio_reg <= 8'hAC);
+
+    // Diagnostic: clk_sys cycles spent with the draw FIFO full. Firmware
+    // busy-waits on exactly that condition, so this is the direct measurement
+    // of "is drawing actually stalling the CPU" -- the question the rev 6 UI
+    // could only answer by A/B-ing the whole feature on real hardware.
+    reg [31:0] fb_stall_ctr;
+    always @(posedge clk) begin
+        if (rst)             fb_stall_ctr <= 32'd0;
+        else if (fb_cmd_full) fb_stall_ctr <= fb_stall_ctr + 32'd1;
+    end
+
+    // ------------------------------------------------------------ PCM FIFO ---
+    wire        ring_on   = (PCM_RING_ENABLE != 0) && ring_en;     // B-741: the FIFO is fed by the ring reader, the CPU's R_AUDIO write is ignored
+    wire        pcm_push  = (d_req & d_is_mmio & dWE & (mmio_reg == R_AUDIO) & ~ring_on) | (ring_on & ring_push);
+    // Any write to R_PCM_ST (previously read-only) flushes the FIFO. Used on a
+    // track change or a seek, where samples already queued from BEFORE the
+    // jump must not keep draining out the DAC over the new position's audio.
+    wire        pcm_flush = d_req & d_is_mmio & dWE & (mmio_reg == R_PCM_ST);
+    reg  [31:0] pcm_rate;
+    wire        pcm_full, pcm_empty, pcm_underrun;
+    wire [11:0] pcm_level;
+    wire signed [15:0] fifo_l, fifo_r;
+    wire        pcm_sample_tick;
+    wire        pcm_adv;
+    wire [14:0] pcm_under_events;
+    wire [15:0] pcm_under_ticks;
+
+    pcm_fifo #(.AW(11)) u_pcm (
+        .clk      (clk),
+        .rst      (rst),
+        .flush    (pcm_flush),
+        .push     (pcm_push),
+        .pdata    (ring_on ? ring_pdata : dDAT_MOSI),
+        .full     (pcm_full),
+        .empty    (pcm_empty),
+        .level    (pcm_level),
+        .rate_inc (pcm_rate),
+        .out_l    (fifo_l),
+        .out_r    (fifo_r),
+        .underrun (pcm_underrun),
+        .sample_tick (pcm_sample_tick),
+        .adv      (pcm_adv),
+        .under_events (pcm_under_events),
+        .under_ticks  (pcm_under_ticks)
+    );
+
+    // ---- hardware gain stage (B-615), position B: right after the FIFO's output register. The hardware meters (spectrum bank, wave meter) keep tapping fifo_l/fifo_r, so they
+    // see the audio BEFORE the volume (volume-independent), as the software level meters already do. Everything downstream (Cymo feed, EQ) takes gain_l/gain_r.
+    wire signed [15:0] gst_l, gst_r;
+    wire signed [15:0] gain_l = (GAIN_ENABLE != 0 && gain_en) ? gst_l : fifo_l;
+    wire signed [15:0] gain_r = (GAIN_ENABLE != 0 && gain_en) ? gst_r : fifo_r;
+    generate
+        if (GAIN_ENABLE != 0) begin : g_gain
+            tau_gain_stage #(.BOOST(GAIN_BOOST)) u_gain (
+                .clk(clk), .rst(rst), .tick(pcm_sample_tick), .adv(pcm_adv), .flush(pcm_flush), .fade_now(gain_fade_we), .snap(gain_snap),
+                .target(gain_target), .ramp(gain_ramp), .shift(gain_shift), .in_l(fifo_l), .in_r(fifo_r),
+                .out_l(gst_l), .out_r(gst_r), .cur_o(gain_cur), .fading(gain_fading));
+        end else begin : g_nogain
+            assign gst_l = 16'sd0; assign gst_r = 16'sd0; assign gain_cur = 16'd0; assign gain_fading = 1'b0;
+        end
+    endgenerate
+
+
+    // ---- spectrum filter bank (B-263) --------------------------------------------------------------------------------
+    localparam [7:0] R_SPEC_IDX = 8'hDC, R_SPEC_DATA = 8'hE0, R_SPEC_ST = 8'hE4;
+    reg  [3:0]  spec_idx = 4'd0;
+    wire [19:0] spec_mean;
+    wire [15:0] spec_win;
+    generate
+        if (SPEC_ENABLE != 0) begin : g_spec
+            tau_spec_bank #(.WIN_LOG2(10)) u_spec (
+                .clk(clk), .rst(rst), .tick(pcm_sample_tick), .in_l(fifo_l), .in_r(fifo_r),
+                .rd_idx(spec_idx), .rd_mean(spec_mean), .win_ctr(spec_win));
+        end else begin : g_nospec
+            assign spec_mean = 20'd0;
+            assign spec_win  = 16'd0;
+        end
+    endgenerate
+
+    // ---- level / waveform meters (B-283) -----------------------------------------------------------------------------
+    localparam [7:0] R_WAVE_CTL = 8'hEC, R_WAVE_IDX = 8'hF0;
+    reg         wave_ctl_we = 1'b0, wave_idx_we = 1'b0;
+    reg  [11:0] wave_ctl_d  = 12'd0;
+    reg  [7:0]  wave_idx_d  = 8'd0;
+    wire [31:0] wave_rd, wave_status;
+    wire [15:0] wave_pk_l, wave_pk_r;
+    generate
+        if (WAVE_ENABLE != 0) begin : g_wave
+            tau_wave_meter #(.COLS(256), .TRIG_MAX(2048)) u_wave (
+                .clk(clk), .rst(rst), .tick(pcm_sample_tick), .in_l(fifo_l), .in_r(fifo_r),
+                .ctl_we(wave_ctl_we), .ctl_data(wave_ctl_d), .idx_we(wave_idx_we), .idx_data(wave_idx_d),
+                .rd_data(wave_rd), .pk_l(wave_pk_l), .pk_r(wave_pk_r), .status(wave_status));
+        end else begin : g_nowave
+            assign wave_rd = 32'd0; assign wave_pk_l = 16'd0; assign wave_pk_r = 16'd0; assign wave_status = 32'd0;
+        end
+    endgenerate
+
+    // ---- audio statistics for the meters (tau_audio_stats.sv): sums of L*L, R*R, L*R over the window since the last latch --------------------------
+    // 0x1AC STATS_CTL W: bit 0 latch + new window, bit 1 clear. 0x1B0 STATS_IDX W: read-out word 0..7. 0x1B4 STATS_DATA R (word 0 = status, 'ST' signature in 31:16, 0 when not built).
+    localparam [8:0] R_GFX_FENCE = 9'h1B8, R_GFX_STATUS = 9'h1BC, R_GFX_COUNTS = 9'h1C0;   // Talos 2 T3 (read only)
+    localparam [8:0] R_STATS_CTL = 9'h1AC, R_STATS_IDX = 9'h1B0, R_STATS_DATA = 9'h1B4;
+    localparam [8:0] R_RTC_ST = 9'h1C4, R_RTC_EPOCH = 9'h1C8, R_RTC_DATE = 9'h1CC, R_RTC_TIME = 9'h1D0;   // wall clock (read only)
+    localparam [8:0] R_SDA_SEL = 9'h1D4, R_SDA_VAL = 9'h1D8;
+    localparam [8:0] R_WDOG_ARM = 9'h1DC, R_WDOG_ST = 9'h1E0, R_WDOG_ACK = 9'h1E4, R_WDOG_CNT = 9'h1E8;   // pack watchdog (ARM write-only, ST and CNT read-only, ACK write-only)                                          // per-port SDRAM statistics window
+    reg         stats_ctl_we = 1'b0, stats_idx_we = 1'b0;
+    reg  [1:0]  stats_ctl_d  = 2'd0;
+    reg  [2:0]  stats_idx_d  = 3'd0;
+    wire [31:0] stats_rd, stats_status;
+    generate
+        if (STATS_ENABLE != 0) begin : g_stats
+            tau_audio_stats u_stats (
+                .clk(clk), .rst(rst), .tick(pcm_sample_tick), .in_l(fifo_l), .in_r(fifo_r),
+                .ctl_we(stats_ctl_we), .ctl_data(stats_ctl_d), .idx_we(stats_idx_we), .idx_data(stats_idx_d),
+                .rd_data(stats_rd), .status(stats_status));
+        end else begin : g_nostats
+            assign stats_rd = 32'd0; assign stats_status = 32'd0;
+        end
+    endgenerate
+
+    // ---- MP3 synthesis window (B-292) ------------------------------------------------------------------------------------
+    // 0x100 POLY_CTL W: bit 0 = clear the history (1,024 clocks, busy), bit 1 = go. 0x104 POLY_PUSH W: one FDCT32 output word (64 per slot: channel 0's
+    // 32 in push order, then channel 1's). 0x108 POLY_IDX W: PCM word 0..31 to present. 0x10C POLY_OUT R: {R sample, L sample}.
+    // 0x110 POLY_ST R: bit 0 = built in, bit 1 = busy, bits 31:16 = slots computed.
+    reg         poly_clear = 1'b0, poly_go = 1'b0, poly_push_we = 1'b0, poly_idx_we = 1'b0;
+    reg  [31:0] poly_push_d = 32'd0;
+    reg  [4:0]  poly_idx_d  = 5'd0;
+    wire        poly_busy;
+    wire [31:0] poly_rd;
+    wire [15:0] poly_slots;
+    generate
+        if (POLY_ENABLE != 0) begin : g_poly
+            tau_mp3_poly u_poly (
+                .clk(clk), .rst(rst), .clear(poly_clear), .push_we(poly_push_we), .push_data(poly_push_d), .go(poly_go), .busy(poly_busy),
+                .out_idx_we(poly_idx_we), .out_idx(poly_idx_d), .rd_data(poly_rd), .slots_done(poly_slots));
+        end else begin : g_nopoly
+            assign poly_busy = 1'b0; assign poly_rd = 32'd0; assign poly_slots = 16'd0;
+        end
+    endgenerate
+
+    // ---- FLAC LPC reconstruction (B-368) -----------------------------------------------------------------------------------
+    // Register contract: see the R_LPC_* localparam block above and docs/research/FLAC_LPC_KERNEL_DESIGN.md section 5.
+    // sample_rd is wired straight to the bus's own one-cycle read-request pulse (d_req, defined below) rather than latched --
+    // firmware's read of R_LPC_SAMPLE IS the acknowledgement that lets tau_flac_lpc.sv clear `done` and accept the next
+    // residual, so no separate write-to-ack step is needed (unlike R_PCM_ST's write-to-flush convention, this is a read-to-ack).
+    reg         lpc_cfg_we = 1'b0, lpc_coef_idx_we = 1'b0, lpc_coef_data_we = 1'b0;
+    reg         lpc_warm_idx_we = 1'b0, lpc_warm_data_we = 1'b0, lpc_residual_we = 1'b0;
+    reg  [5:0]  lpc_cfg_order_d = 6'd0;
+    reg  [4:0]  lpc_cfg_shift_d = 5'd0;
+    reg  [4:0]  lpc_coef_idx_d = 5'd0, lpc_warm_idx_d = 5'd0;
+    reg  signed [15:0] lpc_coef_data_d = 16'sd0;
+    reg  signed [31:0] lpc_warm_data_d = 32'sd0, lpc_residual_d = 32'sd0;
+    wire        lpc_busy, lpc_done;
+    wire signed [31:0] lpc_sample;
+    wire        lpc_sample_rd = d_req & d_is_mmio & ~dWE & (mmio_reg == R_LPC_SAMPLE);
+    generate
+        if (LPC_ENABLE != 0) begin : g_lpc
+            tau_flac_lpc u_lpc (
+                .clk(clk), .rst(rst),
+                .cfg_we(lpc_cfg_we), .cfg_order(lpc_cfg_order_d), .cfg_shift(lpc_cfg_shift_d),
+                .coef_idx_we(lpc_coef_idx_we), .coef_idx_d(lpc_coef_idx_d),
+                .coef_data_we(lpc_coef_data_we), .coef_data_d(lpc_coef_data_d),
+                .warm_idx_we(lpc_warm_idx_we), .warm_idx_d(lpc_warm_idx_d),
+                .warm_data_we(lpc_warm_data_we), .warm_data_d(lpc_warm_data_d),
+                .residual_we(lpc_residual_we), .residual_d(lpc_residual_d),
+                .sample_rd(lpc_sample_rd), .sample(lpc_sample), .busy(lpc_busy), .done(lpc_done));
+        end else begin : g_nolpc
+            assign lpc_busy = 1'b0; assign lpc_done = 1'b0; assign lpc_sample = 32'sd0;
+        end
+    endgenerate
+
+    // ---- Cymo resampler (B-471/B-476) ------------------------------------------------------------------------------------
+    // Register contract: see the R_CYMO_* localparam block above and tau_cymo_resamp.sv's own header. out_rd is wired
+    // straight to the bus's own one-cycle read-request pulse, same read-is-ack idiom as lpc_sample_rd just above.
+    //
+    // LIVE AUDIO PATH (B-476): `cymo_live_en` is a STICKY register (unlike every other cymo_* control signal here, which
+    // are self-clearing one-cycle pulses) -- firmware sets it once, after `CYMO_RESAMP_READY()`-style self-testing, to
+    // hand the real audio path to this unit; it defaults to 0 (same byte-identical-to-today behaviour as if this unit did
+    // not exist) until firmware explicitly opts in, the same probe-then-adopt convention as POLY_FW/LPC_FW/BLIT_READY().
+    // While live, `push_we`/`start` are driven automatically by hardware -- zero CPU involvement, same as the EQ/spectrum/
+    // wave-meter taps already are -- NOT by firmware polling: `push` rides pcm_fifo's own existing `pcm_sample_tick`/
+    // `fifo_l`/`fifo_r` (K2, docs/features/CYMO_AUDIO_ENGINE.md section 14: "place cymo_resamp after the FIFO's own
+    // source-rate output register" -- pcm_fifo.v itself is UNTOUCHED, this unit is simply a second, parallel consumer of
+    // signals the spectrum/wave-meter taps already read). The OR'd MMIO-driven `cymo_push_we`/`cymo_start` pulses stay
+    // available below for firmware-driven self-test regardless of `cymo_live_en`'s value -- the two paths coexist, never
+    // conflict (a combinational mux at the instantiation's own port connections, no shared register).
+    //
+    // `start` TICK (B-484, hardware-confirmed bug fix): the first attempt reused the (since removed) preset EQ's OWN internal 48 kHz
+    // tick, reasoning "reuse what's there instead of a second copy that could drift out of phase with it" -- WRONG.
+    // that EQ's divider (`DIV = CLK_HZ/RATE_HZ`, plain integer division) was never built to be ACCURATE: for an IIR
+    // filter's own coefficients, a few hundred ppm of tick-rate error changes nothing audible. For a sample-rate
+    // converter whose entire correctness depends on knowing its own output period precisely, it is NOT harmless: under
+    // TAU_CLK66, `66,666,667 / 48,000` truncates to 1388 (not 1388.89), so the EQ's real tick is 48,030.74 Hz, not
+    // 48,000 -- through this unit's fixed 147:160 ratio that implies an effective 44,128 Hz input-consumption rate,
+    // while `pcm_fifo` supplies real samples at a correctly-calibrated 44,100.00 Hz (the same `pcm_rate` reset-default
+    // constants below). The ~28 Hz mismatch meant the resampler ran ahead of its own input supply and re-shifted a
+    // stale sample roughly every 35 ms -- a real, audible, hardware-confirmed periodic artifact (reported as an
+    // audible "vibrato" on every 44.1 kHz track tested). Fixed with a DEDICATED fractional accumulator for this unit's
+    // own `start` tick, the exact same technique `pcm_fifo.v` already uses correctly, at the exact same `rate_inc`
+    // constants `pcm_rate`'s own reset default already carries (independently re-derived and confirmed: 3092376 at
+    // 66,666,667 Hz gives 47,999.993 Hz, -0.14 ppm; 3435974 at 60,000,000 Hz gives 48,000.002 Hz, +0.05 ppm -- both
+    // far below any audible threshold).
+`ifdef TAU_CLK66
+    localparam [31:0] CYMO_TICK_RATE_INC = 32'd3092376;   // 48 kHz at clk_sys = 66.667 MHz
+`else
+    localparam [31:0] CYMO_TICK_RATE_INC = 32'd3435974;   // 48 kHz at clk_sys = 60 MHz
+`endif
+    reg  [31:0] cymo_tick_acc = 32'd0;
+    reg         cymo_tick = 1'b0;
+    always @(posedge clk) begin
+        if (rst) begin cymo_tick_acc <= 32'd0; cymo_tick <= 1'b0; end
+        else     {cymo_tick, cymo_tick_acc} <= {1'b0, cymo_tick_acc} + {1'b0, CYMO_TICK_RATE_INC};
+    end
+    reg         cymo_clear = 1'b0, cymo_start = 1'b0, cymo_push_we = 1'b0;
+    reg         cymo_live_en = 1'b0;
+    reg  signed [15:0] cymo_push_l_d = 16'sd0, cymo_push_r_d = 16'sd0;
+    wire        cymo_busy, cymo_done, cymo_pop_req;
+    localparam integer EQW = (WIDE_EQ_ENABLE != 0) ? 18 : 16;
+    wire signed [EQW-1:0] cymo_out_l, cymo_out_r;
+    function signed [15:0] clip16w;                        // the resampler's own 16-bit clip, applied after the wide output (same LSB, so a plain clamp)
+        input signed [EQW-1:0] v;
+        begin
+            if (v > 32767) clip16w = 16'sh7FFF;
+            else if (v < -32768) clip16w = -16'sh8000;
+            else clip16w = v[15:0];
+        end
+    endfunction
+    wire signed [15:0] cymo_out16_l = clip16w(cymo_out_l), cymo_out16_r = clip16w(cymo_out_r);
+    wire        cymo_out_rd = d_req & d_is_mmio & ~dWE & (mmio_reg == R_CYMO_OUT);
+    // B-488 (hardware-confirmed): a 0->1 transition of cymo_live_en is also a clear. Without this, re-engaging LIVE
+    // resumes against whatever 32-tap history was last left in the unit -- stale audio from a different point in the
+    // (possibly different) track, or boot-time zeros -- producing a genuinely different, unpredictable settling
+    // transient every single time the toggle is switched on. cymo_tick/cymo_tick_acc are deliberately NOT reset
+    // here -- that free-running reference tick should stay pristine and continuous, the one thing that must NOT
+    // vary from toggle to toggle.
+    reg cymo_live_en_d = 1'b0;
+    always @(posedge clk) cymo_live_en_d <= rst ? 1'b0 : cymo_live_en;
+    wire cymo_live_rise = cymo_live_en & ~cymo_live_en_d;
+    // B-527: the hand-off from pcm_fifo's track-rate tick to the resampler is tau_cymo_feed (an elastic queue), not a gate on
+    // pcm_sample_tick & pop_req. The old gate (B-476, narrowed by B-492/B-498) could only deliver a sample when a tick happened
+    // to land while pop_req was high, which loses/repeats 9-29% of the input samples at the real clock ratio (cycle-level model,
+    // and the hardware's own STALE counter: 7,580 after about a second). See tau_cymo_feed.sv for the full reasoning and
+    // docs/AUDIT_TRAIL.md B-527. `cymo_stale_cnt` (a consume found nothing pushed) and `cymo_drop_cnt` (a tick found the queue full)
+    // now come from the feed and read back through R_CYMO_DIAG.
+    wire        cymo_auto_we;
+    wire signed [15:0] cymo_feed_l, cymo_feed_r;
+    wire [15:0] cymo_stale_cnt, cymo_drop_cnt;
+    wire [2:0]  cymo_feed_level;
+    wire        cymo_auto_start = cymo_live_en & cymo_tick;
+    wire signed [15:0] pre_eq_l = cymo_live_en ? cymo_out16_l : gain_l;
+    wire signed [15:0] pre_eq_r = cymo_live_en ? cymo_out16_r : gain_r;
+    wire signed [EQW-1:0] hal_in_l = cymo_live_en ? cymo_out_l : gain_l;      // the Halcyon engine's input: the wide resampler output, or the 16-bit path sign-extended
+    wire signed [EQW-1:0] hal_in_r = cymo_live_en ? cymo_out_r : gain_r;
+    generate
+        if (CYMO_RESAMP_ENABLE != 0) begin : g_cymo
+            tau_cymo_feed u_cymo_feed (
+                .clk(clk), .rst(rst), .clear(cymo_clear | pcm_flush | cymo_live_rise), .live(cymo_live_en),
+                .tick(pcm_sample_tick), .in_l(gain_l), .in_r(gain_r), .pop_req(cymo_pop_req),
+                .push_we(cymo_auto_we), .push_l(cymo_feed_l), .push_r(cymo_feed_r),
+                .stale_cnt(cymo_stale_cnt), .drop_cnt(cymo_drop_cnt), .level(cymo_feed_level));
+            tau_cymo_resamp #(.OUT_W(EQW)) u_cymo (
+                .clk(clk), .rst(rst), .clear(cymo_clear | pcm_flush | cymo_live_rise),
+                .push_we(cymo_push_we | cymo_auto_we),
+                .push_l(cymo_auto_we ? cymo_feed_l : cymo_push_l_d),
+                .push_r(cymo_auto_we ? cymo_feed_r : cymo_push_r_d),
+                .start(cymo_start | cymo_auto_start), .out_rd(cymo_out_rd),
+                .busy(cymo_busy), .done(cymo_done), .pop_req(cymo_pop_req),
+                .out_l(cymo_out_l), .out_r(cymo_out_r));
+        end else begin : g_nocymo
+            assign cymo_busy = 1'b0; assign cymo_done = 1'b0; assign cymo_pop_req = 1'b0;
+            assign cymo_out_l = {EQW{1'b0}}; assign cymo_out_r = {EQW{1'b0}};
+            assign cymo_auto_we = 1'b0; assign cymo_feed_l = 16'sd0; assign cymo_feed_r = 16'sd0;
+            assign cymo_stale_cnt = 16'd0; assign cymo_drop_cnt = 16'd0; assign cymo_feed_level = 3'd0;
+        end
+    endgenerate
+
+    // The Halcyon engine is the only EQ. Its sticky enable picks its output; with it off (or HALCYON_ENABLE 0) the audio is the resampler / gain-stage path unchanged, the 16-bit input.
+    wire signed [15:0] hal_o_l, hal_o_r;
+    generate
+        if (HALCYON_ENABLE != 0) begin : g_hal
+`ifdef TAU_CLK66
+            tau_halcyon #(.CLK_HZ(66_666_667), .RATE_HZ(48_000), .NST(17), .WI(EQW), .IFB(0), .WO(16), .OFB(0)) u_hal (
+`else
+            tau_halcyon #(.CLK_HZ(60_000_000), .RATE_HZ(48_000), .NST(17), .WI(EQW), .IFB(0), .WO(16), .OFB(0)) u_hal (
+`endif
+                .clk(clk), .rst(rst), .in_l(hal_in_l), .in_r(hal_in_r), .bypass(hal_bypass),
+                .wr_we(hal_we), .wr_idx(hal_widx), .wr_data(hal_data), .nact_in(hal_nact), .commit(hal_commit), .clr(hal_clr),
+                .out_l(hal_o_l), .out_r(hal_o_r), .busy(hal_busy));
+        end else begin : g_nohal
+            assign hal_o_l = 16'sd0; assign hal_o_r = 16'sd0; assign hal_busy = 1'b0;
+        end
+    endgenerate
+    assign audio_l = (HALCYON_ENABLE != 0 && hal_en) ? hal_o_l : pre_eq_l;
+    assign audio_r = (HALCYON_ENABLE != 0 && hal_en) ? hal_o_r : pre_eq_r;
+
+    always @(posedge clk) begin
+        con_wr      <= 1'b0;
+        tgt_go      <= 1'b0;
+        fb_cmd_push <= 1'b0;
+        wave_ctl_we <= 1'b0; wave_idx_we <= 1'b0; stats_ctl_we <= 1'b0; stats_idx_we <= 1'b0; sda_we <= 1'b0; wdog_arm_we <= 1'b0; wdog_ack_we <= 1'b0;
+        poly_clear <= 1'b0; poly_go <= 1'b0; poly_push_we <= 1'b0; poly_idx_we <= 1'b0;
+        lpc_cfg_we <= 1'b0; lpc_coef_idx_we <= 1'b0; lpc_coef_data_we <= 1'b0;
+        lpc_warm_idx_we <= 1'b0; lpc_warm_data_we <= 1'b0; lpc_residual_we <= 1'b0;
+        cymo_clear <= 1'b0; cymo_start <= 1'b0; cymo_push_we <= 1'b0;
+        gain_snap <= 1'b0; gain_fade_we <= 1'b0;
+        hal_commit <= 1'b0; hal_clr <= 1'b0; hal_we <= 1'b0; fb_font_we <= 1'b0;
+        dt_wren     <= 1'b0;
+        set_wr      <= 1'b0;
+        sdram_start <= 1'b0;
+        clut_idx_we <= 1'b0; clut_data_we <= 1'b0;
+
+        if (rst) begin
+            status0 <= 32'd0; status1 <= 32'd0;
+            status2 <= 32'd0; status3 <= 32'd0;
+            tgt_id  <= 16'd0; tgt_slotoffset <= 32'd0;
+            tgt_bridgeaddr <= 32'd0; tgt_length <= 32'd0;
+            tgt_cmd_sel <= 3'd0;
+            dt_addr <= 10'd0; dt_wdata <= 32'd0;
+            fb_cmd_op <= 3'd0; fb_cmd_addr <= 19'd0;
+            fb_cmd_w  <= 9'd0; fb_cmd_h    <= 9'd0;
+            fb_cmd_fg <= 16'd0; fb_cmd_bg  <= 16'd0;
+            fb_cmd_glyph <= 7'd0; fb_cmd_sx <= 2'd0; fb_cmd_sy <= 2'd0; fb_cmd_glyph_hi <= 2'd0;
+            // Default to 48 kHz at 50 MHz so a plain sample write still makes
+            // sound before firmware programs the real rate.
+`ifdef TAU_CLK66
+            pcm_rate <= 32'd3092376;   // 48 kHz at clk_sys = 66.667 MHz -- reset default only; pcm_rate_apply() overwrites it before playback
+`else
+            pcm_rate <= 32'd3435974;   // 48 kHz at clk_sys = 60 MHz
+`endif
+            audio16_reg  <= 1'b0;      // B-602: STICKY, back to the 15-bit mapping on reset
+            hal_en <= 1'b0; hal_bypass <= 1'b0; hal_nact <= 6'd0; hal_idx <= 8'd0; hal_data <= 24'sd0;   // B-639: STICKY, back to 'Halcyon off'
+            ring_en <= 1'b0; ring_hold <= 1'b0; ring_base <= 23'd0; ring_size <= 23'd2; ring_wptr <= 23'd0;   // B-741
+            gain_en <= 1'b0; gain_target <= 16'd32768; gain_ramp <= 16'd149; gain_shift <= 2'd3;   // B-615: STICKY, back to 'stage off, unity'
+            cymo_live_en <= 1'b0;      // STICKY register, not covered by the pulse-reset preamble above -- must be reset here explicitly
+            set_idx <= 5'd0; set_wdata <= 32'd0;
+            sdram_start <= 1'b0;
+            sdram_write <= 1'b0;
+            sdram_addr <= 25'd0;
+            sdram_wdata <= 32'd0;
+            sdram_byte_en <= 4'd0;
+        end else if (d_req & d_is_mmio & dWE) begin
+            case (mmio_reg)
+                R_CONSOLE: begin con_char <= dDAT_MOSI[7:0]; con_wr <= 1'b1; end
+                R_AUDIO:   ;   /* handled by pcm_push -> pcm_fifo */
+                R_PCM_RATE: pcm_rate <= dDAT_MOSI;
+                R_SET_IDX:  set_idx   <= dDAT_MOSI[4:0];   // B-346: was [3:0]
+                R_SET_DAT:  begin set_wdata <= dDAT_MOSI; set_wr <= 1'b1; end
+                R_SDR_ADDR: sdram_addr <= dDAT_MOSI[24:0];
+                R_SDR_DATA: sdram_wdata <= dDAT_MOSI;
+                // CTRL: bit0 start, bit1 write, bits[5:2] byte enables.
+                // A start while busy is ignored; firmware polls STATUS bit0.
+                R_SDR_CTRL: if (dDAT_MOSI[0] && !sdram_busy) begin
+                    sdram_write <= dDAT_MOSI[1];
+                    sdram_byte_en <= dDAT_MOSI[5:2];
+                    sdram_start <= 1'b1;
+                end
+                R_PCM_ST:  ;   /* handled by pcm_flush -> pcm_fifo, above */
+                R_STAT0:   status0 <= dDAT_MOSI;
+                R_STAT1:   status1 <= dDAT_MOSI;
+                R_STAT2:   status2 <= dDAT_MOSI;
+                R_STAT3:   status3 <= dDAT_MOSI;
+                R_TGT_ID:  tgt_id         <= dDAT_MOSI[15:0];
+                R_TGT_OFF: tgt_slotoffset <= dDAT_MOSI;
+                R_TGT_ADR: tgt_bridgeaddr <= dDAT_MOSI;
+                R_TGT_LEN: tgt_length     <= dDAT_MOSI;
+                R_TGT_GO:  begin tgt_cmd_sel <= dDAT_MOSI[2:0]; tgt_go <= 1'b1; end
+                R_DT_ADDR: dt_addr  <= dDAT_MOSI[9:0];
+                R_DT_DATA: begin dt_wdata <= dDAT_MOSI; dt_wren <= 1'b1; end
+                R_FB_ADDR: fb_cmd_addr <= dDAT_MOSI[18:0];
+                R_FB_SIZE: begin fb_cmd_w <= dDAT_MOSI[8:0];
+                                 fb_cmd_h <= dDAT_MOSI[17:9]; end
+                R_FB_COLOR: begin fb_cmd_fg <= dDAT_MOSI[15:0];
+                                  fb_cmd_bg <= dDAT_MOSI[31:16]; end
+                /* GO carries the per-glyph fields (op/char/scale) so drawing a
+                 * string is two MMIO writes per character -- address, then this
+                 * -- with colour and size left standing in their registers. */
+                R_FB_GO:   begin fb_cmd_op    <= {dDAT_MOSI[14], dDAT_MOSI[2:0]};   // bit 3: B11's OP_RRECT
+                                 fb_cmd_glyph <= dDAT_MOSI[9:3];
+                                 fb_cmd_sx    <= dDAT_MOSI[11:10];
+                                 fb_cmd_sy    <= dDAT_MOSI[13:12];
+                                 fb_cmd_glyph_hi <= dDAT_MOSI[16:15];   // B12 (B-454): BAR lit-count high bits; bits 15:16 were free
+                                 fb_cmd_push  <= 1'b1; end
+                R_SPEC_IDX: spec_idx <= dDAT_MOSI[3:0];
+                R_WAVE_CTL: begin wave_ctl_d <= dDAT_MOSI[11:0]; wave_ctl_we <= 1'b1; end
+                R_WAVE_IDX: begin wave_idx_d <= dDAT_MOSI[7:0];  wave_idx_we <= 1'b1; end
+                R_STATS_CTL: begin stats_ctl_d <= dDAT_MOSI[1:0]; stats_ctl_we <= 1'b1; end
+                R_STATS_IDX: begin stats_idx_d <= dDAT_MOSI[2:0]; stats_idx_we <= 1'b1; end
+                R_WDOG_ARM:  if (WDOG_ENABLE != 0) begin wdog_arm_d <= dDAT_MOSI; wdog_arm_we <= 1'b1; end
+                R_WDOG_ACK:  if (WDOG_ENABLE != 0) wdog_ack_we <= 1'b1;
+                R_SDA_SEL:   if (SDA_ENABLE != 0) begin sda_wd <= dDAT_MOSI[4:0]; sda_we <= 1'b1; end   // the window ignores it while a snapshot is pending
+                9'h100:     begin poly_clear <= dDAT_MOSI[0]; poly_go <= dDAT_MOSI[1]; end
+                9'h104:     begin poly_push_d <= dDAT_MOSI; poly_push_we <= 1'b1; end
+                9'h108:     begin poly_idx_d <= dDAT_MOSI[4:0]; poly_idx_we <= 1'b1; end
+                9'h114:     text_light_r <= dDAT_MOSI[0];
+                9'h118:     dbuf_cpu_buf_r <= dDAT_MOSI[0];                             // Helios H2 (B-340): which buffer ordinary writes target
+                9'h11C:     if (dDAT_MOSI[0]) dbuf_flip_req_tgl_r <= ~dbuf_flip_req_tgl_r;   // request a flip at the next vblank (mp3_fb.sv applies it)
+                R_BLT_IDX:  blt_idx <= dDAT_MOSI[2:0];
+                R_BLT_DATA: begin
+                    case (blt_idx)
+                        3'd0: blt_src_base_r   <= dDAT_MOSI[24:0];
+                        3'd1: blt_src_stride_r <= dDAT_MOSI[9:0];
+                        3'd2: blt_dst_base_r   <= dDAT_MOSI[24:0];
+                        3'd3: blt_dst_stride_r <= dDAT_MOSI[9:0];
+                        3'd4: begin
+                            blt_key_en_r <= dDAT_MOSI[16];
+                            blt_key_r    <= dDAT_MOSI[15:0];
+                        end
+                        3'd5: begin
+                            blt_blend_en_r    <= dDAT_MOSI[0];
+                            blt_blend_mode_r  <= dDAT_MOSI[3:1];
+                            blt_blend_alpha_r <= dDAT_MOSI[15:8];
+                        end
+                        default: blt_reindex_r <= dDAT_MOSI[7:0];   // field 6: REINDEX
+                    endcase
+                    // 7 real fields (0..6): wraps back to 0 after REINDEX rather
+                    // than counting up to 3'd7, so a burst of exactly 7 DATA
+                    // writes loads the whole state and an 8th harmlessly restarts
+                    // at SRC_BASE instead of landing on an unused index.
+                    blt_idx <= (blt_idx == 3'd6) ? 3'd0 : blt_idx + 3'd1;
+                end
+                R_CLUT_IDX:  begin clut_idx_d <= dDAT_MOSI[7:0]; clut_idx_we <= 1'b1; end
+                R_CLUT_DATA: begin clut_data_d <= dDAT_MOSI[15:0]; clut_data_we <= 1'b1; end   // index advance and wrap: tau_clut_wr
+                R_DBG_MARK: dbg_mark <= dDAT_MOSI[7:0];
+                R_RC_IDX:  rc_idx <= dDAT_MOSI[3:0];
+                R_RC_DATA: begin
+                    rc_cut_lut_r[rc_idx*5 +: 5] <= dDAT_MOSI[4:0];
+                    rc_idx <= rc_idx + 4'd1;   // wraps 15->0 naturally (4-bit)
+                end
+                R_LPC_CFG: begin
+                    lpc_cfg_order_d <= dDAT_MOSI[5:0];
+                    lpc_cfg_shift_d <= dDAT_MOSI[11:6];
+                    lpc_cfg_we      <= 1'b1;
+                end
+                R_LPC_COEF_IDX:  lpc_coef_idx_d <= dDAT_MOSI[4:0];
+                R_LPC_COEF_DATA: begin lpc_coef_data_d <= dDAT_MOSI[15:0]; lpc_coef_data_we <= 1'b1; end
+                R_LPC_WARM_IDX:  lpc_warm_idx_d <= dDAT_MOSI[4:0];
+                R_LPC_WARM_DATA: begin lpc_warm_data_d <= dDAT_MOSI; lpc_warm_data_we <= 1'b1; end
+                R_LPC_RESIDUAL:  begin lpc_residual_d <= dDAT_MOSI; lpc_residual_we <= 1'b1; end
+                R_CYMO_CTRL: begin
+                    cymo_clear   <= dDAT_MOSI[0];
+                    cymo_start   <= dDAT_MOSI[1];
+                    cymo_live_en <= dDAT_MOSI[2];   // STICKY (not reset every cycle below, unlike bits 0/1)
+                end
+                R_AUDIO_CFG: audio16_reg <= dDAT_MOSI[0];   // B-602: STICKY (acts only when AUDIO16_ENABLE is built)
+                R_GAIN_CTRL: begin gain_en <= dDAT_MOSI[0]; gain_snap <= dDAT_MOSI[1]; gain_fade_we <= dDAT_MOSI[2]; gain_shift <= dDAT_MOSI[5:4]; end   // B-615
+                R_HAL_CTRL: begin   // B-639
+                    hal_en <= dDAT_MOSI[0]; hal_bypass <= dDAT_MOSI[1]; hal_commit <= dDAT_MOSI[2]; hal_clr <= dDAT_MOSI[3]; hal_nact <= dDAT_MOSI[13:8];
+                end
+                R_FONT_CTRL: if (FONT_RAM_ENABLE != 0 && dDAT_MOSI[0]) font_idx <= 13'd0;
+                R_FONT_IDX:  if (FONT_RAM_ENABLE != 0) font_idx <= (dDAT_MOSI[12:0] > FONT_LAST) ? 13'd0 : dDAT_MOSI[12:0];
+                R_FONT_DATA: if (FONT_RAM_ENABLE != 0) begin
+                    fb_font_wdata <= dDAT_MOSI; fb_font_waddr <= font_idx; fb_font_we <= 1'b1;
+                    if (font_idx == FONT_LAST) begin font_idx <= 13'd0; if (BUG_FONT_NO_GEN == 0) font_gen <= font_gen + 12'd1; end else if (BUG_FONT_NO_INC == 0) font_idx <= font_idx + 13'd1;
+                end
+                R_HAL_IDX:  hal_idx <= dDAT_MOSI[7:0];
+                R_HAL_DATA: begin hal_data <= dDAT_MOSI[23:0]; hal_widx <= hal_idx; hal_we <= 1'b1; hal_idx <= hal_idx + 8'd1; end
+                R_RING_BASE:   ring_base <= dDAT_MOSI[22:0];   // B-741
+                R_RING_SIZE:   ring_size <= dDAT_MOSI[22:0];
+                R_RING_WPTR:   ring_wptr <= dDAT_MOSI[22:0];
+                R_RING_CTRL:   begin ring_en <= dDAT_MOSI[0]; ring_hold <= dDAT_MOSI[1]; end
+                R_GAIN_TARGET: gain_target <= dDAT_MOSI[15:0];
+                R_GAIN_STEP:   gain_ramp   <= dDAT_MOSI[15:0];
+                R_CYMO_PUSH: begin
+                    cymo_push_l_d <= dDAT_MOSI[15:0];
+                    cymo_push_r_d <= dDAT_MOSI[31:16];
+                    cymo_push_we  <= 1'b1;
+                end
+                default: ;
+            endcase
+        end
+    end
+
+    reg [31:0] mmio_rdata;
+    always @(*) begin
+        case (mmio_reg)
+            R_CYCLES:  mmio_rdata = cycle_ctr;
+            // {seq[15:8], err[4:2], done[1], busy[0]}. Poll seq, not done:
+            // done is a level that stays set from the PREVIOUS command until
+            // the next one is picked up, so reading it right after issuing can
+            // report a completion that hasn't happened. See tgt_cmd.v.
+            R_TGT_GO:  mmio_rdata = {16'd0, tgt_seq, 3'd0, tgt_err, tgt_done, tgt_busy};
+            R_PCM_ST:  mmio_rdata = {13'd0, pcm_underrun, pcm_full, pcm_empty,
+                                     4'd0, pcm_level};
+            // {in_menu, cont1_key[15:0]}
+            //  key bits: 0 up, 1 down, 2 left, 3 right, 4 A, 5 B, 6 X, 7 Y,
+            //            14 select, 15 start
+            R_INPUT:   mmio_rdata = {15'd0, menu_s1, key_s1};
+            R_VERSION: mmio_rdata = CORE_VERSION;
+            //  bit0 reload pending, bit1 slot ready (allcomplete rose since),
+            //  bit2 allcomplete level now, bit3 allcomplete fell since reload,
+            //  bit4 PLAYLIST slot reloaded
+            R_RELOAD:  mmio_rdata = {27'd0, pl_reloaded, slot_fell, ac_sync[2],
+                                     slot_ready, mp3_reloaded};
+            R_SLOT_SZ: mmio_rdata = slot_size;
+            /* BRAM read is registered: firmware writes R_DT_ADDR, then reads
+             * R_DT_DATA as a separate MMIO transaction, so q_a has settled. */
+            R_DT_DATA: mmio_rdata = dt_q;
+            R_FB_GO:   mmio_rdata = {30'd0, fb_gfx_idle, fb_cmd_full};   // bit 1 (T3): every accepted command has retired (reads 0 on a bitstream without T3)
+            R_GFX_FENCE:   mmio_rdata = fb_gfx_fence;
+            R_GFX_STATUS:  mmio_rdata = {1'b1, 14'd0, fb_gfx_idle, 7'd0, fb_gfx_free};   // [31] present, [16] idle, [8:0] free queue slots
+            R_GFX_COUNTS:  mmio_rdata = {fb_gfx_underflow, fb_gfx_ovf};                  // [31:16] scanout lines whose fill was late, [15:0] pushes dropped while full
+            R_FB_STALL: mmio_rdata = fb_stall_ctr;
+            R_SET_DAT: mmio_rdata = set_rdata;
+            R_SDR_RDATA: mmio_rdata = sdram_rdata;
+            R_SDR_STATUS: mmio_rdata = {30'd0, sdram_done, sdram_busy};
+            R_STAT0:   mmio_rdata = status0;
+            R_STAT1:   mmio_rdata = status1;
+            R_STAT2:   mmio_rdata = status2;
+            R_STAT3:   mmio_rdata = status3;
+            8'hB0:     mmio_rdata = if_n_rd;                              // instruction beats served from PSRAM
+            8'hB4:     mmio_rdata = if_cyc_rd;                            // cycles the fetch stage waited on PSRAM
+            8'hB8:     mmio_rdata = {31'd0, (PSRAM_IFETCH_ENABLE != 0)};  // feature present (write = clear counters)
+            8'hBC:     mmio_rdata = (SDRAM_BUSY_ENABLE != 0) ? sdram_busy_rd : 32'd0;  // B7: SDRAM port-busy cycles, free-running since reset
+            8'hD0:     mmio_rdata = (VBLANK_ENABLE != 0) ? {vblank_rd[16:1], 15'd0, vblank_rd[0]} : 32'd0;  // Helios/Talos H0: bit 0 vblank level, bits 31:16 free-running frame count (B-260)
+            8'hE8:     mmio_rdata = {22'd0, scan_rd};                                  // Helios beam position: bit 9 present, bits 8:0 video line counter (B-267)
+            9'h10C:    mmio_rdata = poly_rd;                                            // MP3 window unit: PCM word at POLY_IDX (B-292)
+            9'h114:    mmio_rdata = {1'b1, 30'd0, text_light_r};                       // text weight table select: bit 31 present (0 on a bitstream without it), bit 0 light
+            9'h118:    mmio_rdata = (DBUF_ENABLE != 0) ? {1'b1, 30'd0, dbuf_cpu_buf_r} : 32'd0;                                    // bit 31 present, bit 0 echo
+            9'h11C:    mmio_rdata = (DBUF_ENABLE != 0) ? {1'b1, 29'd0, dbuf_flip_pending, dbuf_disp_buf} : 32'd0;                  // bit 31 present, bit 1 flip pending, bit 0 currently displayed
+            9'h110:    mmio_rdata = (POLY_ENABLE != 0) ? {poly_slots, 14'd0, poly_busy, 1'b1} : 32'd0;   // bit 0 present, bit 1 busy, 31:16 slots computed
+            8'hF4:     mmio_rdata = wave_rd;                                            // scope column {min, max} at WAVE_IDX (B-283)
+            8'hF8:     mmio_rdata = {wave_pk_r, wave_pk_l};                             // level meters: max |R|, max |L| since cleared
+            8'hFC:     mmio_rdata = wave_status;                                        // bit 0 present, bit 1 capturing, bit 2 trigger timeout, 15:8 capture number
+            8'hE0:     mmio_rdata = {12'd0, spec_mean};                                // spectrum bank: mean of band SPEC_IDX (B-263)
+            8'hE4:     mmio_rdata = (SPEC_ENABLE != 0) ? {spec_win, 15'd0, 1'b1} : 32'd0;  // spectrum bank: bit 0 present, bits 31:16 window counter
+            R_LPC_SAMPLE: mmio_rdata = lpc_sample;                                     // FLAC LPC unit: last reconstructed sample (B-368); this read is the ack
+            R_LPC_STATUS: mmio_rdata = {29'd0, lpc_done, lpc_busy, (LPC_ENABLE != 0)}; // bit 0 present, bit 1 busy, bit 2 done
+            R_I2S_DIAG_MINMAX: mmio_rdata = (I2S_DIAG_ENABLE != 0) ? {i2s_diag_max, i2s_diag_min} : 32'd0;
+            R_I2S_DIAG_CNT:    mmio_rdata = (I2S_DIAG_ENABLE != 0) ? i2s_diag_cnt_r : 32'd0;
+            R_I2S_DIAG_SUM:    mmio_rdata = (I2S_DIAG_ENABLE != 0) ? i2s_diag_sum_r[31:0] : 32'd0;
+            R_I2S_DIAG_ST:     mmio_rdata = {(I2S_DIAG_ENABLE != 0) ? i2s_diag_sum_r[47:32] : 16'd0, 15'd0, (I2S_DIAG_ENABLE != 0)};   // bit 0 built in, [31:16] the sum's high 16 bits
+            R_CYMO_OUT:    mmio_rdata = {cymo_out16_r, cymo_out16_l};                                      // this read is the ack (clears done)
+            R_CYMO_STATUS: mmio_rdata = {24'd0, cymo_feed_level, cymo_live_en, cymo_pop_req, cymo_done, cymo_busy, (CYMO_RESAMP_ENABLE != 0)}; // bit 0 present, 1 busy, 2 done, 3 pop_req, 4 live_en, [7:5] feed queue level (B-527)
+            R_GAIN_CTRL:   mmio_rdata = {(GAIN_ENABLE != 0), (GAIN_ENABLE != 0 && GAIN_BOOST != 0), 24'd0, gain_shift, 1'b0, gain_fading, 1'b0, gain_en};   // B-615
+            R_HAL_CTRL:    mmio_rdata = {(HALCYON_ENABLE != 0), 17'd0, hal_nact, 5'd0, hal_busy, hal_bypass, hal_en};   // B-639
+            R_HAL_IDX:     mmio_rdata = {24'd0, hal_idx};
+            R_FONT_CTRL:   mmio_rdata = (FONT_RAM_ENABLE != 0) ? {1'b1, 3'd0, font_gen, 16'd6112} : 32'd0;
+            R_RTC_ST:      mmio_rdata = {(RTC_ENABLE != 0), 30'd0, rtc_valid_s};         // wall clock: [31] present, [0] valid (the host's 0x0090 has arrived)
+            R_RTC_EPOCH:   mmio_rdata = rtc_epoch_s;                                     // epoch seconds as sent by the host (0 until valid)
+            R_RTC_DATE:    mmio_rdata = rtc_date_s;                                      // BCD date 0xYYYYMMDD
+            R_RTC_TIME:    mmio_rdata = rtc_time_s;                                      // BCD time, [27:24] day of week, 0x00HHMMSS
+            R_WDOG_ST:     mmio_rdata = (WDOG_ENABLE != 0) ? wdog_status : 32'd0;           // [31] present, [1] expired, [0] armed
+            R_WDOG_CNT:    mmio_rdata = (WDOG_ENABLE != 0) ? wdog_counts : 32'd0;           // [31:16] arms, [15:0] expiries (wrap)
+            R_SDA_SEL:     mmio_rdata = (SDA_ENABLE != 0) ? sda_status : 32'd0;          // [31] present, [8] a snapshot is pending, [4:0] the selection
+            R_SDA_VAL:     mmio_rdata = (SDA_ENABLE != 0) ? sda_val : 32'd0;             // the snapshot of the selected counter (stable until the next select)
+            R_STATS_DATA:  mmio_rdata = stats_rd;                                      // audio statistics read-out word at STATS_IDX (0 when not built)
+            R_FONT_IDX:    mmio_rdata = (FONT_RAM_ENABLE != 0) ? {19'd0, font_idx} : 32'd0;
+            R_GAIN_TARGET: mmio_rdata = {16'd0, gain_target};
+            R_RING_BASE:   mmio_rdata = (PCM_RING_ENABLE != 0) ? {9'd0, ring_base} : 32'd0;   // B-741
+            R_RING_SIZE:   mmio_rdata = (PCM_RING_ENABLE != 0) ? {9'd0, ring_size} : 32'd0;
+            R_RING_WPTR:   mmio_rdata = (PCM_RING_ENABLE != 0) ? {9'd0, ring_wptr} : 32'd0;
+            R_RING_RIDX:   mmio_rdata = (PCM_RING_ENABLE != 0) ? {9'd0, ring_ridx} : 32'd0;
+            R_RING_CTRL:   mmio_rdata = (PCM_RING_ENABLE != 0) ? {1'b1, 27'd0, ring_hold, rctl_busy, (ring_ridx == ring_wptr), ring_en} : 32'd0;
+            R_RING_CNT:    mmio_rdata = (PCM_RING_ENABLE != 0) ? ring_cnt : 32'd0;
+            R_UNDER:       mmio_rdata = (PCM_RING_ENABLE != 0) ? {1'b1, pcm_under_events, pcm_under_ticks} : 32'd0;   // P6: [31] present, [30:16] runs of empty ticks, [15:0] empty ticks (saturating, reset-only)
+            R_GAIN_CUR:    mmio_rdata = {16'd0, gain_cur};
+            R_GAIN_STEP:   mmio_rdata = {16'd0, gain_ramp};
+            R_AUDIO_CFG:   mmio_rdata = {30'd0, (AUDIO16_ENABLE != 0), audio_full16};   // B-602: bit 1 present, bit 0 value; 0 when not built
+            R_CYMO_DIAG:   mmio_rdata = {cymo_drop_cnt, cymo_stale_cnt}; // B-527: [15:0] consumes that found no pushed sample (repeat), [31:16] ticks dropped because the queue was full; both saturate, both clear on live engage
+            default:   mmio_rdata = xm_range ? xm_rdata : 32'h0;
+        endcase
+    end
+
+    // --------------------------------------------------------- bus returns ---
+    reg d_was_mmio, d_was_sdram, d_was_psram, i_was_psram;
+    always @(posedge clk) begin
+        if (rst) begin
+            dACK <= 1'b0; iACK <= 1'b0;
+            d_was_mmio <= 1'b0; d_was_sdram <= 1'b0; d_was_psram <= 1'b0; i_was_psram <= 1'b0;
+        end else begin
+            dACK       <= 1'b0;
+            iACK       <= 1'b0;
+            d_was_mmio <= d_mmio_req;
+            d_was_sdram<= sdram_wb_ack;
+            d_was_psram<= psram_wb_ack;
+            i_was_psram<= ipsram_ack;
+            // Ack only what actually got the port this cycle; anything blocked
+            // by the loader simply retries (Wishbone masters hold their request).
+            if (d_mmio_req | serve_d | sdram_wb_ack | psram_wb_ack) dACK <= 1'b1;
+            if (serve_i | ipsram_ack) iACK <= 1'b1;      // registered once more, as dACK (KB-024)
+        end
+    end
+
+    always @(*) begin
+        dDAT_MISO = d_was_mmio  ? mmio_rdata :
+                    d_was_sdram ? sdram_wb_cpu_rdata :
+                    d_was_psram ? psram_wb_dat : a_rdata;
+        iDAT_MISO = i_was_psram ? ipsram_dat : a_rdata;
+    end
+
+    // ------------------------------------------- Phase G2: PSRAM instruction fetch ---
+    // One classic beat per instruction-bus beat (a cache line fill is eight of them: the wrapper does not care that the
+    // beats are consecutive), read-only. The arbiter shares the single PSRAM controller port between this client and the
+    // data window: the data client wins a tie, a granted transaction is never interrupted, and after every done pulse the
+    // port is held idle for two cycles so back-to-back transactions from different clients never look like one request
+    // (the KB-024 lesson: a client's req may fall one cycle after done).
+    generate
+        if (PSRAM_IFETCH_ENABLE != 0) begin : g_ifetch
+            wire        ictl_req, ictl_we, ictl_done;
+            wire [22:0] ictl_word;
+            wire [31:0] ictl_wdata;
+            wire [3:0]  ictl_be;
+            tau_psram_bus #(.REL_CYC(2), .GUARD_ERR(0)) u_psram_ibus (
+                .clk(clk), .rst(rst),
+                .wb_cyc(iCYC & i_is_psram), .wb_stb(iSTB), .wb_we(1'b0), .wb_cti(3'b000),
+                .wb_adr(iADR[22:0]), .wb_dat_i(32'd0), .wb_sel(4'b1111),
+                .wb_dat_o(ipsram_dat), .wb_ack(ipsram_ack), .wb_err(), .wb_unsupported(),
+                .ctl_req(ictl_req), .ctl_we(ictl_we), .ctl_word(ictl_word),
+                .ctl_wdata(ictl_wdata), .ctl_be(ictl_be),
+                .ctl_done(ictl_done), .ctl_rdata(psram_rdata), .ctl_guard(psram_guard)
+            );
+            reg       busy, gi, gr;
+            reg [1:0] gap;
+            // B-741: the PCM ring reader is a third client. It wins a tie (it needs one read per audio pair, about every 1,500 cycles, and each is 32 cycles: it cannot starve anyone), a granted transaction is
+            // never interrupted. With PCM_RING_ENABLE 0, rctl_req is a constant 0 and this reduces to the two-client arbiter exactly.
+            wire      sel_r = busy ? gr : rctl_req;
+            wire      sel_i = busy ? gi : (~rctl_req & ~dctl_req & ictl_req);
+            wire      any_req = busy ? (gr ? rctl_req : (gi ? ictl_req : dctl_req)) : (rctl_req | dctl_req | ictl_req);
+            assign psram_req   = any_req & (gap == 2'd0);
+            assign psram_we    = sel_r ? rctl_we    : (sel_i ? ictl_we    : dctl_we);
+            assign psram_word  = sel_r ? rctl_word  : (sel_i ? ictl_word  : dctl_word);
+            assign psram_wdata = sel_r ? rctl_wdata : (sel_i ? ictl_wdata : dctl_wdata);
+            assign psram_be    = sel_r ? rctl_be    : (sel_i ? ictl_be    : dctl_be);
+            assign dctl_done   = psram_done & busy & ~gi & ~gr;
+            assign ictl_done   = psram_done & busy &  gi;
+            assign rctl_done   = psram_done & busy &  gr;
+            always @(posedge clk) begin
+                if (rst) begin busy <= 1'b0; gi <= 1'b0; gr <= 1'b0; gap <= 2'd0; end
+                else begin
+                    if (gap != 2'd0) gap <= gap - 2'd1;
+                    if (!busy && psram_req) begin busy <= 1'b1; gi <= sel_i; gr <= sel_r; end
+                    else if (busy && psram_done) begin busy <= 1'b0; gap <= IFETCH_GAP[1:0]; end
+                end
+            end
+            if (PCM_RING_ENABLE != 0) begin : g_ring
+                tau_pcm_ring #(.THR(1536)) u_ring (
+                    .clk(clk), .rst(rst), .en(ring_en), .flush(pcm_flush), .hold(ring_hold), .base(ring_base), .size(ring_size), .wptr(ring_wptr), .fifo_level(pcm_level),
+                    .ridx(ring_ridx), .cnt(ring_cnt), .push(ring_push), .pdata(ring_pdata), .busy(rctl_busy),
+                    .ctl_req(rctl_req), .ctl_we(rctl_we), .ctl_word(rctl_word), .ctl_wdata(rctl_wdata), .ctl_be(rctl_be),
+                    .ctl_done(rctl_done), .ctl_rdata(psram_rdata), .ctl_guard(psram_guard)
+                );
+            end else begin : g_no_ring
+                assign ring_push = 1'b0; assign ring_pdata = 32'd0; assign rctl_busy = 1'b0; assign ring_ridx = 23'd0; assign ring_cnt = 32'd0;
+                assign rctl_req = 1'b0; assign rctl_we = 1'b0; assign rctl_word = 23'd0; assign rctl_wdata = 32'd0; assign rctl_be = 4'd0;
+            end
+            // Counters: instruction beats served from PSRAM, and cycles the fetch stage held a PSRAM request.
+            reg [31:0] n_r, cyc_r;
+            wire       clr = d_req & d_is_mmio & dWE & (mmio_reg == 8'hB8);
+            always @(posedge clk) begin
+                if (rst | clr) begin n_r <= 32'd0; cyc_r <= 32'd0; end
+                else begin
+                    if (ipsram_ack) n_r <= n_r + 32'd1;
+                    if (iCYC & iSTB & i_is_psram) cyc_r <= cyc_r + 32'd1;
+                end
+            end
+            assign if_n_rd = n_r;
+            assign if_cyc_rd = cyc_r;
+
+            // B-188: DBGM showed bt_begin()'s first line (bt_crumb(1)) never executes at all --
+            // bt_begin() is cold code, fetched through exactly this arbiter, so the leading
+            // hypothesis is a stalled instruction fetch here, not anything inside bt_begin()'s
+            // own logic. This probe answers it directly rather than guessing further: iCYC/iSTB/
+            // i_is_psram show whether the CPU is even asking this window for an instruction right
+            // now; ictl_req/dctl_req/busy/gi show whether the arbiter's own priority (data always
+            // wins a tie -- sel_i's own expression, `~dctl_req & ictl_req`, when not busy) is
+            // starving the instruction side by a data client holding dctl_req continuously; psram_req/
+            // psram_done/ipsram_ack show whether a granted request ever actually completes at the
+            // controller. Same convention as the other two ISSP instances -- TAU_ISSP-gated, never
+            // in the release or the normal Diagnostic Build, read-only.
+`ifdef TAU_ISSP
+            altsource_probe #(
+                .sld_auto_instance_index("YES"),
+                .sld_instance_index(0),
+                .instance_id("IFPS"),
+                .probe_width(10),
+                .source_width(1),
+                .source_initial_value("0"),
+                .enable_metastability("NO")
+            ) u_issp_ifetch (
+                .source_clk (clk),
+                .probe       ({psram_done, psram_req, ipsram_ack, gi, busy,
+                                dctl_req, ictl_req, i_is_psram, iSTB, iCYC}),
+                .source      ()
+            );
+`endif
+        end else begin : g_no_ifetch
+            assign ring_push = 1'b0; assign ring_pdata = 32'd0; assign rctl_busy = 1'b0; assign ring_ridx = 23'd0; assign ring_cnt = 32'd0;   // B-741: the ring needs the ifetch arbiter
+            assign rctl_req = 1'b0; assign rctl_we = 1'b0; assign rctl_word = 23'd0; assign rctl_wdata = 32'd0; assign rctl_be = 4'd0; assign rctl_done = 1'b0;
+            assign psram_req = dctl_req;   assign psram_we = dctl_we;
+            assign psram_word = dctl_word; assign psram_wdata = dctl_wdata;
+            assign psram_be = dctl_be;     assign dctl_done = psram_done;
+            assign ipsram_ack = 1'b0;      assign ipsram_dat = 32'd0;
+            assign if_n_rd = 32'd0;        assign if_cyc_rd = 32'd0;
+        end
+    endgenerate
+
+    // B-186: second, independent ISSP instance -- the CPU-side checkpoint register above,
+    // not the draw engine (u_issp_blit, mp3_fb.sv). Same convention: default OFF, gated
+    // behind TAU_ISSP, never in the release or the normal Diagnostic Build, read-only
+    // (source_width kept at its required minimum). sld_auto_instance_index avoids any manual
+    // coordination with u_issp_blit's own index.
+`ifdef TAU_ISSP
+    altsource_probe #(
+        .sld_auto_instance_index("YES"),
+        .sld_instance_index(0),
+        .instance_id("DBGM"),
+        .probe_width(8),
+        .source_width(1),
+        .source_initial_value("0"),
+        .enable_metastability("NO")
+    ) u_issp_dbgmark (
+        .source_clk (clk),
+        .probe       (dbg_mark),
+        .source      ()
+    );
+`endif
+
+    // B-188/B-189: fourth ISSP instance -- IFPS (the ifetch-arbiter probe, section 6's own
+    // g_ifetch generate block) showed the arbiter itself idle, not stuck mid-transaction, which
+    // does not confirm a stalled cold fetch the way B-188's DBGM result suggested. The direct
+    // follow-up: capture the CPU's actual instruction AND data addresses (word addresses, iADR/
+    // dADR are both 30 bits) plus each bus's own cycle/strobe/ack, in one read -- enough to know
+    // exactly which instruction the CPU is frozen on (match against the firmware .elf's symbol
+    // table) and whether it is an instruction fetch, a data access, or neither that is actually
+    // stuck. Unlike u_issp_ifetch, not inside the PSRAM_IFETCH_ENABLE generate block -- iADR/
+    // dADR/iCYC/iSTB/dCYC/dSTB/dACK all exist unconditionally at module scope. Same convention:
+    // TAU_ISSP-gated, never in the release or the normal Diagnostic Build, read-only.
+`ifdef TAU_ISSP
+    altsource_probe #(
+        .sld_auto_instance_index("YES"),
+        .sld_instance_index(0),
+        .instance_id("PCAD"),
+        .probe_width(65),
+        .source_width(1),
+        .source_initial_value("0"),
+        .enable_metastability("NO")
+    ) u_issp_pcaddr (
+        .source_clk (clk),
+        .probe       ({dADR, dCYC, dSTB, dACK, iADR, iCYC, iSTB}),
+        .source      ()
+    );
+`endif
+
+endmodule

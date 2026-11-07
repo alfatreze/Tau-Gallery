@@ -1,0 +1,23 @@
+# BUG-002: long track titles are clipped on the now-playing screen (about 45 characters)
+
+**Status (2026-10-26, B-874): MARQUEE built for Player 2 (owner chose it), host-proven AND confirmed good on a Pocket by the owner (DEV 190, 2026-10-26: "confirmed good", no screenshot taken).** Earlier status:  Confirmed on hardware (owner report, B-033 run, 2026-09-21); not fixed. Found while testing phase 0 with the longest title on the test card.
+
+## Observed
+Track 3 of the phase 0 playlist (`04. Giant Warrior ~ Torumekian Army ~ Her Royal Highness Princess Kushana.mp3`, tag title 69 characters) showed on the now-playing screen as `... Her Royal H` and the marquee scrolled only that clipped text. The playlist screen showed the full name.
+
+## Cause (source read, matches the observed cut)
+The now-playing title is held in `track_title[48]` (`fw/player.c`, also the artist and album buffers and the copies `stale_ref_title[48]`, `last_title[48]`, `prev_try`). The ID3/FLAC readers copy at most `sizeof(track_title)` bytes, so anything past about 45 characters never reaches the screen. The marquee itself has room (`ui_marquee_t.text[64]`) and would scroll a longer title. The playlist reads the file name from its own text buffer, hence it was complete.
+
+## Fix options
+1. Raise the title (and artist, album) buffers to 64 to match the marquee: about +16 B each and +16 B for each copy (well under 200 B in total); heap gap is 18.7 KiB with art in PSRAM, 7.8 KiB with it in BRAM.
+2. Above 64: raise `ui_marquee_t.text` too (80 or 96); cost a few tens of bytes. Long titles are rare, 64 covers the test card's worst case (69 needs 72).
+Recommendation: title 80, artist 64, album 64, marquee text 80, done together with the phase 2 firmware (the library index stores titles up to 63 characters after the tool truncates them; the tool limit and the firmware limit should be the same number). Test in the host harness with a 100-character tag, then on the Pocket with the phase 0 track.
+
+## Relation to the library
+The library list rows draw titles from the index (own buffer, up to 63), so it is not affected, but now-playing after a library play is.
+
+## Recheck on Player 2, 2026-10-26 (B-854, by reading the code; not run on a Pocket)
+Still applies, in a different form. Player 2 holds the now-playing text in `mp3_info_t` (`fw2/transport/mp3play.h`: `title[48]`, `artist[40]`, `album[40]`), so a title is cut at 47 characters, an artist or album at 39, even though the index stores up to 63. Then `put()` in `fw2/ui/nowplaying.c` cuts the text to the pixel width of its box (`MW`) by measuring; **there is no marquee in Player 2**, so a long title is simply cut off. Options for the owner: (1) a marquee on the title/artist/album (the old player had one), (2) an ellipsis, (3) both with the buffers raised to 64. To confirm on a Pocket: a track with a title of about 70 characters (the old `04. Giant Warrior ~ ...` file).
+
+## Marquee, 2026-10-26 (B-874)
+Owner chose the marquee. `fw2/cores/marquee_core.h` (pure; `sim/test_p2_marquee.py`, two mutants caught) and `put_scroll` in `fw2/ui/nowplaying.c`: title, artist and album that are wider than their box rest 1.8 s, drop one character every 120 ms until the end fits, hold 1.8 s and start over; a new string starts at its first character. The text buffers of `np_info_t` and the refresh temporaries are 64 characters (the index keeps up to 63), +88 bytes of RAM.
