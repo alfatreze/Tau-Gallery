@@ -29,22 +29,73 @@ enum { T_FONT = 0, T_ICONS, T_AUDIO, T_TRACKS, T_ST110, T_ST150, T_ST200, T_PI11
 static const char *const names[T_N] = { "FONT MEMORY", "ICONS", "AUDIO 20 S", "TRACK CHANGES X6", "STRETCH 1.10X", "STRETCH 1.50X", "STRETCH 2.00X", "PITCH 1.10X", "PITCH 1.50X", "PITCH 2.00X", "GFX ISSUE", "BLIT OPS", "NAME MATRIX" };
 static const uint8_t mode_of[T_N] = { 0, 0, 0, 0, 2, 2, 2, 1, 1, 1, 0, 0, 0 }, sel_of[T_N] = { 0, 0, 0, 0, 0, 2, 4, 2, 5, 7, 0, 0, 0 };    /* Stretch list 1.10 1.25 1.50 1.75 2.00; Pitch list 0.85 0.95 1.10 1.20 1.30 1.50 1.75 2.00 */
 uint32_t check_mask, check_under;
-/* M-1 SD feed probe (L1): sequential 4 KB commands on the cold-image slot (data slot 6, tau-cold.bin, always on the card). Blocks about a quarter of a second; refused while a track plays (one command in flight). */
+/* M-1 SD feed probe (L1 opens the SD PROBE view; L1 again runs it, B leaves). It blocks for about 4 s and is refused while a track plays (one command in flight).
+ * Slot 6 (tau-cold.bin) alone, slot 4 (tau-loading.bin, a second deferload file) alone, and both alternately: the cost of a slot switch. Commands are 4 KB, the landing zone. */
 extern uint8_t _tag_start;
-static sd_probe_t sdp; static uint8_t sd_state;      /* 0 not run, 1 done, 2 refused (playing), 3 failed at once, 4 measured but a later read failed */
+#define SD_SLOT_A 6u
+#define SD_SLOT_B 4u
+#define SD_SPAN_B 98304u                   /* tau-loading.bin is 98,370 bytes: 24 whole 4 KB commands */
+static sd_probe_t sdA, sdB, sdS; static uint8_t sd_state, sd_view;      /* sd_state: 0 not run, 1 done, 2 refused (playing) */
 static char *put_u(char *q, uint32_t v) { char t[10]; uint32_t n = 0; do { t[n++] = (char)('0' + v % 10u); v /= 10u; } while (v); while (n) *q++ = t[--n]; return q; }
+static char *put_s(char *q, const char *p) { while (*p) *q++ = *p++; return q; }
 static void sd_run(void)
 {
     if (mp.playing) { sd_state = 2u; return; }
-    sd_probe_run(&sdp, 6u, cold_bytes & ~4095u, 4096u, (uint32_t)(uintptr_t)&_tag_start, 2000u);    /* the file is the span: a read past its end fails (the first version asked for 1 MiB and failed at 216 KB) */
-    sd_state = sdp.n ? (sdp.ok ? 1u : 4u) : 3u;
+    const uint32_t tag = (uint32_t)(uintptr_t)&_tag_start, spanA = cold_bytes & ~4095u;      /* the file is the span: a read past its end fails */
+    sd_probe_run(&sdA, SD_SLOT_A, spanA, 4096u, tag, 1500u);
+    sd_probe_run(&sdB, SD_SLOT_B, SD_SPAN_B, 4096u, tag, 800u);
+    sd_probe_switch(&sdS, SD_SLOT_A, spanA, SD_SLOT_B, SD_SPAN_B, 4096u, tag, 1500u);
+    sd_state = 1u;
 }
-static void sd_line(char *s)
+static uint32_t avg100(const sd_probe_t *r) { return r->n ? (uint32_t)(((uint64_t)r->cycles * 100u) / ((uint64_t)r->n * (CLK_HZ / 1000u))) : 0u; }      /* mean ms per command x 100 */
+static void sd_value(char *s, uint32_t n, uint32_t kbps, uint32_t worst_cyc, uint32_t fail_at)
 {
     char *q = s;
-    if (sd_state == 1u || sd_state == 4u) { q = put_u(q, sdp.kbps); for (const char *p = " KB/S W"; *p; p++) *q++ = *p; q = put_u(q, sdp.worst_cyc / (CLK_HZ / 1000u)); *q++ = 'M'; *q++ = 'S'; *q++ = ' '; *q++ = 'N'; q = put_u(q, sdp.n); if (sd_state == 4u) { *q++ = ' '; *q++ = 'F'; q = put_u(q, sdp.fail_at / 1024u); } }
-    else { const char *p = sd_state == 2u ? "SD STOP PLAYBACK" : sd_state == 3u ? "SD READ FAILED" : "SD L1 TO RUN"; while (*p) *q++ = *p++; }
+    if (!n) { q = put_s(q, "READ FAILED"); *q = 0; return; }
+    q = put_u(q, kbps); q = put_s(q, " KB/S "); q = put_u(q, worst_cyc / (CLK_HZ / 1000u)); q = put_s(q, " MS N"); q = put_u(q, n);
+    if (fail_at) { q = put_s(q, " F"); q = put_u(q, fail_at / 1024u); }
     *q = 0;
+}
+static void sd_row(uint32_t y, const char *label, const char *value, uint32_t bad)
+{
+    gfx_rect(0, y, GFX_W, ROW_H, BG);
+    gfx_text(10, y + 2, label, DIM, BG);
+    gfx_text(GFX_W - 10 - gfx_text_width(value), y + 2, value, bad ? ACC : FG, BG);
+}
+static void sd_hist(uint32_t y, const char *label, const sd_probe_t *r)
+{
+    static const char *const hd[8] = { "<1", "<2", "<3", "<4", "<5", "<8", "<13", "13+" };
+    gfx_text(10, y, label, DIM, BG);
+    for (uint32_t k = 0; k < 8u; k++) {
+        char v[12]; put_u(v, r->hist[k > 7u ? 7u : k])[0] = 0;
+        gfx_text(10 + k * 46u, y + 18u, hd[k], DIM, BG);
+        gfx_text(10 + k * 46u, y + 36u, v, r->hist[k] ? FG : DIM, BG);
+    }
+}
+static void sd_page_draw(void)
+{
+    gfx_rect(0, 0, GFX_W, GFX_H, BG);
+    gfx_text(10, 6, "SD PROBE  4 KB COMMANDS", ACC, BG);
+    if (sd_state == 0u) gfx_text(10, 40, "L1 RUNS IT, NO TRACK PLAYING", DIM, BG);
+    else if (sd_state == 2u) gfx_text(10, 40, "STOP PLAYBACK FIRST", ACC, BG);
+    else {
+        char v[40];
+        const uint32_t p1k = sdA.p1_cyc ? (uint32_t)(((uint64_t)sdA.p1_n * 4096u * CLK_HZ) / ((uint64_t)sdA.p1_cyc * 1000u)) : 0u;
+        sd_value(v, sdA.p1_n, p1k, sdA.p1_worst, sdA.fail_at);      sd_row(34, "6 FIRST PASS", v, !sdA.p1_n);
+        sd_value(v, sdA.n, sdA.kbps, sdA.worst_cyc, sdA.fail_at);   sd_row(54, "6 ALL PASSES", v, !sdA.n || sdA.fail_at);
+        sd_value(v, sdB.n, sdB.kbps, sdB.worst_cyc, sdB.fail_at);   sd_row(74, "4 ALONE", v, !sdB.n || sdB.fail_at);
+        sd_value(v, sdS.n, sdS.kbps, sdS.worst_cyc, sdS.fail_at);   sd_row(94, "SWITCH 6/4", v, !sdS.n || sdS.fail_at);
+        if (sdA.n && sdB.n && sdS.n) {
+            const int32_t c = (int32_t)avg100(&sdS) - (int32_t)((avg100(&sdA) + avg100(&sdB)) / 2u);
+            char *q = v; if (c < 0) *q++ = '-'; else *q++ = '+';
+            const uint32_t m = (uint32_t)(c < 0 ? -c : c);
+            q = put_u(q, m / 100u); *q++ = '.'; *q++ = (char)('0' + (m / 10u) % 10u); *q++ = (char)('0' + m % 10u); q = put_s(q, " MS/CMD"); *q = 0;
+            sd_row(114, "SWITCH COST", v, 0);
+        }
+        sd_hist(148, "MS PER COMMAND, 6 ALL PASSES", &sdA);
+        sd_hist(206, "MS PER COMMAND, SWITCH 6/4", &sdS);
+    }
+    gfx_text(10, GFX_H - 20, "L1 RUN  B BACK", DIM, BG);
 }
 static uint8_t res[T_N]; static uint32_t val[T_N];
 static uint8_t state, cur, step, dirty = 1;               /* state 0 ready, 1 running, 2 done, 3 refused */
@@ -144,7 +195,8 @@ void check_page_exit(void) { if (state == 1u) finish(2u); }
 int check_page_key(uint32_t edge)
 {
     if (edge & KEY_X) { soak_cycle(); dirty = 1; return 0; }                                    /* X: the SDRAM soak, off / 16 k / 64 k / 128 k operations a second, beside whatever plays and draws */
-    if ((edge & KEY_L1) && state != 1u) { sd_run(); dirty = 1; return 0; }
+    if (sd_view) { if (edge & KEY_B) { sd_view = 0; gfx_rect(0, 0, GFX_W, GFX_H, BG); } else if (edge & KEY_L1) sd_run(); dirty = 1; return 0; }
+    if ((edge & KEY_L1) && state != 1u) { sd_view = 1; dirty = 1; return 0; }
     if ((edge & KEY_Y) && state != 1u) { for (uint32_t i = 0; i < T_N; i++) { res[i] = 0; val[i] = 0; } begin_test(T_NAMES); state = 2u; publish(); dirty = 1; return 0; }   /* Y: only the accented-name matrix (no track needed); the result is the NAME MATRIX row and Info NM RES A / B */
     if (edge & KEY_B) { if (state == 1u) { finish(2u); return 0; } return 1; }
     if ((edge & KEY_A) && state != 1u) {
@@ -180,6 +232,7 @@ void check_page_tick(void)
 }
 void check_page_draw(void)
 {
+    if (sd_view) { sd_page_draw(); dirty = 0; return; }
     gfx_rect(0, 0, GFX_W, 36, BG);
     gfx_text(10, 6, state == 1u ? "CHECK  RUNNING" : state == 2u ? "CHECK  DONE" : state == 3u ? "CHECK  PLAY A TRACK FIRST" : "CHECK  READY", ACC, BG);
     for (uint32_t i = 0; i < T_N; i++) {
@@ -190,7 +243,6 @@ void check_page_draw(void)
         gfx_text(10, y + 2, names[i], DIM, BG);
         gfx_text(GFX_W - 10 - gfx_text_width(v), y + 2, v, res[i] == 2u ? ACC : FG, BG);
     }
-    { char l[48]; sd_line(l); gfx_rect(0, 300, GFX_W, 16, BG); gfx_text(10, 300, l, sd_state == 3u ? ACC : DIM, BG); }
     gfx_rect(0, GFX_H - 44, GFX_W, 44, BG);
     { char s[40]; uint32_t n = 0; const char *p = "X SOAK L"; while (*p) s[n++] = *p++; s[n++] = (char)('0' + soak_level()); s[n++] = ' '; s[n++] = 'F'; const uint32_t f = soak_st.fails > 99u ? 99u : soak_st.fails; if (f > 9u) s[n++] = (char)('0' + f / 10u); s[n++] = (char)('0' + f % 10u); s[n++] = ' '; s[n++] = 'P'; s[n++] = (char)('0' + (soak_st.pass > 9u ? 9u : soak_st.pass)); s[n] = 0;
       gfx_text(10, GFX_H - 40, s, soak_st.fails ? ACC : DIM, BG); }
