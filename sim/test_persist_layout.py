@@ -71,11 +71,11 @@ with tempfile.TemporaryDirectory() as td:
     bad = agree(ref); check("the Python reference equals the firmware's C code: table, write order, unpack, pack, legacy detection and unpack, migration, resumed migration (500 random register files)", not bad, bad[:3])
     for m in ("shift", "mark"):
         r2 = reference(m); r2["exe"] = exe; check("mutant of the reference (%s) is caught" % ("a wrong shift" if m == "shift" else "no converted mark"), bool(agree(r2)))
-ia = {int(v["id"]): (int(v["address"], 16) - 0x20000000) // 4 for v in json.loads((ROOT / "dist/Cores/alfatreze.TAU/interact.json").read_text())["interact"]["variables"] if v.get("persist")}
-check("id -> word equals the addresses of dist/Cores/alfatreze.TAU/interact.json", all(pl.ID_TO_WORD[i] == w for i, w in ia.items()) and set(ia) <= set(pl.ID_TO_WORD), str(ia))
+ia = {int(v["id"]): (int(v["address"], 16) - 0x20000000) // 4 for v in json.loads((ROOT / "dist/Cores/alfatreze.Tau Gallery/interact.json").read_text())["interact"]["variables"] if v.get("persist")}
+check("id -> word equals the addresses of dist/Cores/alfatreze.Tau Gallery/interact.json", all(pl.ID_TO_WORD[i] == w for i, w in ia.items()) and set(ia) <= set(pl.ID_TO_WORD), str(ia))
 z = ROOT / "release/alfatreze.TAU_0.6.1_2026-10-21.zip"
 if z.exists():
-    old = {int(v["id"]): (int(v["address"], 16) - 0x20000000) // 4 for v in json.loads(zipfile.ZipFile(z).read("Cores/alfatreze.TAU/interact.json"))["interact"]["variables"] if v.get("persist")}
+    old = {int(v["id"]): (int(v["address"], 16) - 0x20000000) // 4 for v in json.loads(zipfile.ZipFile(z).read("Cores/alfatreze.Tau Gallery/interact.json"))["interact"]["variables"] if v.get("persist")}
     check("id -> word equals the addresses of the released v0.6.1 (ids 24-26 included)", all(pl.ID_TO_WORD[i] == w for i, w in old.items()), str(old))
 g = pl.golden()
 check("the committed golden vectors equal a fresh run", json.loads((ROOT / "docs/research/persist_layout/golden_vectors.json").read_text()) == json.loads(json.dumps(g)))

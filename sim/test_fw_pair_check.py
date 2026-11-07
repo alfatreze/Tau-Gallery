@@ -22,7 +22,7 @@ ok([a.split(",") for a in accepts] == want, "FW_ACCEPTS strings equal the VERSIO
 ok(consts["EXPECT_VERSION_192K_CLK66"] == c.tree_core_version(), "CORE_VERSION in tau_soc.v equals the 192K+CLK66 interlock constant")
 
 def pkg(td, blob):
-    d = Path(td) / "Assets/tau/common"; d.mkdir(parents=True); (d / "tau.rom").write_bytes(blob); return td
+    d = Path(td) / "Assets/tau_gallery/common"; d.mkdir(parents=True); (d / "tau.rom").write_bytes(blob); return td
 with tempfile.TemporaryDirectory() as t1, tempfile.TemporaryDirectory() as t2, tempfile.TemporaryDirectory() as t3, tempfile.TemporaryDirectory() as t4:
     good = b"\0" * 8 + b"TAUFWPAIR:4D50331A;" + b"\0"
     old = b"\0" * 8 + b"TAUFWPAIR:4D503317;" + b"\0"

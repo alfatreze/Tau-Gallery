@@ -40,7 +40,7 @@ def raises(fn, what, needle=""):
 RAW = bytes(range(256)) * 64                                   # stand-in raw RBF
 REVB = RAW.translate(tc.REV)
 
-REAL_INTERACT = json.loads((ROOT / "dist/Cores/alfatreze.TAU/interact.json").read_text())   # the shipped persist ids
+REAL_INTERACT = json.loads((ROOT / "dist/Cores/alfatreze.Tau Gallery/interact.json").read_text())   # the shipped persist ids
 
 def interact(ids=None):
     """The shipped interact.json; `ids` = {id: (name, max) or None} overrides or removes entries (an older release's view)."""
@@ -56,12 +56,12 @@ def interact(ids=None):
         v["name"], v["graphical"]["max"] = ov
     return j
 
-DATA = (ROOT / "dist/Cores/alfatreze.TAU/data.json").read_text()      # the shipped slot map
+DATA = (ROOT / "dist/Cores/alfatreze.Tau Gallery/data.json").read_text()      # the shipped slot map
 
-PRESETS = {"Assets/tau/common/tau-presets/1/index.tpi": b"TPRI-factory", "Assets/tau/common/tau-presets/1/p0.tpr": b"TPRS-factory"}      # the factory meter presets a Stable zip ships (B-982)
+PRESETS = {"Assets/tau_gallery/common/tau-presets/1/index.tpi": b"TPRI-factory", "Assets/tau_gallery/common/tau-presets/1/p0.tpr": b"TPRS-factory"}      # the factory meter presets a Stable zip ships (B-982)
 def make(d, core, plat, rom, version="0.6.0", date="2026-10-08", bit=REVB, ids=None, extra=None, data=DATA):
     author, short = core.split(".")
-    if core == "alfatreze.TAU" and plat == "tau": extra = {**PRESETS, **(extra or {})}
+    if core == "alfatreze.Tau Gallery" and plat == "tau_gallery": extra = {**PRESETS, **(extra or {})}
     p = d / f"{core}_{version}_{date}.zip"
     with zipfile.ZipFile(p, "w") as z:
         z.writestr = (lambda w: (lambda name, data: w(zipfile.ZipInfo(name, (2026, 1, 1, 0, 0, 0)), data)))(z.writestr)   # fixed time: same inputs, same zip hash
@@ -87,9 +87,9 @@ with tempfile.TemporaryDirectory() as t:
     old, new = t / "old", t / "new"
     old.mkdir(); new.mkdir()
     # alpha.4's view: Repeat had a smaller range, and an id 18 that this release no longer persists
-    prev = [make(old, "alfatreze.TAU", "tau", ROM_N, date="2026-10-07", ids={12: ("Repeat", 1), 18: ("Gone", 1)}),
+    prev = [make(old, "alfatreze.Tau Gallery", "tau_gallery", ROM_N, date="2026-10-07", ids={12: ("Repeat", 1), 18: ("Gone", 1)}),
             make(old, "alfatreze.TAU_DIAGNOSTIC", "tau_diagnostic", ROM_D, date="2026-10-07")]
-    zips = [make(new, "alfatreze.TAU", "tau", ROM_N), make(new, "alfatreze.TAU_DIAGNOSTIC", "tau_diagnostic", ROM_D)]
+    zips = [make(new, "alfatreze.Tau Gallery", "tau_gallery", ROM_N), make(new, "alfatreze.TAU_DIAGNOSTIC", "tau_diagnostic", ROM_D)]
     rbf = t / "ap_core.rbf"; rbf.write_bytes(RAW)
     (t / "ap_core.rbf.json").write_text(fitman(["TAU_RAM_192K", "TAU_CLK66", "TAU_HALCYON", "TAU_LPC", "TAU_POLY"], tc.sha(RAW)))
     cl = t / "CHANGELOG.md"
@@ -113,7 +113,7 @@ with tempfile.TemporaryDirectory() as t:
     check(len(doc["packages"]) == 2, "one packages entry per zip")
     for p, z in zip(doc["packages"], zips):
         with zipfile.ZipFile(z) as f:
-            core = p["core_id"]; plat = "tau" if core == "alfatreze.TAU" else "tau_diagnostic"
+            core = p["core_id"]; plat = "tau_gallery" if core == "alfatreze.Tau Gallery" else "tau_diagnostic"
             rom = f.read(f"Assets/{plat}/{core}/tau.rom")
             ok = (p["zip"] == z.name and p["zip_sha256"] == tc.sha(z.read_bytes())
                   and p["bitstream_sha256"] == tc.sha(f.read(f"Cores/{core}/bitstream.rbf_r"))
@@ -146,7 +146,7 @@ with tempfile.TemporaryDirectory() as t:
     taua = next(e for e in doc["packages"][0]["layout"] if e["path"].endswith("tau-assets.bin"))
     check(taua["format"].get("preserve_unknown_sections") is True, "TAUA format tells writers to carry unknown sections (H1)")
     tdbe = next(e for e in doc["packages"][0]["layout"] if e["path"].endswith("tau-library.tdb"))
-    check(tdbe["format"].get("root") == "/Assets/tau/common/", "library index format carries its root (M8)")
+    check(tdbe["format"].get("root") == "/Assets/tau_gallery/common/", "library index format carries its root (M8)")
     supported = {"$schema", "$id", "title", "description", "type", "required", "properties", "items", "const", "enum", "pattern", "minimum", "additionalProperties"}
     def kw_used(node):
         out = set(node)
@@ -179,13 +179,13 @@ with tempfile.TemporaryDirectory() as t:
             files = {n: tc.sha(f.read(n)) for n in f.namelist()}
         shipped = {k: e["sha256"] for k, e in lay.items() if e["role"] in ("owned", "shared")}
         check(shipped == files, f"{p['core_id']}: owned+shared entries are exactly the zip's files with their hashes")
-        plat = "tau" if p["core_id"] == "alfatreze.TAU" else "tau_diagnostic"
+        plat = "tau_gallery" if p["core_id"] == "alfatreze.Tau Gallery" else "tau_diagnostic"
         c = f"Assets/{plat}/common/"
         cs = f"Assets/{plat}/{p['core_id']}/"
         check(lay[cs + "tau.rom"]["role"] == "owned" and lay[cs + "tau.rom"]["required"] and lay[cs + "tau.rom"]["slot"] == 1
               and lay[cs + "tau-cold.bin"]["slot"] == 6 and lay[cs + "tau-loading.bin"]["slot"] == 4, "tau.rom, cold image, splash: owned, core-specific, their slots (H4)")
         check(lay[f"Platforms/{plat}.json"]["role"] == "shared", "platform files are shared")
-        if p["core_id"] == "alfatreze.TAU":
+        if p["core_id"] == "alfatreze.Tau Gallery":
             check(all(lay[c + "tau-presets/1/" + n]["role"] == "shared" and not lay[c + "tau-presets/1/" + n]["required"] and lay[c + "tau-presets/1/" + n]["slot"] is None for n in ("index.tpi", "p0.tpr")),
                   "the factory meter presets (tau-presets/) are shared: seeded when missing, an edited copy is only a warning (B-982)")
         check(lay[c + "tau-library.tdb"]["role"] == "generated" and lay[c + "tau-library.tdb"]["format"] == {"name": "tau-library", "version": 1, "root": "/" + c}, "library index: generated, format v1")
@@ -198,19 +198,19 @@ with tempfile.TemporaryDirectory() as t:
     card = t / "card"; card.mkdir()
     with zipfile.ZipFile(zips[0]) as f:
         f.extractall(card)
-    (card / "Assets/tau/common").mkdir(parents=True, exist_ok=True)       # a real card always has the shared media folder
+    (card / "Assets/tau_gallery/common").mkdir(parents=True, exist_ok=True)       # a real card always has the shared media folder
     res = tc.check_card(doc, card)
     check(res == [], f"unpacked install of the normal zip checks clean ({res})")
     check(tc.check_card(doc, card, "alfatreze.TAU_DIAGNOSTIC") != [], "the Diagnostic package is reported missing on a normal-only card")
-    rom = card / "Assets/tau/alfatreze.TAU/tau.rom"; good = rom.read_bytes()
+    rom = card / "Assets/tau_gallery/alfatreze.Tau Gallery/tau.rom"; good = rom.read_bytes()
     rom.write_bytes(good[:-1] + b"X")
     check(any(l == "error" and "tau.rom differs" in m for l, m in tc.check_card(doc, card)), "card: changed ROM is an error")
     rom.unlink()
     check(any(l == "error" and "tau.rom is missing" in m for l, m in tc.check_card(doc, card)), "card: missing ROM is an error")
     rom.write_bytes(good)
-    opt = [e for pk in doc["packages"] if pk["core_id"] == "alfatreze.TAU" for e in pk["layout"] if e["role"] == "owned" and not e["required"] and (card / e["path"]).is_file()]
+    opt = [e for pk in doc["packages"] if pk["core_id"] == "alfatreze.Tau Gallery" for e in pk["layout"] if e["role"] == "owned" and not e["required"] and (card / e["path"]).is_file()]
     check(bool(opt), "the test package has an optional owned file")
-    ess = [e for pk in doc["packages"] if pk["core_id"] == "alfatreze.TAU" for e in pk["layout"] if e["role"] == "owned" and e["slot"] is None and (card / e["path"]).is_file()]
+    ess = [e for pk in doc["packages"] if pk["core_id"] == "alfatreze.Tau Gallery" for e in pk["layout"] if e["role"] == "owned" and e["slot"] is None and (card / e["path"]).is_file()]
     check(bool(ess) and all(e["required"] for e in ess), "every owned file with no data slot (core.json, data.json, the bitstream...) is required (R-011)")
     for e in ess:
         if e["path"].endswith("core.json"):
@@ -221,14 +221,14 @@ with tempfile.TemporaryDirectory() as t:
         of = card / opt[0]["path"]; ob = of.read_bytes(); of.unlink()
         check([l for l, m in tc.check_card(doc, card)] == ["warn"], "card: a missing OPTIONAL owned file is a warning, not an error (Q-001)")
         of.write_bytes(ob)
-    (card / "Platforms/tau.json").write_text('{"other": 1}')
+    (card / "Platforms/tau_gallery.json").write_text('{"other": 1}')
     check([l for l, m in tc.check_card(doc, card)] == ["warn"], "card: a shared file from another release is only a warning")
     with zipfile.ZipFile(zips[0]) as f:
-        (card / "Platforms/tau.json").write_bytes(f.read("Platforms/tau.json"))
-    (card / "Cores/alfatreze.TAU/old.bin").write_bytes(b"x")
+        (card / "Platforms/tau_gallery.json").write_bytes(f.read("Platforms/tau_gallery.json"))
+    (card / "Cores/alfatreze.Tau Gallery/old.bin").write_bytes(b"x")
     check(any(l == "warn" and "stale" in m for l, m in tc.check_card(doc, card)), "card: a stray file in the core folder is a stale-file warning")
-    (card / "Cores/alfatreze.TAU/old.bin").unlink()
-    tdb = card / "Assets/tau/common/tau-library.tdb"
+    (card / "Cores/alfatreze.Tau Gallery/old.bin").unlink()
+    tdb = card / "Assets/tau_gallery/common/tau-library.tdb"
     tdb.write_bytes((0x42494C54).to_bytes(4, "little") + (2).to_bytes(2, "little") + (2).to_bytes(2, "little") + bytes(120))
     check(any("reader version 2" in m for l, m in tc.check_card(doc, card)), "card: an index needing reader version 2 is refused")
     tdb.write_bytes((0x42494C54).to_bytes(4, "little") + (1).to_bytes(2, "little") + (1).to_bytes(2, "little") + bytes(120))
@@ -238,56 +238,56 @@ with tempfile.TemporaryDirectory() as t:
     check(any("index root is /Assets/tau_other/common/" in m for l, m in tc.check_card(doc, card)), "card: an index built for another platform's root is refused (B-136, review M8)")
     tdb.write_bytes(tau_library.build_index(ent))
     check(tc.check_card(doc, card) == [], "card: a real v1 index with this core's root is accepted")
-    asb = card / "Assets/tau/common/tau-assets.bin"
+    asb = card / "Assets/tau_gallery/common/tau-assets.bin"
     asb.write_bytes(b"TAUA" + (2).to_bytes(2, "little") + bytes(6))
     check(any("TAUA version 2" in m for l, m in tc.check_card(doc, card)), "card: a TAUA v2 file is refused")
     asb.write_bytes(b"TAUA" + (1).to_bytes(2, "little") + bytes(70000))
     check(any("at most 65536" in m for l, m in tc.check_card(doc, card)), "card: a TAUA file over the read limit is refused")
     asb.unlink()
-    art = card / "Assets/tau/common/Album/tau-art"; art.mkdir(parents=True)
+    art = card / "Assets/tau_gallery/common/Album/tau-art"; art.mkdir(parents=True)
     (art / "cover_128.pal256.timg").write_bytes(b"JPEG....")
     check(any("not a TIM1 image" in m for l, m in tc.check_card(doc, card)), "card: a cover that is not TIM1 is refused")
     (art / "cover_128.pal256.timg").write_bytes(b"TIM1" + bytes(12))
-    (card / "Settings/alfatreze.TAU/Interact").mkdir(parents=True)
-    (card / "Settings/alfatreze.TAU/Interact/interact_persist.json").write_text("{broken")
+    (card / "Settings/alfatreze.Tau Gallery/Interact").mkdir(parents=True)
+    (card / "Settings/alfatreze.Tau Gallery/Interact/interact_persist.json").write_text("{broken")
     check(any("not valid JSON" in m for l, m in tc.check_card(doc, card)), "card: a corrupt settings file is reported")
-    (card / "Settings/alfatreze.TAU/Interact/interact_persist.json").write_text("{}")
+    (card / "Settings/alfatreze.Tau Gallery/Interact/interact_persist.json").write_text("{}")
     check(tc.check_card(doc, card) == [], "card: TIM1 cover and valid settings check clean")
 
     # 2d. layout refusals at build time
     cfg = t / "omega.json"
-    cfg.write_text(json.dumps({"min_omega": "0.3.0", "obsolete": [{"core_id": "alfatreze.TAU", "path": "Assets/tau/alfatreze.TAU/TAU.json"},
+    cfg.write_text(json.dumps({"min_omega": "0.3.0", "obsolete": [{"core_id": "alfatreze.Tau Gallery", "path": "Assets/tau_gallery/alfatreze.Tau Gallery/TAU.json"},
                                                                 {"core_id": "alfatreze.TAU_DIAGNOSTIC", "path": "Assets/tau_diagnostic/x/old.json"}]}))
     lay = tc.build(**dict(kw, omega_cfg=cfg))["packages"][0]["layout"]
-    check(any(e["role"] == "obsolete" and e["path"] == "Assets/tau/alfatreze.TAU/TAU.json" for e in lay), "obsolete paths from the config appear in the layout")
+    check(any(e["role"] == "obsolete" and e["path"] == "Assets/tau_gallery/alfatreze.Tau Gallery/TAU.json" for e in lay), "obsolete paths from the config appear in the layout")
     check(not any(e["path"] == "Assets/tau_diagnostic/x/old.json" for e in lay), "an obsolete path of another core is not in this core's layout")
     real = json.loads((ROOT / "tools/omega_compat.json").read_text())["obsolete"]
-    check({"core_id": "alfatreze.TAU", "path": "Assets/tau/alfatreze.TAU/TAU.json"} in real, "the retired TAU.json is listed obsolete in tools/omega_compat.json")
-    check(not (ROOT / "dist/Assets/tau/alfatreze.TAU/TAU.json").exists(), "dist/ no longer ships TAU.json")
+    check({"core_id": "alfatreze.Tau Gallery", "path": "Assets/tau_gallery/alfatreze.Tau Gallery/TAU.json"} in real, "the retired TAU.json is listed obsolete in tools/omega_compat.json")
+    check(not (ROOT / "dist/Assets/tau_gallery/alfatreze.Tau Gallery/TAU.json").exists(), "dist/ no longer ships TAU.json")
 
     # 2e. the installer's match test: a manifest applies only to the exact package it describes
     pk = t / "pkg"; pk.mkdir()
     with zipfile.ZipFile(zips[0]) as f:
         f.extractall(pk)
-    ent, why = tc.package_match(doc, pk, "alfatreze.TAU")
+    ent, why = tc.package_match(doc, pk, "alfatreze.Tau Gallery")
     check(ent is not None and why == [], "package_match: the unpacked zip matches its manifest entry")
-    (pk / "Assets/tau/alfatreze.TAU/tau.rom").write_bytes(b"other")
-    check(tc.package_match(doc, pk, "alfatreze.TAU")[0] is None, "package_match: a different ROM does not match")
+    (pk / "Assets/tau_gallery/alfatreze.Tau Gallery/tau.rom").write_bytes(b"other")
+    check(tc.package_match(doc, pk, "alfatreze.Tau Gallery")[0] is None, "package_match: a different ROM does not match")
     with zipfile.ZipFile(zips[0]) as f:
-        (pk / "Assets/tau/alfatreze.TAU/tau.rom").write_bytes(f.read("Assets/tau/alfatreze.TAU/tau.rom"))
-    (pk / "Cores/alfatreze.TAU/extra.txt").write_text("x")
-    check(tc.package_match(doc, pk, "alfatreze.TAU")[0] is None, "package_match: an unlisted file in the core folder does not match")
+        (pk / "Assets/tau_gallery/alfatreze.Tau Gallery/tau.rom").write_bytes(f.read("Assets/tau_gallery/alfatreze.Tau Gallery/tau.rom"))
+    (pk / "Cores/alfatreze.Tau Gallery/extra.txt").write_text("x")
+    check(tc.package_match(doc, pk, "alfatreze.Tau Gallery")[0] is None, "package_match: an unlisted file in the core folder does not match")
     check(tc.package_match(doc, pk, "alfatreze.TAU_X")[0] is None, "package_match: a core the release does not have does not match")
-    (card / "Assets/tau/alfatreze.TAU").mkdir(parents=True, exist_ok=True); (card / "Assets/tau/alfatreze.TAU/TAU.json").write_text("{}")
+    (card / "Assets/tau_gallery/alfatreze.Tau Gallery").mkdir(parents=True, exist_ok=True); (card / "Assets/tau_gallery/alfatreze.Tau Gallery/TAU.json").write_text("{}")
     check(any(l == "warn" and "obsolete" in m for l, m in tc.check_card(tc.build(**dict(kw, omega_cfg=cfg)), card)), "card: an obsolete file still present is reported")
-    zx = make(new, "alfatreze.TAU", "tau", ROM_N, extra={"Assets/tau/alfatreze.TAU/TAU.json": "{}"})
+    zx = make(new, "alfatreze.Tau Gallery", "tau_gallery", ROM_N, extra={"Assets/tau_gallery/alfatreze.Tau Gallery/TAU.json": "{}"})
     raises(lambda: tc.build(**dict(kw, omega_cfg=cfg)), "a path listed obsolete that the release still ships", "obsolete")
-    zx = make(new, "alfatreze.TAU", "tau", ROM_N, extra={"README.txt": "hi"})
+    zx = make(new, "alfatreze.Tau Gallery", "tau_gallery", ROM_N, extra={"README.txt": "hi"})
     raises(lambda: tc.build(**kw), "a zip file with no layout role", "no layout role")
     dj = json.loads(DATA); dj["data"]["data_slots"].append({"name": "New", "id": 9, "deferload": True, "parameters": "0x0", "filename": "tau-new.bin"})
-    make(new, "alfatreze.TAU", "tau", ROM_N, data=json.dumps(dj))
+    make(new, "alfatreze.Tau Gallery", "tau_gallery", ROM_N, data=json.dumps(dj))
     raises(lambda: tc.build(**kw), "a data slot naming a file nobody ships or generates", "NOT_SHIPPED")
-    make(new, "alfatreze.TAU", "tau", ROM_N)
+    make(new, "alfatreze.Tau Gallery", "tau_gallery", ROM_N)
     hand = json.loads(out.read_text()); hand["packages"][0]["layout"][0]["role"] = "bogus"
     (t / "hand2.json").write_text(json.dumps(hand))
     check(any(e.startswith("schema:") for e in tc.verify(t / "hand2.json", **kw)), "verify reports a schema violation")
@@ -300,9 +300,9 @@ with tempfile.TemporaryDirectory() as t:
     (t / "ap_core.rbf.json").write_text(fitman(["TAU_RAM_192K", "TAU_CLK66", "TAU_HALCYON"], tc.sha(RAW)))
     raises(lambda: tc.build(**kw), "a ROM needing LPC on a bitstream built without TAU_LPC (M4)", "NO UNIT")
     (t / "ap_core.rbf.json").write_text(fitman(["TAU_RAM_192K", "TAU_CLK66", "TAU_HALCYON", "TAU_LPC", "TAU_POLY"], tc.sha(RAW)))
-    make(new, "alfatreze.TAU", "tau", ROM_N, extra={"Assets/tau/common/tau-assets.bin": b"TAUA"})
+    make(new, "alfatreze.Tau Gallery", "tau_gallery", ROM_N, extra={"Assets/tau_gallery/common/tau-assets.bin": b"TAUA"})
     raises(lambda: tc.build(**kw), "a zip shipping the user's tau-assets.bin (M6)", "overwrite the user")
-    make(new, "alfatreze.TAU", "tau", ROM_N)
+    make(new, "alfatreze.Tau Gallery", "tau_gallery", ROM_N)
     check(tc.verify(out, **kw) == [], "after the refusals the original inputs verify again")
 
     # 2g. step 3 of the review: the persist registry (H2) and the previous release (M2)
@@ -336,96 +336,96 @@ with tempfile.TemporaryDirectory() as t:
     dd = json.loads(cp.read_text())
     check(cp == dev / "tau-compat.json" and dd["release"] == "v0.6.0-dev.412" and dd["prerelease"] is True and dd["previous_release"] is None,
           f"dev manifest written next to the package as {dd['release']}")
-    z1 = (dev / f"alfatreze.TAU_0.6.0_dev.zip").read_bytes()
+    z1 = (dev / f"alfatreze.Tau Gallery_0.6.0_dev.zip").read_bytes()
     tc.build_dev(dev / "pocket", 412, rbf=rbf)
-    check(z1 == (dev / "alfatreze.TAU_0.6.0_dev.zip").read_bytes(), "the dev zip is deterministic (same package, same bytes)")
-    check(tc.package_match(dd, dev / "pocket", "alfatreze.TAU")[0] is not None, "the installer accepts the dev manifest for its own package")
+    check(z1 == (dev / "alfatreze.Tau Gallery_0.6.0_dev.zip").read_bytes(), "the dev zip is deterministic (same package, same bytes)")
+    check(tc.package_match(dd, dev / "pocket", "alfatreze.Tau Gallery")[0] is not None, "the installer accepts the dev manifest for its own package")
     check(tc.dev_release_tag("0.6.0", "0.5.0-alpha.1") == "v0.6.0-dev.0.5.0.alpha.1" and tc.tag_key("v0.6.0-dev.412") < tc.tag_key("v0.6.0-preview.1"),
           "dev tags are tag-safe and sort before previews")
 
     # 2i. H4: build-bound files are core-specific
-    legacy = {"Assets/tau/common/tau.rom": ROM_N}
-    make(new, "alfatreze.TAU", "tau", ROM_N, extra=legacy)
+    legacy = {"Assets/tau_gallery/common/tau.rom": ROM_N}
+    make(new, "alfatreze.Tau Gallery", "tau_gallery", ROM_N, extra=legacy)
     raises(lambda: tc.build(**kw), "a zip shipping tau.rom in the platform-wide common/ folder", "common/ folder")
     dj = json.loads(DATA); [sl.update(parameters="0x108") for sl in dj["data"]["data_slots"] if sl["id"] == 1]
-    make(new, "alfatreze.TAU", "tau", ROM_N, data=json.dumps(dj))
+    make(new, "alfatreze.Tau Gallery", "tau_gallery", ROM_N, data=json.dumps(dj))
     raises(lambda: tc.build(**kw), "a build-bound data slot without the core-specific bit", "not core-specific")
-    make(new, "alfatreze.TAU", "tau", ROM_N)
+    make(new, "alfatreze.Tau Gallery", "tau_gallery", ROM_N)
     lay = {e["path"]: e for e in doc["packages"][0]["layout"]}
-    check(all(lay.get(f"Assets/tau/common/{n}", {}).get("role") == "obsolete" for n in ("tau.rom", "tau-cold.bin", "tau-loading.bin")),
+    check(all(lay.get(f"Assets/tau_gallery/common/{n}", {}).get("role") == "obsolete" for n in ("tau.rom", "tau-cold.bin", "tau-loading.bin")),
           "the old common/ copies are listed obsolete for the normal core")
     c2 = t / "card2"
-    for core, params in (("alfatreze.TAU", "0x10A"), ("alfatreze.TAU_OLD", "0x108")):
+    for core, params in (("alfatreze.Tau Gallery", "0x10A"), ("alfatreze.TAU_OLD", "0x108")):
         (c2 / "Cores" / core).mkdir(parents=True)
-        (c2 / "Cores" / core / "core.json").write_text(json.dumps({"core": {"metadata": {"platform_ids": ["tau"]}}}))
+        (c2 / "Cores" / core / "core.json").write_text(json.dumps({"core": {"metadata": {"platform_ids": ["tau_gallery"]}}}))
         (c2 / "Cores" / core / "data.json").write_text(json.dumps({"data": {"data_slots": [{"id": 1, "filename": "tau.rom", "parameters": params}]}}))
-    check(tc.still_read_by_other_core(c2, "Assets/tau/common/tau.rom", "alfatreze.TAU"), "an old-layout core on the same platform still reads common/tau.rom")
+    check(tc.still_read_by_other_core(c2, "Assets/tau_gallery/common/tau.rom", "alfatreze.Tau Gallery"), "an old-layout core on the same platform still reads common/tau.rom")
     (c2 / "Cores/alfatreze.TAU_OLD/data.json").write_text(json.dumps({"data": {"data_slots": [{"id": 1, "filename": "tau.rom", "parameters": "0x10A"}]}}))
-    check(not tc.still_read_by_other_core(c2, "Assets/tau/common/tau.rom", "alfatreze.TAU"), "nobody else reads it once every core is core-specific")
+    check(not tc.still_read_by_other_core(c2, "Assets/tau_gallery/common/tau.rom", "alfatreze.Tau Gallery"), "nobody else reads it once every core is core-specific")
     check(tc.verify(out, **kw) == [], "after the H4 refusals the original inputs verify again")
 
     # 2j. the full version (owner, 2026-10-08): the ROM's TAUVER stamp must agree with core.json
     tv_field = b"TAUVER:0.6.0-dev.9+abc1234" + b"\0" * (48 - 26)
-    make(new, "alfatreze.TAU", "tau", ROM_N + tv_field)
+    make(new, "alfatreze.Tau Gallery", "tau_gallery", ROM_N + tv_field)
     raises(lambda: tc.build(**kw), "a ROM stamped with another version than core.json", "would disagree")
-    make(new, "alfatreze.TAU", "tau", ROM_N)
+    make(new, "alfatreze.Tau Gallery", "tau_gallery", ROM_N)
     check(all(p["rom_version"] is None for p in doc["packages"]), "rom_version is null for a ROM without the field")
 
     # 2k. release channels (RELEASE_SYSTEM_SPEC section 4): names, predecessors, replaces, retarget
     import tau_layout as tl
     check([tl.channel_of(v) for v in ("v0.7.0", "0.7.0-preview.2", "v0.7.0-rc.1", "0.6.0-alpha.5", "0.7.0-dev.385")]
           == ["stable", "preview", "preview", "preview", "dev"], "channel from the version: stable / preview (preview, rc, old alpha) / dev")
-    check(tl.zip_name("alfatreze.TAU Preview Diagnostics", "0.7.0-preview.2", "2026-11-02") == "alfatreze.TAU_Preview_Diagnostics_0.7.0-preview.2_2026-11-02.zip",
+    check(tl.zip_name("alfatreze.Tau Gallery Preview Diagnostics", "0.7.0-preview.2", "2026-11-02") == "alfatreze.Tau_Gallery_Preview_Diagnostics_0.7.0-preview.2_2026-11-02.zip",
           "zip names keep Analogue's pattern with spaces as _")
     chz = t / "chz"; chz.mkdir()
-    dz = make(chz, "alfatreze.TAU Diagnostics", "tau", ROM_D)
+    dz = make(chz, "alfatreze.Tau Gallery Diagnostics", "tau_gallery", ROM_D)
     dd = tc.build(**dict(kw, zips=[zips[0], dz], previous=prev, rbf=None, bitstream_version="4D50331A"))
     pk = {p["core_id"]: p for p in dd["packages"]}
-    check(pk["alfatreze.TAU Diagnostics"]["replaces"] == ["alfatreze.TAU_DIAGNOSTIC"]
-          and pk["alfatreze.TAU"]["replaces"] == ["alfatreze.TAU_DIAGNOSTIC", "alfatreze.TAU Preview", "alfatreze.TAU Preview Diagnostics"],
+    check(pk["alfatreze.Tau Gallery Diagnostics"]["replaces"] == []
+          and pk["alfatreze.Tau Gallery"]["replaces"] == ["alfatreze.Tau Gallery Preview", "alfatreze.Tau Gallery Preview Diagnostics"],
           "TAU Diagnostics names the old TAU_DIAGNOSTIC as replaced; TAU names the old diagnostics core and the Preview cores, but not the Diagnostics core the same release ships")
-    check(tl.REPLACES["alfatreze.TAU Preview"] == ["alfatreze.TAU Preview Diagnostics"], "TAU Preview replaces only its own diagnostics core (a Preview never supersedes the Stable)")
+    check(tl.REPLACES["alfatreze.Tau Gallery Preview"] == ["alfatreze.Tau Gallery Preview Diagnostics"], "TAU Preview replaces only its own diagnostics core (a Preview never supersedes the Stable)")
     check(dd["requires_omega"]["persist_ids_changed"] == [10, 11, 12, 15, 16, 18, 20, 21, 22, 23, 27, 28, 29, 30, 31, 32, 33], "a renamed core is compared with its predecessor's previous zip")
-    rt = tl.retarget(ROOT / "dist", t / "rt", "alfatreze.TAU", "alfatreze.TAU Preview", "preview")
-    rcj = json.loads((rt / "Cores/alfatreze.TAU Preview/core.json").read_text())["core"]["metadata"]
-    rdj = {sl["id"]: sl["parameters"] for sl in json.loads((rt / "Cores/alfatreze.TAU Preview/data.json").read_text())["data"]["data_slots"]}
-    check(rcj["shortname"] == "TAU Preview" and rcj["platform_ids"] == ["tau_preview", "tau"]
-          and (rt / "Assets/tau_preview/alfatreze.TAU Preview/tau.rom").read_bytes() == (ROOT / "dist/Assets/tau/alfatreze.TAU/tau.rom").read_bytes()
-          and json.loads((rt / "Platforms/tau_preview.json").read_text())["platform"]["name"] == "TAU Preview"
+    rt = tl.retarget(ROOT / "dist", t / "rt", "alfatreze.Tau Gallery", "alfatreze.Tau Gallery Preview", "preview")
+    rcj = json.loads((rt / "Cores/alfatreze.Tau Gallery Preview/core.json").read_text())["core"]["metadata"]
+    rdj = {sl["id"]: sl["parameters"] for sl in json.loads((rt / "Cores/alfatreze.Tau Gallery Preview/data.json").read_text())["data"]["data_slots"]}
+    check(rcj["shortname"] == "Tau Gallery Preview" and rcj["platform_ids"] == ["tau_gallery_pre", "tau_gallery"]
+          and (rt / "Assets/tau_gallery_pre/alfatreze.Tau Gallery Preview/tau.rom").read_bytes() == (ROOT / "dist/Assets/tau_gallery/alfatreze.Tau Gallery/tau.rom").read_bytes()
+          and json.loads((rt / "Platforms/tau_gallery_pre.json").read_text())["platform"]["name"] == "Tau Gallery Preview"
           and rdj[5] == "0x1000000" and rdj[8] == "0x1000000" and rdj[1] == "0x10A",
-          "retarget: dist as 'TAU Preview' on tau_preview + tau, build files moved, shared slots read TAU's media")
+          "retarget: dist as 'TAU Preview' on tau_gallery_pre + tau, build files moved, shared slots read TAU's media")
 
     # 2l. the core's own meter packs (data slot 9, tau-packs.bin): owned, core-specific, in the layout with its slot; in the common/ folder it is refused like the ROM
     dj9 = json.loads(DATA); dj9["data"]["data_slots"].append({"name": "Meter packs", "id": 9, "required": False, "deferload": True, "parameters": "0x2", "filename": "tau-packs.bin"})
     chp = t / "chp"; chp.mkdir()
-    zp = make(chp, "alfatreze.TAU", "tau", ROM_N, data=json.dumps(dj9), extra={"Assets/tau/alfatreze.TAU/tau-packs.bin": b"TPKB" + bytes(40)})
+    zp = make(chp, "alfatreze.Tau Gallery", "tau_gallery", ROM_N, data=json.dumps(dj9), extra={"Assets/tau_gallery/alfatreze.Tau Gallery/tau-packs.bin": b"TPKB" + bytes(40)})
     dp = tc.build(**dict(kw, zips=[zp], previous=prev[:1], rbf=None, bitstream_version="4D50331A"))
-    check(dp["packages"][0]["replaces"] == ["alfatreze.TAU_DIAGNOSTIC", "alfatreze.TAU Diagnostics", "alfatreze.TAU Preview", "alfatreze.TAU Preview Diagnostics"],
+    check(dp["packages"][0]["replaces"] == ["alfatreze.Tau Gallery Diagnostics", "alfatreze.Tau Gallery Preview", "alfatreze.Tau Gallery Preview Diagnostics"],
           "a Stable TAU release that ships only TAU (Player 2) names every superseded core in `replaces`")
     lp = {e["path"]: e for e in dp["packages"][0]["layout"]}
-    check(lp["Assets/tau/alfatreze.TAU/tau-packs.bin"]["role"] == "owned" and lp["Assets/tau/alfatreze.TAU/tau-packs.bin"]["slot"] == 9 and not lp["Assets/tau/alfatreze.TAU/tau-packs.bin"]["required"],
+    check(lp["Assets/tau_gallery/alfatreze.Tau Gallery/tau-packs.bin"]["role"] == "owned" and lp["Assets/tau_gallery/alfatreze.Tau Gallery/tau-packs.bin"]["slot"] == 9 and not lp["Assets/tau_gallery/alfatreze.Tau Gallery/tau-packs.bin"]["required"],
           "tau-packs.bin: owned by the core, in its own folder, data slot 9, optional")
     chq = t / "chq"; chq.mkdir()
-    zq = make(chq, "alfatreze.TAU", "tau", ROM_N, data=json.dumps(dj9), extra={"Assets/tau/common/tau-packs.bin": b"TPKB" + bytes(40)})
+    zq = make(chq, "alfatreze.Tau Gallery", "tau_gallery", ROM_N, data=json.dumps(dj9), extra={"Assets/tau_gallery/common/tau-packs.bin": b"TPKB" + bytes(40)})
     raises(lambda: tc.build(**dict(kw, zips=[zq], previous=prev[:1], rbf=None, bitstream_version="4D50331A")), "tau-packs.bin in the platform-wide common/ folder", "build-bound")
     dj9b = json.loads(DATA); dj9b["data"]["data_slots"].append({"name": "Meter packs", "id": 9, "required": False, "deferload": True, "parameters": "0x0", "filename": "tau-packs.bin"})
     chr_ = t / "chr"; chr_.mkdir()
-    zr = make(chr_, "alfatreze.TAU", "tau", ROM_N, data=json.dumps(dj9b), extra={"Assets/tau/alfatreze.TAU/tau-packs.bin": b"TPKB" + bytes(40)})
+    zr = make(chr_, "alfatreze.Tau Gallery", "tau_gallery", ROM_N, data=json.dumps(dj9b), extra={"Assets/tau_gallery/alfatreze.Tau Gallery/tau-packs.bin": b"TPKB" + bytes(40)})
     raises(lambda: tc.build(**dict(kw, zips=[zr], previous=prev[:1], rbf=None, bitstream_version="4D50331A")), "tau-packs.bin's slot not core-specific", "build-bound")
 
     # 3. mutations
     mrom = bytearray(ROM_N); mrom[3] ^= 1
-    make(new, "alfatreze.TAU", "tau", bytes(mrom))                       # rebuild the normal zip with one ROM byte changed
+    make(new, "alfatreze.Tau Gallery", "tau_gallery", bytes(mrom))                       # rebuild the normal zip with one ROM byte changed
     errs = tc.verify(out, **kw)
     check(any("rom_sha256" in e for e in errs) and any("zip_sha256" in e for e in errs), f"one ROM byte changed is caught ({len(errs)} differences)")
-    make(new, "alfatreze.TAU", "tau", ROM_N)                             # restore
+    make(new, "alfatreze.Tau Gallery", "tau_gallery", ROM_N)                             # restore
     check(tc.verify(out, **kw) == [], "restored zip verifies again")
     bad = dict(doc); bad["requires_omega"] = dict(r, report_tags_max=29); (t / "hand.json").write_text(tc.dumps(bad))
     check(any("report_tags_max" in e for e in tc.verify(t / "hand.json", **kw)), "a hand-edited field is caught")
     old_rom = ROM_N.replace(b"4D50331A", b"4D503317")
-    make(new, "alfatreze.TAU", "tau", old_rom)
+    make(new, "alfatreze.Tau Gallery", "tau_gallery", old_rom)
     raises(lambda: tc.build(**kw), "ROM that does not accept the bitstream's CORE_VERSION", "black screen")
-    make(new, "alfatreze.TAU", "tau", ROM_N)
+    make(new, "alfatreze.Tau Gallery", "tau_gallery", ROM_N)
     (t / "ap_core.rbf.json").write_text(fitman(["TAU_RAM_192K", "TAU_HALCYON", "TAU_LPC"], tc.sha(RAW)))
     raises(lambda: tc.build(**kw), "bitstream rev 24 (192 KB only) against rev-26 ROMs", "4D503318")
     (t / "ap_core.rbf.json").write_text(fitman(["TAU_RAM_192K", "TAU_CLK66"], "00" * 32))

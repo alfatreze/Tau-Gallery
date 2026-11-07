@@ -16,7 +16,7 @@ extern char _tag_start;
 uint32_t pp_runs, pp_ok, pp_bad, pp_err, pp_open_cyc, pp_open_max, pp_read_cyc, pp_read_max, pp_fill_min = 0xFFFFFFFFu, pp_dry;
 static char path[96]; static uint8_t path_built;
 
-/* "/Assets/tau_dev/alfatreze.TAU DEV <n>/preset-probe.bin": <n> is the number in the stamped version text ("0.6.1-dev.212+..."): the packager names the core folder the same way. */
+/* "/Assets/tau_gallery_dev/alfatreze.Tau Gallery DEV <n>/preset-probe.bin": <n> is the number in the stamped version text ("0.6.1-dev.212+..."): the packager names the core folder the same way. */
 P2_COLD_TEXT static int build_path(void)
 {
     const volatile char *v = p2_ver_field + 7; uint32_t i = 0;
@@ -24,7 +24,7 @@ P2_COLD_TEXT static int build_path(void)
     if (!v[i]) return 0;
     i += 4; char num[8]; uint32_t n = 0; while (v[i] >= '0' && v[i] <= '9' && n < 7u) num[n++] = v[i++];
     if (!n) return 0;
-    static const char a[] = "/Assets/tau_dev/alfatreze.TAU DEV ", b[] = "/preset-probe.bin"; uint32_t k = 0;
+    static const char a[] = "/Assets/tau_gallery_dev/alfatreze.Tau Gallery DEV ", b[] = "/preset-probe.bin"; uint32_t k = 0;
     for (uint32_t j = 0; a[j]; j++) path[k++] = a[j];
     for (uint32_t j = 0; j < n; j++) path[k++] = num[j];
     for (uint32_t j = 0; b[j]; j++) path[k++] = b[j];

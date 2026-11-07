@@ -6,8 +6,8 @@ code over random register files by sim/test_persist_layout.py, with golden vecto
 what each persist id means by release: tools/persist_registry.json.
 
 A card keeps the settings of each core in its own folder: Settings/<core id>/Interact/_core/interact_persist.json (APF's file: {"interact_persist": {"variables": [{"id", "type", "val"}]}}). A value is
-`val` of the variable with that id; the firmware's register file is 32 words, a variable is one word (ID_TO_WORD below, the same addresses as dist/Cores/alfatreze.TAU/interact.json: word = (address - 0x20000000) / 4).
-Two layouts exist:  legacy (v0.6.1 and every TAU DEV build up to 181): word 0 is the volume 0..100;  new (next release): word 0 carries the layout version in bits 30..27 (1) and every other word is regrouped by area.
+`val` of the variable with that id; the firmware's register file is 32 words, a variable is one word (ID_TO_WORD below, the same addresses as dist/Cores/alfatreze.Tau Gallery/interact.json: word = (address - 0x20000000) / 4).
+Two layouts exist:  legacy (v0.6.1 and every Tau Gallery DEV build up to 181): word 0 is the volume 0..100;  new (next release): word 0 carries the layout version in bits 30..27 (1) and every other word is regrouped by area.
 Never copy persisted words from a core of the new layout to a core of the legacy one (it reads defaults and the first save rewrites the legacy layout); legacy -> new is what `migrate` does (the firmware does it
 itself at boot, lossless except the old single tuning, which is dropped).
 

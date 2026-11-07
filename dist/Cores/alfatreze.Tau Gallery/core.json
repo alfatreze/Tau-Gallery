@@ -3,14 +3,14 @@
         "magic": "APF_VER_1",
         "metadata": {
             "platform_ids": [
-                "tau"
+                "tau_gallery"
             ],
-            "shortname": "TAU",
-            "description": "Music player. Sync music with Tau Omega or the repo's tools",
+            "shortname": "Tau Gallery",
+            "description": "Photo gallery: fast previews, zoom and pan for big images",
             "author": "alfatreze",
-            "url": "https://github.com/alfatreze/Tau-Alpha",
-            "version": "0.6.1",
-            "date_release": "2026-10-09"
+            "url": "https://github.com/alfatreze/Tau-Gallery",
+            "version": "0.1.0",
+            "date_release": "2026-11-07"
         },
         "framework": {
             "target_product": "Analogue Pocket",

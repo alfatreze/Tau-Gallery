@@ -25,7 +25,7 @@ what hid it for three events. Never look at a size on this card in decimal.
 The drive letter moves between D: and E: depending on what else is mounted, so
 the card is found by looking for the core rather than by assuming a letter.
 
-By default it scans ONLY Assets/tau -- where every recorded damage event
+By default it scans ONLY Assets/tau_gallery -- where every recorded damage event
 has landed, and where all the .mp3 files live. Hashing the whole card means
 hashing ~16 GB over USB, which took long enough that the first attempt had to be
 abandoned; a measurement nobody can afford to run is not a measurement. Pass
@@ -40,8 +40,8 @@ import string
 import sys
 import time
 
-MARKERS = ("Assets/tau", "Cores/alfatreze.TAU")
-SUBTREE = "Assets/tau"     # default scan scope; --all overrides
+MARKERS = ("Assets/tau_gallery", "Cores/alfatreze.Tau Gallery")
+SUBTREE = "Assets/tau_gallery"     # default scan scope; --all overrides
 HASH_EDGE = 1 << 20          # bytes hashed at each end unless --full
 STATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_snapshots")
 

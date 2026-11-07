@@ -12,7 +12,7 @@ def check(name, ok, info=""):
 def run(*a):
     r = subprocess.run([sys.executable, str(ROOT / "tools/install_factory_presets.py")] + [str(x) for x in a], capture_output=True, text=True); return r.returncode, r.stdout + r.stderr
 with tempfile.TemporaryDirectory() as td:
-    card = Path(td) / "card"; common = card / "Assets/tau/common"; common.mkdir(parents=True)
+    card = Path(td) / "card"; common = card / "Assets/tau_gallery/common"; common.mkdir(parents=True)
     other = card / "Assets/aaa_other/common"; other.mkdir(parents=True)                      # another core's library must not be picked: only the Tau platforms count
     subprocess.run([sys.executable, str(ROOT / "tools/tau_library.py"), "synth", "--tracks", "2", "--albums", "1", "--artists", "1", "--out", str(other / "tau-library.tdb")], capture_output=True)
     rc, out = run("--card", card); check("a card without a library is refused", rc == 1 and "no library" in out, out[:120])

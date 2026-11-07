@@ -42,17 +42,17 @@ def utf8_mp3(path, title, artist, album, frames=30):
 
 
 def sync(src, card, *extra):
-    r = subprocess.run([sys.executable, str(ROOT / "tools/sync_media.py"), str(src), "--card", str(card), "--core", "alfatreze.TAU X", "--library", "--no-art-variants", *extra],
+    r = subprocess.run([sys.executable, str(ROOT / "tools/sync_media.py"), str(src), "--card", str(card), "--core", "alfatreze.Tau Gallery X", "--library", "--no-art-variants", *extra],
                        capture_output=True, text=True)
     return r.returncode, r.stdout + r.stderr
 
 
 def make_card(td, name="card"):
     card = td / name
-    (card / "Cores" / "alfatreze.TAU X").mkdir(parents=True)
-    (card / "Cores" / "alfatreze.TAU X" / "core.json").write_text(json.dumps({"core": {"metadata": {"platform_ids": ["tau"]}}}))
-    (card / "Assets" / "tau" / "common").mkdir(parents=True)
-    return card, card / "Assets" / "tau" / "common"
+    (card / "Cores" / "alfatreze.Tau Gallery X").mkdir(parents=True)
+    (card / "Cores" / "alfatreze.Tau Gallery X" / "core.json").write_text(json.dumps({"core": {"metadata": {"platform_ids": ["tau_gallery"]}}}))
+    (card / "Assets" / "tau_gallery" / "common").mkdir(parents=True)
+    return card, card / "Assets" / "tau_gallery" / "common"
 
 
 # cases a normal file system keeps apart (not NFC/NFD twins, not case twins) and can create (name length)

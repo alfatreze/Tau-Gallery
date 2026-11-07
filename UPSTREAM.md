@@ -11,3 +11,6 @@ Tau Gallery forks Tau Alpha (local checkout `../../tau-alpha`).
 
 Stripping of audio, decode, stream, meters and nowplaying is deferred to M0, when
 the tree can be built after each removal.
+
+## Identity (2026-11-07)
+The fork has its own core ids, platform ids and settings (`README.md`). Tau Alpha's `docs/`, `LICENSE`, `NOTICE.md` and `CHANGELOG.md` are left as upstream history; code, tools, tests, `dist/` and the firmware's user-visible strings were renamed. Historical mentions of Tau Alpha dev builds (`TAU DEV 181`...) in comments and golden data are intentionally unchanged.

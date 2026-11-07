@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Writes the factory meter presets (tools/player2/mpreset.py: one index and one file per preset for every Player 2 meter) onto a card, where the firmware looks for them: <media root>/tau-presets/<meter id>/ (B-967).
-The media root is the one the card's library was built for (the `root` of Assets/<platform>/common/tau-library.tdb, normally /Assets/tau/common/), so the same files serve the release and every developer core.
+The media root is the one the card's library was built for (the `root` of Assets/<platform>/common/tau-library.tdb, normally /Assets/tau_gallery/common/), so the same files serve the release and every developer core.
 
   python3 tools/install_factory_presets.py --card /Volumes/Pock              dry run: what would be written
   python3 tools/install_factory_presets.py --card /Volumes/Pock --yes        write, then verify every file's SHA-256
@@ -17,7 +17,7 @@ import meter_manifest as mm
 
 def media_root(card):
     """(the root string of the card's library, the folder it names on the card)"""
-    for plat in ("tau", "tau_dev"):                                    # the platforms of the Tau cores (the Pocket holds other cores' libraries too: Assets/mp3player/common was found first by a plain search)
+    for plat in ("tau_gallery", "tau_gallery_dev"):                                    # the platforms of the Tau cores (the Pocket holds other cores' libraries too: Assets/mp3player/common was found first by a plain search)
         f = Path(card, "Assets", plat, "common", "tau-library.tdb")
         if not f.is_file(): continue
         root = tl.parse(f.read_bytes()).root

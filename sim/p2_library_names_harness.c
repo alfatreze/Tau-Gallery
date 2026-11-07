@@ -55,7 +55,7 @@ int main(int argc, char **argv)
     if (argc < 2) return 2;
     file[5] = slurp(argv[1], &fsz[5]);
     if (argc > 2 && strcmp(argv[2], "-")) file[7] = slurp(argv[2], &fsz[7]);
-    snprintf(root_expect, sizeof root_expect, "/Assets/tau/common/tau-names.bin");
+    snprintf(root_expect, sizeof root_expect, "/Assets/tau_gallery/common/tau-names.bin");
     library_load();
     printf("state %u %u %u %u\nopens %d\n", lib_state, lib_err, names_state, names_err, opens);
     if (lib_state != 1) return 0;

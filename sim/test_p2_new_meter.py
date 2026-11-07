@@ -18,7 +18,7 @@ with tempfile.TemporaryDirectory() as td:
         if (ROOT / part).exists(): shutil.copytree(ROOT / part, cp / part, ignore=ignore, symlinks=True)
     shutil.copy(ROOT / "Makefile", cp / "Makefile")
     (cp / "docs").mkdir()                                                          # tools/gen_meters.py writes its tables there
-    (cp / "dist/Cores/alfatreze.TAU").mkdir(parents=True); shutil.copy(ROOT / "dist/Cores/alfatreze.TAU/interact.json", cp / "dist/Cores/alfatreze.TAU/interact.json")
+    (cp / "dist/Cores/alfatreze.Tau Gallery").mkdir(parents=True); shutil.copy(ROOT / "dist/Cores/alfatreze.Tau Gallery/interact.json", cp / "dist/Cores/alfatreze.Tau Gallery/interact.json")
     # the seven slots are all in use (the last one is SOUND MAP): the copy gives its slot back so the scaffold has somewhere to go
     shutil.rmtree(cp / "meters/sound_map")
     for f in ("fw2/ui/meter_sound_map.c", "fw2/ui/meter_pack_sound_map.c", "fw2/generated/desc_sound_map.h", "tools/meters/preview/wasm/sound_map_wasm.c", "tools/meters/preview/meters/sound_map.js", "tools/meters/preview/meters/sound_map_wasm.js"): (cp / f).unlink()

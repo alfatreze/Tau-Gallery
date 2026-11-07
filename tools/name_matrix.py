@@ -7,7 +7,7 @@
   python3 tools/name_matrix.py verify --card /Volumes/Pock          read the names back: which exist under the exact bytes, which the OS changed (a normalised or refused name is a finding)
   python3 tools/name_matrix.py remove --card /Volumes/Pock --yes    delete the folder
 
-Everything goes under <media root>/name-test/ (the media root is the `root` of the card's tau-library.tdb, normally /Assets/tau/common/): per variant a tiny valid silent MP3 whose ID3 title is "NM<id>" (the diagnostic reads it back
+Everything goes under <media root>/name-test/ (the media root is the `root` of the card's tau-library.tdb, normally /Assets/tau_gallery/common/): per variant a tiny valid silent MP3 whose ID3 title is "NM<id>" (the diagnostic reads it back
 to prove it opened THAT file), `matrix.tnm` (3,072 bytes, padded with newlines; what the firmware reads: first line "TNM2 <count>", then one line per variant "<id 2 digits>|<o, f or p>|<file id 2 digits>|<absolute path, raw bytes>"; o = expect the open to work, p = a probe (the result is the information), f = a negative control
 that must fail cleanly) and MATRIX.txt (the paths and their bytes for the record). The variants: ASCII control; NFC and NFD (what macOS writes) accents; several accents; Cyrillic; CJK; an emoji (4-byte UTF-8); accented FOLDERS
 (NFC, NFD, with an accented file inside); punctuation; paths of 250 bytes in ASCII and of about 250 bytes in 3-byte characters (the 0192 path field is 256 bytes); and negative controls: a path over the limit, a
@@ -26,7 +26,7 @@ N = lambda s: unicodedata.normalize("NFC", s)
 D = lambda s: unicodedata.normalize("NFD", s)
 
 
-def variants(root="/Assets/tau/common/"):
+def variants(root="/Assets/tau_gallery/common/"):
     """[(id, expect 'o'|'f', what, path bytes)] with the absolute path as the library would name it"""
     base = root + DIR + "/"
     out = []
@@ -83,7 +83,7 @@ def mp3(vid):
     return id3_title("NM%02d" % vid) + (b"\xff\xfb\x90\x00" + b"\x00" * 413) * 26
 
 
-def files(root="/Assets/tau/common/"):
+def files(root="/Assets/tau_gallery/common/"):
     """{relative path under name-test/ as bytes: content} for every variant that is a file to write, plus the manifest and the record"""
     out = {}; vs = variants(root); prefix = (root + DIR + "/").encode()
     for vid, expect, what, path in vs:
@@ -98,7 +98,7 @@ def files(root="/Assets/tau/common/"):
 
 
 def media_root(card):
-    for plat in ("tau", "tau_dev"):
+    for plat in ("tau_gallery", "tau_gallery_dev"):
         f = Path(card, "Assets", plat, "common", "tau-library.tdb")
         if not f.is_file(): continue
         root = tl.parse(f.read_bytes()).root

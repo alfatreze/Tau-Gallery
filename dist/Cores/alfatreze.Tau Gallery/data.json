@@ -22,7 +22,7 @@
                 ]
             },
             {
-                "name": "Tau loading artwork",
+                "name": "Gallery loading artwork",
                 "id": 4,
                 "required": false,
                 "deferload": true,

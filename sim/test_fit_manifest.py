@@ -22,7 +22,7 @@ ok(fm.dead_macros(old, used) == ["TAU_EQ_COEF24"], "the retired eq24 bundle's de
 ok(all(not fm.dead_macros(b.read_text(), used) for b in fm.live_bundles()), "every live fit bundle (%d) defines only macros the RTL reads" % len(fm.live_bundles()))
 
 def pkg(td, blob):
-    d = Path(td) / "Assets/tau/common"; d.mkdir(parents=True); (d / "tau.rom").write_bytes(blob); return td
+    d = Path(td) / "Assets/tau_gallery/common"; d.mkdir(parents=True); (d / "tau.rom").write_bytes(blob); return td
 rom = b"\0" * 8 + b"TAUFWPAIR:4D50331A;" + b"\0" + b"TAUFWNEED:HALCYON,LPC,SDRAM_BUSY,;" + b"\0"
 with tempfile.TemporaryDirectory() as t1, tempfile.TemporaryDirectory() as t2, tempfile.TemporaryDirectory() as t3, tempfile.TemporaryDirectory() as t4:
     full = {"TAU_HALCYON", "TAU_LPC", "TAU_SDRAM_BUSY", "TAU_POLY", "TAU_CLK66"}

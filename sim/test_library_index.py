@@ -87,8 +87,8 @@ def main():
         check("album tracks in track-number order (v2.3 and v2.4 tags)", order == ["First", "Second", "Third"], order)
         d2 = L.build_index(entries, pls, [], "/Assets/tau_psram_07/common/")
         check("root prefix follows the platform folder", L.track_path(L.parse(d2), 0) == "/Assets/tau_psram_07/common/Aurora/Skies/01 First.mp3")
-        check("track path is root + dir + file", L.track_path(ix, 0) == "/Assets/tau/common/Aurora/Skies/01 First.mp3")
-        check("root-level file has no double slash", "/Assets/tau/common/loose.mp3" in
+        check("track path is root + dir + file", L.track_path(ix, 0) == "/Assets/tau_gallery/common/Aurora/Skies/01 First.mp3")
+        check("root-level file has no double slash", "/Assets/tau_gallery/common/loose.mp3" in
               [L.track_path(ix, i) for i in range(6)])
         check("MP3 CBR duration ~ 100 frames of 26 ms = 2 s", ix.tracks[0][2] in (3, 2), ix.tracks[0][2])
         fl = [t for t in ix.tracks if t[5] == 2][0]

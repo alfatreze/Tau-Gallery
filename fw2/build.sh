@@ -54,7 +54,7 @@ for sym in _start main; do
 done
 [ "$("$NM" "$OUT/fw2.elf" | awk '$3 == "_start" { print $1 }')" = "00000000" ] || { echo "*** _start is not at address 0 ***" >&2; exit 1; }
 "$OBJCOPY" -O binary -R .cold_data -R .cold_text "$OUT/fw2.elf" "$OUT/tau.rom"; chmod 0644 "$OUT/tau.rom"      # the cold sections are not part of the ROM image
-if true; then python3 "$ROOT/tools/pack_cold.py" pack "$OUT/fw2.elf" "$OUT" --rom "$OUT/tau.rom"; else cp "$ROOT/dist/Assets/tau/alfatreze.TAU/tau-cold.bin" "$OUT/tau-cold.bin" 2>/dev/null || cp "$ROOT/dist/Assets/tau/common/tau-cold.bin" "$OUT/tau-cold.bin" 2>/dev/null || : > "$OUT/tau-cold.bin"; fi
+if true; then python3 "$ROOT/tools/pack_cold.py" pack "$OUT/fw2.elf" "$OUT" --rom "$OUT/tau.rom"; else cp "$ROOT/dist/Assets/tau_gallery/alfatreze.Tau Gallery/tau-cold.bin" "$OUT/tau-cold.bin" 2>/dev/null || cp "$ROOT/dist/Assets/tau_gallery/common/tau-cold.bin" "$OUT/tau-cold.bin" 2>/dev/null || : > "$OUT/tau-cold.bin"; fi
 python3 - <<PY
 import os
 n = os.path.getsize("$OUT/tau.rom"); print("tau.rom: %d bytes" % n)

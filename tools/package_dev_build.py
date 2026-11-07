@@ -40,9 +40,9 @@ def main():
     ap.add_argument("--variant", choices=VARIANTS, default="profile",
                     help="profile = fw/build.sh player-library-diagnostic-profile (default); "
                          "diagnostic = player-library-diagnostic")
-    ap.add_argument("--number", type=int, help="name the core 'TAU DEV NN' (throwaway iteration)")
-    ap.add_argument("--barcode", type=int, help="name the core 'TAU DEV BARCODE NN' (alfatreze.TAU_DEV_BARCODE_NN): test builds of the barcode-study branch "
-                                                "(keeps its numbering apart from TAU DEV NN and TAU DEV METER NN)")
+    ap.add_argument("--number", type=int, help="name the core 'Tau Gallery DEV NN' (throwaway iteration)")
+    ap.add_argument("--barcode", type=int, help="name the core 'Tau Gallery DEV BARCODE NN' (alfatreze.TAU_DEV_BARCODE_NN): test builds of the barcode-study branch "
+                                                "(keeps its numbering apart from Tau Gallery DEV NN and Tau Gallery DEV METER NN)")
     ap.add_argument("--semver", help="name the core after the release it works toward, e.g. 0.5.0-alpha.1 "
                                      "(X.Y.Z-tag.N, tag alpha/beta/rc); use for real feature milestones")
     ap.add_argument("--release-diagnostic", action="store_true",
@@ -135,7 +135,7 @@ def main():
             sys.exit(f"RBF hash mismatch: expected {args.rbf_sha256}, got {digest(rbf)}")
         already_reversed = False
     else:
-        rbf, already_reversed = src / "Cores/alfatreze.TAU/bitstream.rbf_r", True
+        rbf, already_reversed = src / "Cores/alfatreze.Tau Gallery/bitstream.rbf_r", True
 
     if args.release_diagnostic:
         # The release's Diagnostic Build, in its channel (RELEASE_SYSTEM_SPEC section 4): "TAU Diagnostics" beside TAU, or
@@ -143,12 +143,12 @@ def main():
         ch = tau_layout.CHANNELS[args.channel]
         platform, short, title = ch["platform"], ch["diag"], ch["name"]
         core_id, platforms = f"alfatreze.{short}", list(ch["platforms"])
-        desc, out = "TAU developer build: settings, Info page and diagnostic tests", root / "work/diagnostics/library-diagnostic/pocket"
+        desc, out = "Tau Gallery developer build: settings, Info page and diagnostic tests", root / "work/diagnostics/library-diagnostic/pocket"
     elif args.barcode is not None:
         # Dev channel (B-673, option a): one TAU Dev platform, TAU's media read in place, listed under TAU too. Shortnames may hold
-        # spaces (B-673), so the Pocket shows "TAU DEV BARCODE 05" as written.
+        # spaces (B-673), so the Pocket shows "Tau Gallery DEV BARCODE 05" as written.
         nn = f"{args.barcode:02d}"
-        platform, short, label = tau_layout.DEV_PLATFORM, f"TAU DEV BARCODE {nn}", f"barcode-study test build {nn}"
+        platform, short, label = tau_layout.DEV_PLATFORM, f"Tau Gallery DEV BARCODE {nn}", f"barcode-study test build {nn}"
         core_id, title, platforms = f"alfatreze.{short}", tau_layout.DEV_PLATFORM_NAME, list(tau_layout.CHANNELS["dev"]["platforms"])
         out = root / f"work/diagnostics/tau-dev-barcode-{nn}/pocket"
     elif args.semver:
@@ -165,27 +165,26 @@ def main():
         out = root / f"work/diagnostics/tau-{sch}-{args.semver}{'-diag' if args.diagnostic_core else ''}/pocket"
     else:
         nn = f"{args.number:02d}"
-        platform, short, label = tau_layout.DEV_PLATFORM, f"TAU DEV {nn}", f"numbered test build {nn}"
+        platform, short, label = tau_layout.DEV_PLATFORM, f"Tau Gallery DEV {nn}", f"numbered test build {nn}"
         core_id, title, platforms = f"alfatreze.{short}", tau_layout.DEV_PLATFORM_NAME, list(tau_layout.CHANNELS["dev"]["platforms"])
         out = root / f"work/diagnostics/tau-dev-{nn}/pocket"
     shared_media = len(platforms) > 1                  # reads TAU's library, tau-assets.bin and music in place (B-673 option a)
     # The full version every view shows (owner, 2026-10-08): Select Core row (core.json), splash and Info (the ROM's TAUVER field).
     # SemVer numeric identifiers have no leading zeros, so "dev.5", not "dev.05".
-    base_ver = json.loads((src / "Cores/alfatreze.TAU/core.json").read_text())["core"]["metadata"]["version"].split("-")[0]
+    base_ver = json.loads((src / "Cores/alfatreze.Tau Gallery/core.json").read_text())["core"]["metadata"]["version"].split("-")[0]
     full_ver = (None if args.release_diagnostic else args.semver if args.semver else
                 f"{base_ver}-dev.barcode.{args.barcode}" if args.barcode is not None else f"{base_ver}-dev.{args.number}")
     if not args.release_diagnostic:
-        desc = f"TAU {label}: {kind}, " + (args.note or default_note) + (f" [HANG TEST: the {args.hang_pack.split(':')[0]} pack hangs after 200 pictures]" if args.hang_pack else "") + (" [PRESET READ PROBE]" if args.preset_probe else "")
+        desc = f"Tau Gallery {label}: {kind}, " + (args.note or default_note) + (f" [HANG TEST: the {args.hang_pack.split(':')[0]} pack hangs after 200 pictures]" if args.hang_pack else "") + (" [PRESET READ PROBE]" if args.preset_probe else "")
     if args.semver and not args.note:
         # A Stable or Preview release keeps the core.json description of dist/ (63 characters at most; it also tells people how to get music onto the card); the fuller text goes to info.txt, the About screen.
-        desc = json.loads((src / "Cores/alfatreze.TAU/core.json").read_text())["core"]["metadata"]["description"]
-        if args.diagnostic_core: desc = "TAU diagnostics: every counter, the Check, diagnostic tests"
-        release_info = ("TAU music player for the Analogue Pocket. It plays MP3 and FLAC from the SD card: the music, covers and library index must be put there with Tau Omega "
-                        "(the companion app) or with the Python tools in the project repository (tools/sync_media.py). https://github.com/alfatreze/Tau-Alpha\n")
+        desc = json.loads((src / "Cores/alfatreze.Tau Gallery/core.json").read_text())["core"]["metadata"]["description"]
+        if args.diagnostic_core: desc = "Tau Gallery diagnostics: counters, the Check, tests"
+        release_info = ("Tau Gallery for the Analogue Pocket: a photo gallery with fast previews, zoom and pan for big images. Convert photos with the Tau Gallery tools. https://github.com/alfatreze/Tau-Gallery\n")
 
     if out.exists(): shutil.rmtree(out)
     c = out / "Cores" / core_id
-    shutil.copytree(src / "Cores/alfatreze.TAU", c)
+    shutil.copytree(src / "Cores/alfatreze.Tau Gallery", c)
     if already_reversed: shutil.copy2(rbf, c / "bitstream.rbf_r")
     else: bitrev(rbf, c / "bitstream.rbf_r")
     j = json.loads((c / "core.json").read_text())
@@ -219,7 +218,7 @@ def main():
     cd.mkdir(parents=True)
     shutil.copy2(rom, cd / "tau.rom")
     shutil.copy2(rom.parent / "tau-cold.bin", cd / "tau-cold.bin")
-    shutil.copy2(src / "Assets/tau/alfatreze.TAU/tau-loading.bin", cd / "tau-loading.bin")
+    shutil.copy2(src / "Assets/tau_gallery/alfatreze.Tau Gallery/tau-loading.bin", cd / "tau-loading.bin")
     if args.preset_probe:
         (cd / "preset-probe.bin").write_bytes(b"TPRB" + bytes((i * 37 + 11) & 255 for i in range(4, 200)))
     if with_packs:
@@ -233,7 +232,7 @@ def main():
     # No Assets/<platform>/<core>/<title>.json any more (RELEASE_SYSTEM_SPEC section 11): no data slot has the instance bit, and it used
     # `variant_select`, a key the instance schema does not have, so the Pocket never read it. Older cards: listed as obsolete in tools/omega_compat.json.
     p = out / "Platforms"; (p / "_images").mkdir(parents=True)
-    shutil.copy2(src / "Platforms/_images/tau.bin", p / "_images" / f"{platform}.bin")
+    shutil.copy2(src / "Platforms/_images/tau_gallery.bin", p / "_images" / f"{platform}.bin")
     if (src / "Platforms" / f"{platform}.json").is_file():          # TAU's own platform: ship its exact file (shared with TAU)
         shutil.copy2(src / "Platforms" / f"{platform}.json", p / f"{platform}.json")
     else:

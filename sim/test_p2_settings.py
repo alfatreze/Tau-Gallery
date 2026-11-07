@@ -103,7 +103,7 @@ def layout_sane():
             used[(word, b)] = n
     return bad
 def interact_vars():
-    d = json.loads((ROOT / "dist/Cores/alfatreze.TAU/interact.json").read_text())
+    d = json.loads((ROOT / "dist/Cores/alfatreze.Tau Gallery/interact.json").read_text())
     return {int(v["address"], 16) // 4 % 32: v for v in d["interact"]["variables"] if v.get("persist")}
 def fits_interact():
     """Every persisted word has exactly one interact variable that can hold its fields (a value above the variable's max is refused by the Pocket: the 32-bit last-played words were, and never came back), at most 16

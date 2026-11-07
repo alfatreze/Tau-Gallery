@@ -6,7 +6,7 @@
   tau_library.py report INDEX
   tau_library.py synth  --tracks N --albums N --artists N --out FILE [--real-tracks COMMON_DIR] [--seed S]
 
-The index describes what is ON THE CARD: build it from the destination Assets/tau/common folder (after
+The index describes what is ON THE CARD: build it from the destination Assets/tau_gallery/common folder (after
 sync_media.py has made the names ASCII). Music files are only read, never modified. The output is written to a temp
 file, re-parsed and verified, then renamed; the same input gives a byte-identical file (no timestamps).
 Standard library only. The reader (`parse`) mirrors the firmware loader and returns the spec's E-codes.
@@ -25,7 +25,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import tau_details
 
-ROOT_PREFIX = "/Assets/tau/common/"
+ROOT_PREFIX = "/Assets/tau_gallery/common/"
 MAGIC = 0x42494C54          # 'TLIB'
 VERSION = 1
 HDR = 128

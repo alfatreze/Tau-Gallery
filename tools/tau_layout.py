@@ -34,10 +34,10 @@ def find(base, name, platform=None, core_id=None):
 
 
 # ---- dev channel (B-672/B-673, owner decision 2026-10-08: option a) ----------------------------------------------------------------
-# Dev builds live on ONE platform, `tau_dev` ("TAU Dev"), and also declare `tau` so they can read TAU's library, tau-assets.bin and
+# Dev builds live on ONE platform, `tau_gallery_dev` ("TAU Dev"), and also declare `tau` so they can read TAU's library, tau-assets.bin and
 # music in place: the Pocket only opens files on the platforms a core declares (B-673). Consequence, accepted: every dev build is also
-# listed in TAU's Select Core list (shortname + version). Build-bound files stay core-specific under Assets/tau_dev/<core>/.
-DEV_PLATFORM, DEV_PLATFORM_NAME, MEDIA_PLATFORM = "tau_dev", "TAU Dev", "tau"
+# listed in TAU's Select Core list (shortname + version). Build-bound files stay core-specific under Assets/tau_gallery_dev/<core>/.
+DEV_PLATFORM, DEV_PLATFORM_NAME, MEDIA_PLATFORM = "tau_gallery_dev", "Tau Gallery Dev", "tau_gallery"
 SHARED_SLOT_FILES = ("tau-library.tdb", "tau-assets.bin")    # user/generated data read from the media platform
 PLATFORM_INDEX_SHIFT = 24                                     # data.json parameter bits [25:24]: index into platform_ids
 
@@ -66,17 +66,16 @@ def slot_dir(base, slot, platforms, core_id):
 # Shortnames are what the Pocket's Select Core list shows (B-672) and may hold spaces (B-673). A channel whose platform list also names
 # `tau` reads TAU's library, tau-assets.bin and music in place and is also listed under TAU (B-673 option a).
 CHANNELS = {
-    "stable":  {"platform": "tau", "name": "TAU", "platforms": ["tau"], "core": "TAU", "diag": "TAU Diagnostics"},
-    "preview": {"platform": "tau_preview", "name": "TAU Preview", "platforms": ["tau_preview", "tau"],
-                "core": "TAU Preview", "diag": "TAU Preview Diagnostics"},
+    "stable":  {"platform": "tau_gallery", "name": "Tau Gallery", "platforms": ["tau_gallery"], "core": "Tau Gallery", "diag": "Tau Gallery Diagnostics"},
+    "preview": {"platform": "tau_gallery_pre", "name": "Tau Gallery Preview", "platforms": ["tau_gallery_pre", "tau_gallery"],
+                "core": "Tau Gallery Preview", "diag": "Tau Gallery Preview Diagnostics"},
     "dev":     {"platform": DEV_PLATFORM, "name": DEV_PLATFORM_NAME, "platforms": [DEV_PLATFORM, MEDIA_PLATFORM]},
 }
 # Cores a channel core supersedes on a card (named in tau-compat.json `replaces`, so installers can offer to remove them).
 # A Stable TAU supersedes the Diagnostics core (Player 2 includes the diagnostics), the old TAU_DIAGNOSTIC and every Preview core; TAU Preview (Player 2: one core) supersedes only its own diagnostics core.
 # tools/tau_compat.py drops an id the same release ships, so a release that still ships a Diagnostics core does not tell installers to remove it. An installer compares versions before it offers a removal (a Preview newer than the Stable is not obsolete).
-REPLACES = {"alfatreze.TAU": ["alfatreze.TAU_DIAGNOSTIC", "alfatreze.TAU Diagnostics", "alfatreze.TAU Preview", "alfatreze.TAU Preview Diagnostics"],
-            "alfatreze.TAU Preview": ["alfatreze.TAU Preview Diagnostics"],
-            "alfatreze.TAU Diagnostics": ["alfatreze.TAU_DIAGNOSTIC"]}
+REPLACES = {"alfatreze.Tau Gallery": ["alfatreze.Tau Gallery Diagnostics", "alfatreze.Tau Gallery Preview", "alfatreze.Tau Gallery Preview Diagnostics"],
+            "alfatreze.Tau Gallery Preview": ["alfatreze.Tau Gallery Preview Diagnostics"]}
 
 
 def channel_of(version):
@@ -115,6 +114,6 @@ def retarget(src_pkg, out, src_core_id, core_id, channel):
     (out / "Platforms" / f"{plat}.json").write_text(json.dumps(pj, indent=4) + "\n")
     return out
 # The core whose previous release a channel core is compared with (persist ids) when it has none of its own yet.
-PREDECESSORS = {"alfatreze.TAU Diagnostics": ["alfatreze.TAU_DIAGNOSTIC", "alfatreze.TAU"],       # Player 2's Diagnostic Build shares the normal core's persisted layout (the same firmware family), so a release that ships it for the first time compares with TAU
-                "alfatreze.TAU Preview": ["alfatreze.TAU"],
-                "alfatreze.TAU Preview Diagnostics": ["alfatreze.TAU Diagnostics", "alfatreze.TAU_DIAGNOSTIC", "alfatreze.TAU Preview", "alfatreze.TAU"]}
+PREDECESSORS = {"alfatreze.Tau Gallery Diagnostics": ["alfatreze.Tau Gallery"],       # the Diagnostic Build shares the normal core's persisted layout (the same firmware family)
+                "alfatreze.Tau Gallery Preview": ["alfatreze.Tau Gallery"],
+                "alfatreze.Tau Gallery Preview Diagnostics": ["alfatreze.Tau Gallery Diagnostics", "alfatreze.Tau Gallery Preview", "alfatreze.Tau Gallery"]}

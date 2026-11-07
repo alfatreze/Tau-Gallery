@@ -8,7 +8,7 @@ static uint8_t tagbuf[4096];
 #define TAGB ((const volatile uint8_t *)tagbuf)
 #include "../fw2/diagnostics/name_matrix.c"
 char _tag_start; aout_stats_t aout_stats; uint8_t slot_err, slot_errcode;
-static char rootstr[96] = "/Assets/tau/common/"; static int degrade, missing_code = 3;
+static char rootstr[96] = "/Assets/tau_gallery/common/"; static int degrade, missing_code = 3;
 #define MAXF 64
 static struct { uint8_t path[300]; int plen; uint8_t data[3200]; int dlen; int failread, errcode, timeout; } F[MAXF]; static int nf, cur = -1;
 uint32_t library_root(char *out, uint32_t cap) { uint32_t n = (uint32_t)strlen(rootstr); if (n >= cap) return 0; memcpy(out, rootstr, n + 1); return n; }

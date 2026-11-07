@@ -7,8 +7,8 @@ it takes files or folders, converts images the player can use, copies to each de
 verifies every file by SHA-256 and can write a manifest.
 
   sync_media.py "Nausicaa OST" playlist.m3u --core alfatreze.TAU_PSRAM_03 --core alfatreze.TAU_PSRAM_04
-  sync_media.py MUSIC_DIR --all-tau                      # every alfatreze.TAU* core on the card
-  sync_media.py MUSIC_DIR --from-core alfatreze.TAU --core alfatreze.TAU_PSRAM_05   # clone one core's media
+  sync_media.py MUSIC_DIR --all-tau                      # every alfatreze.Tau Gallery* core on the card
+  sync_media.py MUSIC_DIR --from-core alfatreze.Tau Gallery --core alfatreze.TAU_PSRAM_05   # clone one core's media
   add --library to build and verify the media library index (tau-library.tdb) in each destination after copying (with it the name sidecar tau-names.json and
   tau-names.bin, docs/features/NAME_SIDECAR_SPEC.md: the original file names and tags where they differ from what the index can show; --no-names skips it),
   add --dry-run to see the plan, --mirror to delete files in the destination folder that are not in the source,
@@ -94,7 +94,7 @@ def find_cores(card: Path, args):
     names = list(args.core or [])
     if args.all_tau:
         names += sorted(p.name for p in (card / "Cores").iterdir()
-                        if p.is_dir() and p.name.startswith("alfatreze.TAU"))
+                        if p.is_dir() and p.name.startswith("alfatreze.Tau Gallery"))
     out, seen = [], set()
     for n in names:
         if n in seen:
@@ -228,7 +228,7 @@ def _anyascii():
 
 
 _RESERVED = {"con", "prn", "aux", "nul"} | {f"com{i}" for i in range(1, 10)} | {f"lpt{i}" for i in range(1, 10)}
-ROOT_BUDGET = 30            # "/Assets/tau_psram_07/common/" is the longest root prefix; the index refuses a whole path over 200 bytes
+ROOT_BUDGET = 33            # "/Assets/tau_gallery_pre/common/" (31 chars) is the longest root prefix; the index refuses a whole path over 200 bytes
 MAX_PATH = 200
 FOLDER_MAX = 64
 
@@ -514,7 +514,7 @@ def main():
     ap.add_argument("sources", nargs="*", help="files or folders to copy")
     ap.add_argument("--card", default=os.environ.get("TAU_CARD", "/Volumes/CARDWRITE"), help="card root (default: $TAU_CARD, else /Volumes/CARDWRITE)")
     ap.add_argument("--core", action="append", help="destination core id, e.g. alfatreze.TAU_PSRAM_03 (repeatable)")
-    ap.add_argument("--all-tau", action="store_true", help="every alfatreze.TAU* core on the card")
+    ap.add_argument("--all-tau", action="store_true", help="every alfatreze.Tau Gallery* core on the card")
     ap.add_argument("--from-core", help="also use this core's Assets/<platform>/common media as a source")
     ap.add_argument("--mirror", action="store_true", help="delete files in the destination folders that are not in the source")
     ap.add_argument("--dry-run", action="store_true", help="show the plan, write nothing")

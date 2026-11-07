@@ -11,7 +11,7 @@
 #define BUG 0
 #endif
 #define HP_URL_OMEGA "github.com/alfatreze/Tau-Omega"
-#define HP_URL_REPO  "github.com/alfatreze/Tau-Alpha"
+#define HP_URL_REPO  "github.com/alfatreze/Tau-Gallery"
 #define HP_MAXCH 36u
 #define FB_META_MAXCH 24u                                    /* the lines beside the cover (240 px) in the widest font */
 enum { HS_TEXT = 0, HS_ACCENT, HS_DIM, HS_GAP };               /* a line's style; HS_GAP is an empty line */
@@ -26,14 +26,14 @@ static const hp_line_t hp_p1[] = {
     { HS_DIM, "Details: the Help tab of Tau Omega," }, { HS_DIM, "or docs/guide/MEDIA_AND_TOOLS.md" } };
 static const hp_line_t hp_p2[] = {
     { HS_TEXT, "On the card:" }, { HS_GAP, "" },
-    { HS_ACCENT, "Assets/tau/common/" }, { HS_TEXT, "  music, covers, tau-library.tdb" },
-    { HS_ACCENT, "Settings/alfatreze.TAU/" }, { HS_TEXT, "  what TAU saves (delete to reset)" },
+    { HS_ACCENT, "Assets/tau_gallery/common/" }, { HS_TEXT, "  music, covers, tau-library.tdb" },
+    { HS_ACCENT, "Settings/alfatreze.Tau Gallery/" }, { HS_TEXT, "  what TAU saves (delete to reset)" },
     { HS_ACCENT, "Memories/Screenshots/" }, { HS_TEXT, "  Menu + Start screenshots" }, { HS_GAP, "" },
     { HS_TEXT, "TAU Preview reads the same music." }, { HS_GAP, "" },
     { HS_DIM, "A library error shows its code; the" }, { HS_DIM, "Tau Omega help explains each one." } };
 static const hp_line_t hp_p3[] = {
     { HS_TEXT, "Python 3 and the project repo work:" }, { HS_ACCENT, HP_URL_REPO }, { HS_GAP, "" },
-    { HS_TEXT, "python3 tools/sync_media.py" }, { HS_TEXT, "  \"My Music\" --core alfatreze.TAU" }, { HS_TEXT, "  --library" }, { HS_GAP, "" },
+    { HS_TEXT, "python3 tools/sync_media.py" }, { HS_TEXT, "  \"My Music\" --core" }, { HS_TEXT, "  \"alfatreze.Tau Gallery\"" }, { HS_TEXT, "  --library" }, { HS_GAP, "" },
     { HS_TEXT, "It copies, converts, verifies and" }, { HS_TEXT, "writes the library." }, { HS_GAP, "" },
     { HS_DIM, "Tau Omega is the easy way. Details:" }, { HS_DIM, "docs/guide/MEDIA_AND_TOOLS.md" } };
 #define HP_N(a) ((uint8_t)(sizeof(a) / sizeof((a)[0])))

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The preset-read probe (fw2/diagnostics/preset_probe.c, B-963; the measurement build of docs/features/METER_PRESETS_EXTERNAL.md): on the host, with the slot driver stubbed, it
-  1. builds the path of the probe file from the stamped version text ("0.6.1-dev.212+..." -> "/Assets/tau_dev/alfatreze.TAU DEV 212/preset-probe.bin", the folder the packager makes);
+  1. builds the path of the probe file from the stamped version text ("0.6.1-dev.212+..." -> "/Assets/tau_gallery_dev/alfatreze.Tau Gallery DEV 212/preset-probe.bin", the folder the packager makes);
   2. accepts exactly the 200 bytes the packager writes (tools/package_dev_build.py --preset-probe: the pattern is read from that file's source, so the two cannot drift) and counts a flipped byte as bad;
   3. records an open failure (pp_err 2) and a read failure (pp_err 3) without counting them as runs that read, and keeps the ring fill and the timings.
 Mutants: the pattern changed on the firmware side is caught by 2; a path without the core number is caught by 1."""
@@ -35,7 +35,7 @@ def run(src_mut=None):
         if r.returncode: print(r.stderr); sys.exit(1)
         return subprocess.run([str(d / "h")], capture_output=True, text=True).stdout.strip().splitlines()
 good = run()
-check("the path is the packager's core folder, built from the version text (%s)" % (good[0].split(" ", 5)[-1] if good else ""), good and good[0].endswith("/Assets/tau_dev/alfatreze.TAU DEV 212/preset-probe.bin"), good[:1])
+check("the path is the packager's core folder, built from the version text (%s)" % (good[0].split(" ", 5)[-1] if good else ""), good and good[0].endswith("/Assets/tau_gallery_dev/alfatreze.Tau Gallery DEV 212/preset-probe.bin"), good[:1])
 check("the 200 bytes the packager writes are accepted (1 run, 1 ok, 0 bad, no error)", good[0].startswith("good 1 1 0 0"), good[0])
 check("a flipped byte is counted as bad, not ok", good[1].startswith("corrupt 2 1 1 0"), good[1])
 check("a failed open is error 2 and a failed read is error 3 (neither counts as ok or bad)", good[2].startswith("openfail 3 1 1 2") and good[3].startswith("readfail 4 1 1 3"), good[2:4])
@@ -46,6 +46,6 @@ fw = re.search(r"\(uint8_t\)\(i \* (\d+)u \+ (\d+)u\)", (ROOT / "fw2/diagnostics
 check("the firmware's byte pattern is the packager's (37 and 11 in both)", m and fw and m.groups() == fw.groups() == ("37", "11"), (m and m.groups(), fw and fw.groups()))
 bad = run(lambda s: s.replace("(uint8_t)(i * 37u + 11u)", "(uint8_t)(i * 37u + 12u)"))
 check("mutant (a different pattern in the firmware) is caught", bad[0].startswith("good 1 1 0 0") is False)
-bad2 = run(lambda s: s.replace('"/Assets/tau_dev/alfatreze.TAU DEV "', '"/Assets/tau_dev/alfatreze.TAU DEV x"'))
-check("mutant (a path without the core number) is caught", not bad2[0].endswith("/Assets/tau_dev/alfatreze.TAU DEV 212/preset-probe.bin"))
+bad2 = run(lambda s: s.replace('"/Assets/tau_gallery_dev/alfatreze.Tau Gallery DEV "', '"/Assets/tau_gallery_dev/alfatreze.Tau Gallery DEV x"'))
+check("mutant (a path without the core number) is caught", not bad2[0].endswith("/Assets/tau_gallery_dev/alfatreze.Tau Gallery DEV 212/preset-probe.bin"))
 print("PASSED" if not fails else "FAILED (%d)" % fails); sys.exit(1 if fails else 0)

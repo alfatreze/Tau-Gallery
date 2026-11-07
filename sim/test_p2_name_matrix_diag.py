@@ -36,7 +36,7 @@ def build(td, mut=None):
     r = subprocess.run(["cc", "-std=gnu11", "-O1", "-w", "-o", str(d / "h"), str(d / "sim/h.c")], capture_output=True, text=True)
     if r.returncode: print(r.stderr[-1500:]); sys.exit(1)
     return d / "h"
-ROOTP = "/Assets/tau/common/"
+ROOTP = "/Assets/tau_gallery/common/"
 def card(only_ascii=True, extra=(), drop=(), swap=None):
     """the model lines for a card that carries what tools/name_matrix.py writes. only_ascii: only the paths without a byte >= 0x80 are found (round 1); need: {variant: needmode}; extra: alias paths that open (variant ids 17, 18, 20, 21)"""
     fs = nm.files(ROOTP); vs = nm.variants(ROOTP); prefix = (ROOTP + nm.DIR + "/").encode()

@@ -24,8 +24,8 @@ import shutil
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SOURCE_CORE = ROOT / "dist/Cores/alfatreze.TAU"
-SOURCE_PLATFORM_IMAGE = ROOT / "dist/Platforms/_images/tau.bin"
+SOURCE_CORE = ROOT / "dist/Cores/alfatreze.Tau Gallery"
+SOURCE_PLATFORM_IMAGE = ROOT / "dist/Platforms/_images/tau_gallery.bin"
 
 PLATFORM_ID = "tau_psram"
 CORE_ID = "alfatreze.TAU_PSRAM"

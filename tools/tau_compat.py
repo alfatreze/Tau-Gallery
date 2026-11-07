@@ -31,7 +31,7 @@ the tree the release was built from (make_release.py does both in one run).
 
   python3 tools/tau_compat.py build  --release v0.6.0-alpha.5 --zip A.zip --zip B.zip --previous OLD_A.zip --previous OLD_B.zip --rbf RAW.rbf -o tau-compat.json
   python3 tools/tau_compat.py verify tau-compat.json --zip A.zip --zip B.zip --previous ... --rbf RAW.rbf
-  python3 tools/tau_compat.py check-card tau-compat.json CARD_DIR [--core alfatreze.TAU]
+  python3 tools/tau_compat.py check-card tau-compat.json CARD_DIR [--core alfatreze.Tau Gallery]
 """
 import argparse
 import hashlib

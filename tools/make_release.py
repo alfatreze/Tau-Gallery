@@ -3,13 +3,13 @@
 
 Both cores run on the same FPGA bitstream and the same firmware source; the Diagnostic Build only has the test
 menus switched on. Zip names follow Analogue's convention <Author>.<Core>_<Version>_<Date>.zip and contain only
-Pocket base folders (Cores, Platforms, Assets). Version and date come from dist/Cores/alfatreze.TAU/core.json.
+Pocket base folders (Cores, Platforms, Assets). Version and date come from dist/Cores/alfatreze.Tau Gallery/core.json.
 
   python3 tools/make_release.py --rbf PATH_TO_RAW.rbf --rbf-sha256 HASH --release v0.6.0-alpha.5 \
       --previous-release v0.6.0-alpha.4 --previous release/<last normal zip> --previous release/<last diagnostic zip> [--test]
 
-Channel from the tag (tools/tau_layout.py): vX.Y.Z = Stable (alfatreze.TAU + 'TAU Diagnostics' on platform tau); any pre-release label =
-Preview ('TAU Preview' + 'TAU Preview Diagnostics' on platform tau_preview, reading TAU's media in place). Zips: <core id, spaces as _>_<version>_<date>.zip
+Channel from the tag (tools/tau_layout.py): vX.Y.Z = Stable (alfatreze.Tau Gallery + 'TAU Diagnostics' on platform tau); any pre-release label =
+Preview ('TAU Preview' + 'TAU Preview Diagnostics' on platform tau_gallery_pre, reading TAU's media in place). Zips: <core id, spaces as _>_<version>_<date>.zip
 
 Steps: build both ROMs, package the normal core (package.py), package the diagnostic core
 (tools/package_dev_build.py --release-diagnostic), check both, write release/<name>.zip x2, release/tau-compat.json (Tau Omega's compatibility manifest, tools/tau_compat.py,
@@ -70,7 +70,7 @@ PRESET_DIR = "tau-presets"
 
 def add_factory_presets(src: Path, media_platform: str):
     """Player 2 meters read their presets from files (docs/features/METER_PRESETS_EXTERNAL.md): put the factory set (tools/player2/mpreset.py, meters/<key>/presets.json) in the package under
-    Assets/<media platform>/common/tau-presets/, next to the library (the media root of /Assets/tau/common/). Unzipping a release over a card therefore restores the factory presets: Tau Omega's sync
+    Assets/<media platform>/common/tau-presets/, next to the library (the media root of /Assets/tau_gallery/common/). Unzipping a release over a card therefore restores the factory presets: Tau Omega's sync
     is the way that keeps a user's own."""
     import install_factory_presets as ifp
     files = ifp.factory()
@@ -94,7 +94,7 @@ def check_factory_presets(names, read, media_platform: str):
     return len(want)
 
 
-def verify(z: Path, core_id: str, version: str, raw_rbf: bytes, rom: Path, player2: bool = False, media_platform: str = "tau"):
+def verify(z: Path, core_id: str, version: str, raw_rbf: bytes, rom: Path, player2: bool = False, media_platform: str = "tau_gallery"):
     rev = raw_rbf.translate(bytes(int(f"{x:08b}"[::-1], 2) for x in range(256)))
     with zipfile.ZipFile(z) as f:
         names = f.namelist()
@@ -132,7 +132,7 @@ def main():
         sys.exit(f"RBF hash mismatch: expected {args.rbf_sha256}, got {sha(rbf)}")
     raw = rbf.read_bytes()
 
-    meta = json.loads((ROOT / "dist/Cores/alfatreze.TAU/core.json").read_text())["core"]["metadata"]
+    meta = json.loads((ROOT / "dist/Cores/alfatreze.Tau Gallery/core.json").read_text())["core"]["metadata"]
     version, date = meta["version"].split("-")[0], meta["date_release"]     # X.Y.Z (dist may still carry a previous pre-release label)
     print(f"release {args.release}: core.json v{version} ({date})")
     # tau-compat.json (Tau Omega): refuse early what would refuse late -- the tag must match core.json and the changelog,
@@ -192,11 +192,11 @@ def main():
     # B-563: a RAM_192K=1 build never writes dist/ (build.sh, B-333) but goes to work/ram192k/release/. The
     # release ships that build, so put it where package.py and the zip expect it -- and refuse to go on if
     # the ROM in dist/ is not the one just built (the earlier run silently zipped a stale 256 KB ROM).
-    built = ROOT / ("work/ram192k/release" if env.get("RAM_192K") == "1" else "dist/Assets/tau/alfatreze.TAU")
+    built = ROOT / ("work/ram192k/release" if env.get("RAM_192K") == "1" else "dist/Assets/tau_gallery/alfatreze.Tau Gallery")
     for name in ("tau.rom", "tau-cold.bin"):
-        if built != ROOT / "dist/Assets/tau/alfatreze.TAU":
-            shutil.copy2(built / name, ROOT / "dist/Assets/tau/alfatreze.TAU" / name)
-        assert sha(built / name) == sha(ROOT / "dist/Assets/tau/alfatreze.TAU" / name), f"dist/{name} is not the freshly built one"
+        if built != ROOT / "dist/Assets/tau_gallery/alfatreze.Tau Gallery":
+            shutil.copy2(built / name, ROOT / "dist/Assets/tau_gallery/alfatreze.Tau Gallery" / name)
+        assert sha(built / name) == sha(ROOT / "dist/Assets/tau_gallery/alfatreze.Tau Gallery" / name), f"dist/{name} is not the freshly built one"
     sh(["bash", "fw/build.sh", "player-library-diagnostic"], env=env)     # Diagnostic Build: adds Tests/Stress and the Check
     sh([sys.executable, "package.py", "--rbf", str(rbf), "--rbf-sha256", args.rbf_sha256, "--release-library"])
     sh([sys.executable, "tools/check_tau_package.py"])
@@ -205,7 +205,7 @@ def main():
         "--rbf", str(rbf), "--rbf-sha256", args.rbf_sha256])
     # The normal core of a Preview release is the release build under the Preview channel's name and platforms (TAU's media in place).
     normal_src = ROOT / "dist" if channel == "stable" else tau_layout.retarget(
-        ROOT / "dist", ROOT / "work/release-preview/pocket", "alfatreze.TAU", normal_id, channel)
+        ROOT / "dist", ROOT / "work/release-preview/pocket", "alfatreze.Tau Gallery", normal_id, channel)
     if channel != "stable":
         sh([sys.executable, "tools/check_fw_bitstream_pair.py", normal_src, "--bitstream-version", core_version])
     if args.test:

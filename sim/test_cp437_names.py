@@ -72,7 +72,7 @@ with tempfile.TemporaryDirectory() as td:
     check("verify passes", L.verify(data, root) == [], L.verify(data, root))
     ix = L.parse(data)
     paths = {L.track_path(ix, i) for i in range(len(ix.tracks))}
-    check("track_path round-trips the precomposed names", "/Assets/tau/common/Café/01 Café.mp3" in paths, paths)
+    check("track_path round-trips the precomposed names", "/Assets/tau_gallery/common/Café/01 Café.mp3" in paths, paths)
     pool = ix.strings
     check("e-acute is the single byte 0x82 in the pool", b"Caf\x82/" not in pool and b"Caf\x82\x00" in pool)
     check("ss is 0xE1 and A-umlaut 0x8E", b"Stra\xe1e\x00" in pool and b"02 \x8epfel.mp3\x00" in pool)

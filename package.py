@@ -4,7 +4,7 @@ package.py — Package the compiled TAU core for the Analogue Pocket.
 Steps:
   1. Verify the bitstream exists in src/fpga/output_files/
   2. Convert .rbf -> .rbf_r (BIT-REVERSED bitstream for Pocket -- mandatory)
-  3. Copy bitstream to dist/Cores/alfatreze.TAU/bitstream.rbf_r
+  3. Copy bitstream to dist/Cores/alfatreze.Tau Gallery/bitstream.rbf_r
   4. Verify the firmware image is present (built separately by fw/build.sh)
   5. Print copy instructions for the Pocket SD card
 
@@ -28,9 +28,9 @@ import tau_data_slots
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 BITSTREAM_SRC = os.path.join(PROJECT_ROOT, "src", "fpga", "output_files", "ap_core.rbf")
-DIST_CORE     = os.path.join(PROJECT_ROOT, "dist", "Cores", "alfatreze.TAU")
+DIST_CORE     = os.path.join(PROJECT_ROOT, "dist", "Cores", "alfatreze.Tau Gallery")
 BITSTREAM_DST = os.path.join(DIST_CORE, "bitstream.rbf_r")
-ROM_DST       = os.path.join(PROJECT_ROOT, "dist", "Assets", "tau", "alfatreze.TAU", "tau.rom")   # core-specific (tools/tau_layout.py)
+ROM_DST       = os.path.join(PROJECT_ROOT, "dist", "Assets", "tau_gallery", "alfatreze.Tau Gallery", "tau.rom")   # core-specific (tools/tau_layout.py)
 README_PATH   = os.path.join(PROJECT_ROOT, "README.md")
 
 

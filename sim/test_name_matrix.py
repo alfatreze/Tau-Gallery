@@ -27,7 +27,7 @@ except UnicodeDecodeError: inv = True
 check("variant 15 really is invalid UTF-8", inv)
 check("the plan command prints every variant and writes nothing", run("plan")[0] == 0 and sum(1 for l in run("plan")[1].splitlines() if l[:2].isdigit() and "  f  " in l) == 3)
 with tempfile.TemporaryDirectory() as td:
-    card = Path(td) / "card"; common = card / "Assets/tau/common"; common.mkdir(parents=True)
+    card = Path(td) / "card"; common = card / "Assets/tau_gallery/common"; common.mkdir(parents=True)
     rc, out = run("write", "--card", card); check("a card without a library is refused", rc == 1 and "no library" in out, out[:120])
     r = subprocess.run([sys.executable, str(ROOT / "tools/tau_library.py"), "synth", "--tracks", "3", "--albums", "1", "--artists", "1", "--out", str(common / "tau-library.tdb")], capture_output=True)
     if r.returncode: print(r.stderr); sys.exit(1)

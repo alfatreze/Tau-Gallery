@@ -32,10 +32,10 @@ with tempfile.TemporaryDirectory() as td:
     pkg = ROOT / "dist"
 
     rc, out = run(pkg, "--card", card)
-    check("dry run succeeds and writes nothing", rc == 0 and "DRY RUN" in out and not (card / "Cores/alfatreze.TAU").exists())
+    check("dry run succeeds and writes nothing", rc == 0 and "DRY RUN" in out and not (card / "Cores/alfatreze.Tau Gallery").exists())
 
     rc, out = run(pkg, "--card", card, "--backup-dir", td / "bk1", "--no-eject", "--yes")
-    core_ok = (card / "Cores/alfatreze.TAU/bitstream.rbf_r").read_bytes() == (pkg / "Cores/alfatreze.TAU/bitstream.rbf_r").read_bytes()
+    core_ok = (card / "Cores/alfatreze.Tau Gallery/bitstream.rbf_r").read_bytes() == (pkg / "Cores/alfatreze.Tau Gallery/bitstream.rbf_r").read_bytes()
     check("install copies the core byte-identically", rc == 0 and core_ok)
     check("catalog caches deleted, other System files kept",
           not any((card / "System" / f).exists() for f in CACHES) and (card / "System/recent.bin").exists())
@@ -44,32 +44,32 @@ with tempfile.TemporaryDirectory() as td:
     rc, out = run(pkg, "--card", card)
     check("an existing core is refused without --replace", rc != 0 and "--replace" in out)
 
-    (card / "Assets/tau/common").mkdir(parents=True, exist_ok=True)       # a real card has the media folder; dist/ ships none since H4
-    (card / "Assets/tau/common/my-track.mp3").write_bytes(b"media")
+    (card / "Assets/tau_gallery/common").mkdir(parents=True, exist_ok=True)       # a real card has the media folder; dist/ ships none since H4
+    (card / "Assets/tau_gallery/common/my-track.mp3").write_bytes(b"media")
     rc, out = run(pkg, "--card", card, "--backup-dir", td / "bk2", "--replace", "--allow-release", "--no-eject", "--yes")
-    check("--replace refreshes the core and keeps the media", rc == 0 and (card / "Assets/tau/common/my-track.mp3").exists())
-    check("--replace backed up the old copy", (td / "bk2/alfatreze.TAU/Cores/alfatreze.TAU").is_dir())
-    check("--replace backup leaves the duplicate media out (B-542)", not (td / "bk2/alfatreze.TAU/Assets/tau/common/my-track.mp3").exists())
+    check("--replace refreshes the core and keeps the media", rc == 0 and (card / "Assets/tau_gallery/common/my-track.mp3").exists())
+    check("--replace backed up the old copy", (td / "bk2/alfatreze.Tau Gallery/Cores/alfatreze.Tau Gallery").is_dir())
+    check("--replace backup leaves the duplicate media out (B-542)", not (td / "bk2/alfatreze.Tau Gallery/Assets/tau_gallery/common/my-track.mp3").exists())
     rc, out = run(pkg, "--card", card, "--backup-dir", td / "bk2b", "--replace", "--allow-release", "--backup-media", "--no-eject", "--yes")
-    check("--backup-media keeps the media in the backup", rc == 0 and (td / "bk2b/alfatreze.TAU/Assets/tau/common/my-track.mp3").read_bytes() == b"media")
+    check("--backup-media keeps the media in the backup", rc == 0 and (td / "bk2b/alfatreze.Tau Gallery/Assets/tau_gallery/common/my-track.mp3").read_bytes() == b"media")
 
     bad_ta = td / "bad-assets.bin"; bad_ta.write_bytes(b"TAUA-test")
     rc, out = run(pkg, "--card", card, "--backup-dir", td / "bk3x", "--replace", "--allow-release", "--assets", bad_ta, "--no-eject", "--yes")
     check("an --assets file the release cannot read is refused before writing (review M3)", rc != 0 and "refused before writing" in out and not (td / "bk3x").exists())
     fixture = ROOT / "docs/schemas/fixtures/tau-assets-roundtrip.bin"
     rc, out = run(pkg, "--card", card, "--backup-dir", td / "bk3", "--replace", "--allow-release", "--assets", fixture, "--no-eject", "--yes")
-    check("--assets places tau-assets.bin in common/, verified", rc == 0 and (card / "Assets/tau/common/tau-assets.bin").read_bytes() == fixture.read_bytes())
+    check("--assets places tau-assets.bin in common/, verified", rc == 0 and (card / "Assets/tau_gallery/common/tau-assets.bin").read_bytes() == fixture.read_bytes())
     other = td / "other" / "tau-assets.bin"; other.parent.mkdir(); other.write_bytes(fixture.read_bytes()[:-1] + b"\x00")
     pk2 = td / "pk2"; shutil.copytree(pkg, pk2 / "pocket"); shutil.copy2(other, pk2 / "tau-assets.bin")   # a sample next to the package
     rc, out = run(pk2 / "pocket", "--card", card, "--backup-dir", td / "bk3b", "--replace", "--allow-release", "--no-eject", "--yes")
     check("a sample found next to the package does not overwrite the card's own tau-assets.bin (review H1)",
-          rc == 0 and "card's own file is kept" in out and (card / "Assets/tau/common/tau-assets.bin").read_bytes() == fixture.read_bytes())
+          rc == 0 and "card's own file is kept" in out and (card / "Assets/tau_gallery/common/tau-assets.bin").read_bytes() == fixture.read_bytes())
 
     # B-332: --replace keeps the media; a stale index must be detected and rebuilt, a good one left alone.
     gen = td / "flacs"; gen.mkdir()
     subprocess.run([sys.executable, str(ROOT / "tools/flac_make_test.py"), str(gen)], capture_output=True, cwd=ROOT)
     flacs = sorted(gen.glob("*.flac"))[:2]
-    common = card / "Assets/tau/common"
+    common = card / "Assets/tau_gallery/common"
     (common / "Album").mkdir(exist_ok=True)
     for f in flacs: (common / "Album" / f.name).write_bytes(f.read_bytes())
     stale = td / "stale.tdb"
@@ -94,64 +94,64 @@ with tempfile.TemporaryDirectory() as td:
     # cores under one platform; the old --remove deleted the whole Assets/<platform> and the platform files).
     def twin(core, plat, platforms):
         tp = td / f"pkg-{core}" / "pocket"
-        shutil.copytree(pkg / "Cores/alfatreze.TAU", tp / "Cores" / core)
+        shutil.copytree(pkg / "Cores/alfatreze.Tau Gallery", tp / "Cores" / core)
         cj = json.loads((tp / "Cores" / core / "core.json").read_text())
         cj["core"]["metadata"].update(shortname=core.split(".")[1], platform_ids=platforms)
         (tp / "Cores" / core / "core.json").write_text(json.dumps(cj))
-        shutil.copytree(pkg / "Assets/tau/alfatreze.TAU", tp / "Assets" / plat / core)
+        shutil.copytree(pkg / "Assets/tau_gallery/alfatreze.Tau Gallery", tp / "Assets" / plat / core)
         (tp / "Platforms/_images").mkdir(parents=True)
-        shutil.copy2(pkg / "Platforms/tau.json", tp / "Platforms" / f"{plat}.json")
-        shutil.copy2(pkg / "Platforms/_images/tau.bin", tp / "Platforms/_images" / f"{plat}.bin")
+        shutil.copy2(pkg / "Platforms/tau_gallery.json", tp / "Platforms" / f"{plat}.json")
+        shutil.copy2(pkg / "Platforms/_images/tau_gallery.bin", tp / "Platforms/_images" / f"{plat}.bin")
         return tp
-    rc, out = run(twin("alfatreze.TAU_TWIN", "tau", ["tau"]), "--card", card, "--backup-dir", td / "bk-tw", "--no-eject", "--yes")
-    check("a second core installs beside TAU on the same platform", rc == 0 and (card / "Assets/tau/alfatreze.TAU_TWIN/tau.rom").exists())
-    media_before = sorted(str(f.relative_to(card)) for f in (card / "Assets/tau/common").rglob("*") if f.is_file())
+    rc, out = run(twin("alfatreze.TAU_TWIN", "tau_gallery", ["tau_gallery"]), "--card", card, "--backup-dir", td / "bk-tw", "--no-eject", "--yes")
+    check("a second core installs beside TAU on the same platform", rc == 0 and (card / "Assets/tau_gallery/alfatreze.TAU_TWIN/tau.rom").exists())
+    media_before = sorted(str(f.relative_to(card)) for f in (card / "Assets/tau_gallery/common").rglob("*") if f.is_file())
     rc, out = run("--card", card, "--remove", "alfatreze.TAU_TWIN")
-    check("remove-only dry run lists only the core's own folders", rc == 0 and "DRY RUN" in out and "Assets/tau/alfatreze.TAU_TWIN" in out
-          and "Platforms/tau.json" not in out and (card / "Cores/alfatreze.TAU_TWIN").exists())
+    check("remove-only dry run lists only the core's own folders", rc == 0 and "DRY RUN" in out and "Assets/tau_gallery/alfatreze.TAU_TWIN" in out
+          and "Platforms/tau_gallery.json" not in out and (card / "Cores/alfatreze.TAU_TWIN").exists())
     rc, out = run("--card", card, "--remove", "alfatreze.TAU_TWIN", "--backup-dir", td / "bk-rm", "--no-eject", "--yes")
-    media_after = sorted(str(f.relative_to(card)) for f in (card / "Assets/tau/common").rglob("*") if f.is_file())
+    media_after = sorted(str(f.relative_to(card)) for f in (card / "Assets/tau_gallery/common").rglob("*") if f.is_file())
     check("removing a core from a shared platform keeps the platform's media, index and platform files (B-672)",
-          rc == 0 and not (card / "Cores/alfatreze.TAU_TWIN").exists() and not (card / "Assets/tau/alfatreze.TAU_TWIN").exists()
-          and media_after == media_before and (card / "Platforms/tau.json").exists() and (card / "Cores/alfatreze.TAU").exists())
-    check("its backup holds only what belonged to it", (td / "bk-rm/alfatreze.TAU_TWIN/Assets/tau/alfatreze.TAU_TWIN/tau.rom").exists()
-          and not (td / "bk-rm/alfatreze.TAU_TWIN/Assets/tau/common").exists())
+          rc == 0 and not (card / "Cores/alfatreze.TAU_TWIN").exists() and not (card / "Assets/tau_gallery/alfatreze.TAU_TWIN").exists()
+          and media_after == media_before and (card / "Platforms/tau_gallery.json").exists() and (card / "Cores/alfatreze.Tau Gallery").exists())
+    check("its backup holds only what belonged to it", (td / "bk-rm/alfatreze.TAU_TWIN/Assets/tau_gallery/alfatreze.TAU_TWIN/tau.rom").exists()
+          and not (td / "bk-rm/alfatreze.TAU_TWIN/Assets/tau_gallery/common").exists())
     rc, out = run(twin("alfatreze.TAU_SOLO", "tau_solo", ["tau_solo"]), "--card", card, "--backup-dir", td / "bk-so", "--no-eject", "--yes")
     (card / "Assets/tau_solo/common").mkdir(parents=True, exist_ok=True); (card / "Assets/tau_solo/common/x.mp3").write_bytes(b"m")
     rc, out = run("--card", card, "--remove", "alfatreze.TAU_SOLO", "--backup-dir", td / "bk-rm2", "--no-eject", "--yes")
     check("a core with its own platform is still removed with its whole Assets folder and platform files, media backed up",
           rc == 0 and not (card / "Assets/tau_solo").exists() and not (card / "Platforms/tau_solo.json").exists()
           and (td / "bk-rm2/alfatreze.TAU_SOLO/Assets/tau_solo/common/x.mp3").exists())
-    rc, out = run("--card", card, "--remove", "alfatreze.TAU", "--yes")
+    rc, out = run("--card", card, "--remove", "alfatreze.Tau Gallery", "--yes")
     check("remove-only also protects the release cores", rc != 0 and "release core" in out)
 
-    # Dev channel (B-673 option a): TAU DEV builds share one TAU Dev platform and read TAU's library and tau-assets.bin in place.
+    # Dev channel (B-673 option a): Tau Gallery DEV builds share one TAU Dev platform and read TAU's library and tau-assets.bin in place.
     sys.path.insert(0, str(ROOT / "tools"))
     import tau_layout
     def devpkg(n):
-        core = f"alfatreze.TAU DEV {n}"
-        tp = twin(core, "tau_dev", ["tau_dev", "tau"])
+        core = f"alfatreze.Tau Gallery DEV {n}"
+        tp = twin(core, "tau_gallery_dev", ["tau_gallery_dev", "tau_gallery"])
         dj = json.loads((tp / "Cores" / core / "data.json").read_text())
         (tp / "Cores" / core / "data.json").write_text(json.dumps(tau_layout.read_shared_media(dj)))
-        (tp / "Platforms/tau_dev.json").write_text(json.dumps({"platform": {"name": "TAU Dev"}}))
+        (tp / "Platforms/tau_gallery_dev.json").write_text(json.dumps({"platform": {"name": "TAU Dev"}}))
         return tp
-    tau_assets_before = (card / "Assets/tau/common/tau-assets.bin").read_bytes()
+    tau_assets_before = (card / "Assets/tau_gallery/common/tau-assets.bin").read_bytes()
     d1 = devpkg(1); shutil.copy2(fixture, d1.parent / "tau-assets.bin")          # a sample next to the package
-    rc, out = run(d1, "--card", card, "--carry-from", "alfatreze.TAU", "--no-eject")
+    rc, out = run(d1, "--card", card, "--carry-from", "alfatreze.Tau Gallery", "--no-eject")
     check("dev channel: --carry-from is refused (the core reads TAU's media in place)", rc != 0 and "--carry-from is not used" in out)
     rc, out = run(d1, "--card", card, "--backup-dir", td / "bk-d1", "--no-eject", "--yes")
     check("dev channel: installs beside TAU, reads TAU's library in place, never touches TAU's own tau-assets.bin",
-          rc == 0 and "read in place from Assets/tau/common" in out and (card / "Assets/tau_dev/alfatreze.TAU DEV 1/tau.rom").exists()
-          and not (card / "Assets/tau_dev/common").exists() and (card / "Assets/tau/common/tau-assets.bin").read_bytes() == tau_assets_before)
+          rc == 0 and "read in place from Assets/tau_gallery/common" in out and (card / "Assets/tau_gallery_dev/alfatreze.Tau Gallery DEV 1/tau.rom").exists()
+          and not (card / "Assets/tau_gallery_dev/common").exists() and (card / "Assets/tau_gallery/common/tau-assets.bin").read_bytes() == tau_assets_before)
     rc, out = run(devpkg(2), "--card", card, "--backup-dir", td / "bk-d2", "--no-eject", "--yes")
-    rc, out = run("--card", card, "--remove", "alfatreze.TAU DEV 1", "--backup-dir", td / "bk-rd1", "--no-eject", "--yes")
+    rc, out = run("--card", card, "--remove", "alfatreze.Tau Gallery DEV 1", "--backup-dir", td / "bk-rd1", "--no-eject", "--yes")
     check("dev channel: removing one dev build keeps the TAU Dev platform for the others and TAU's media",
-          rc == 0 and not (card / "Cores/alfatreze.TAU DEV 1").exists() and (card / "Platforms/tau_dev.json").exists()
-          and (card / "Assets/tau_dev/alfatreze.TAU DEV 2").exists() and (card / "Assets/tau/common/tau-library.tdb").exists())
-    rc, out = run("--card", card, "--remove", "alfatreze.TAU DEV 2", "--backup-dir", td / "bk-rd2", "--no-eject", "--yes")
+          rc == 0 and not (card / "Cores/alfatreze.Tau Gallery DEV 1").exists() and (card / "Platforms/tau_gallery_dev.json").exists()
+          and (card / "Assets/tau_gallery_dev/alfatreze.Tau Gallery DEV 2").exists() and (card / "Assets/tau_gallery/common/tau-library.tdb").exists())
+    rc, out = run("--card", card, "--remove", "alfatreze.Tau Gallery DEV 2", "--backup-dir", td / "bk-rd2", "--no-eject", "--yes")
     check("dev channel: removing the last dev build removes the TAU Dev platform and leaves TAU alone",
-          rc == 0 and not (card / "Assets/tau_dev").exists() and not (card / "Platforms/tau_dev.json").exists()
-          and (card / "Platforms/tau.json").exists() and (card / "Assets/tau/common/tau-library.tdb").exists())
+          rc == 0 and not (card / "Assets/tau_gallery_dev").exists() and not (card / "Platforms/tau_gallery_dev.json").exists()
+          and (card / "Platforms/tau_gallery.json").exists() and (card / "Assets/tau_gallery/common/tau-library.tdb").exists())
 
     # Release manifest (tau-compat.json schema 2): obsolete files removed, card checked; a non-matching --compat stops before writing.
     import zipfile
@@ -159,18 +159,18 @@ with tempfile.TemporaryDirectory() as td:
     import tau_compat as tc
     import tau_version
     rel = td / "relpkg" / "pkg"; shutil.copytree(pkg, rel)                  # a copy: the real dist/ is pinned
-    ver = json.loads((rel / "Cores/alfatreze.TAU/core.json").read_text())["core"]["metadata"]["version"]
-    rom_p = rel / "Assets/tau/alfatreze.TAU/tau.rom"
+    ver = json.loads((rel / "Cores/alfatreze.Tau Gallery/core.json").read_text())["core"]["metadata"]["version"]
+    rom_p = rel / "Assets/tau_gallery/alfatreze.Tau Gallery/tau.rom"
     rom_p.write_bytes(tau_version.stamp(rom_p.read_bytes(), ver))      # the fixture's ROM carries the version of its core.json (a release does)
     zp = td / "alfatreze.TAU_rel.zip"
     with zipfile.ZipFile(zp, "w") as z:
         for f in sorted(rel.rglob("*")):
             if f.is_file() and f.relative_to(rel).parts[0] in ("Cores", "Assets", "Platforms") and not f.name.startswith("._") and f.name != ".DS_Store":
                 z.write(f, str(f.relative_to(rel)))
-    ver = json.loads((rel / "Cores/alfatreze.TAU/core.json").read_text())["core"]["metadata"]["version"]
+    ver = json.loads((rel / "Cores/alfatreze.Tau Gallery/core.json").read_text())["core"]["metadata"]["version"]
     cl = td / "CL.md"
     cl.write_text((ROOT / "CHANGELOG.md").read_text().replace("## v0.6.0-alpha.4", f"## v{ver}-preview.1 — 8 October 2026\n- test\n\n## v0.6.0-alpha.4", 1))
-    acc = tc.rom_accepts((rel / "Assets/tau/alfatreze.TAU/tau.rom").read_bytes())
+    acc = tc.rom_accepts((rel / "Assets/tau_gallery/alfatreze.Tau Gallery/tau.rom").read_bytes())
     pkg = rel                                                       # the installs below use the stamped copy, the one the manifest describes
     cpath = td / "tau-compat.json"
     reg = json.loads((ROOT / "tools/persist_registry.json").read_text())      # the tree's registry names later releases than this fixture's
@@ -179,48 +179,48 @@ with tempfile.TemporaryDirectory() as td:
             v["since"] = f"v{ver}-preview.1"
     (td / "reg.json").write_text(json.dumps(reg))
     cpath.write_text(tc.dumps(tc.build(release=f"v{ver}-preview.1", zips=[zp], previous=None, bitstream_version=acc[0], changelog=cl, registry_file=td / "reg.json")))
-    (card / "Assets/tau/alfatreze.TAU").mkdir(parents=True, exist_ok=True)
-    (card / "Assets/tau/alfatreze.TAU/TAU.json").write_text("{}")
+    (card / "Assets/tau_gallery/alfatreze.Tau Gallery").mkdir(parents=True, exist_ok=True)
+    (card / "Assets/tau_gallery/alfatreze.Tau Gallery/TAU.json").write_text("{}")
     rc, out = run(pkg, "--card", card, "--backup-dir", td / "bk6", "--replace", "--allow-release", "--compat", cpath, "--no-eject", "--yes")
     check("with --compat: the obsolete TAU.json is removed and the card check passes",
-          rc == 0 and "removed obsolete Assets/tau/alfatreze.TAU/TAU.json" in out and "card matches" in out
-          and not (card / "Assets/tau/alfatreze.TAU/TAU.json").exists())
-    check("the obsolete file is in the backup of the replaced core", (td / "bk6/alfatreze.TAU/Assets/tau/alfatreze.TAU/TAU.json").exists())
+          rc == 0 and "removed obsolete Assets/tau_gallery/alfatreze.Tau Gallery/TAU.json" in out and "card matches" in out
+          and not (card / "Assets/tau_gallery/alfatreze.Tau Gallery/TAU.json").exists())
+    check("the obsolete file is in the backup of the replaced core", (td / "bk6/alfatreze.Tau Gallery/Assets/tau_gallery/alfatreze.Tau Gallery/TAU.json").exists())
     # H4 migration: an old-layout card (build-bound files in common/) is upgraded; the stale common/ copies are removed after the check,
     # unless another core on the platform still reads them from there.
     for n in ("tau.rom", "tau-cold.bin", "tau-loading.bin"):
-        (card / "Assets/tau/common" / n).write_bytes(b"old-layout " + n.encode())
+        (card / "Assets/tau_gallery/common" / n).write_bytes(b"old-layout " + n.encode())
     old = card / "Cores/alfatreze.TAU_OLD"; old.mkdir()
-    (old / "core.json").write_text(json.dumps({"core": {"metadata": {"author": "alfatreze", "shortname": "TAU_OLD", "platform_ids": ["tau"]}}}))
+    (old / "core.json").write_text(json.dumps({"core": {"metadata": {"author": "alfatreze", "shortname": "TAU_OLD", "platform_ids": ["tau_gallery"]}}}))
     (old / "data.json").write_text(json.dumps({"data": {"data_slots": [{"id": 1, "filename": "tau.rom", "parameters": "0x108"}]}}))
     rc, out = run(pkg, "--card", card, "--backup-dir", td / "bk6b", "--replace", "--allow-release", "--compat", cpath, "--no-eject", "--yes")
     check("H4 upgrade: common/tau.rom is kept while an old-layout core on the platform still reads it; cold image and splash removed",
-          rc == 0 and "kept obsolete Assets/tau/common/tau.rom" in out and (card / "Assets/tau/common/tau.rom").exists()
-          and not (card / "Assets/tau/common/tau-cold.bin").exists() and not (card / "Assets/tau/common/tau-loading.bin").exists())
+          rc == 0 and "kept obsolete Assets/tau_gallery/common/tau.rom" in out and (card / "Assets/tau_gallery/common/tau.rom").exists()
+          and not (card / "Assets/tau_gallery/common/tau-cold.bin").exists() and not (card / "Assets/tau_gallery/common/tau-loading.bin").exists())
     shutil.rmtree(old)
     rc, out = run(pkg, "--card", card, "--backup-dir", td / "bk6c", "--replace", "--allow-release", "--compat", cpath, "--no-eject", "--yes")
-    check("H4 upgrade: with no other reader the stale common/tau.rom is removed too", rc == 0 and not (card / "Assets/tau/common/tau.rom").exists())
+    check("H4 upgrade: with no other reader the stale common/tau.rom is removed too", rc == 0 and not (card / "Assets/tau_gallery/common/tau.rom").exists())
     bad = json.loads(cpath.read_text()); bad["packages"][0]["layout"] = [dict(e, sha256="0" * 64) if e["path"].endswith("tau.rom") else e for e in bad["packages"][0]["layout"]]
     (td / "bad.json").write_text(json.dumps(bad))
     (card / "System/corelist_cache.bin").write_text("x")
     rc, out = run(pkg, "--card", card, "--backup-dir", td / "bk7", "--replace", "--allow-release", "--compat", td / "bad.json", "--no-eject", "--yes")
     check("a --compat that does not describe the package stops before writing", rc != 0 and "does not describe this package" in out and not (td / "bk7").exists())
-    good_assets = (card / "Assets/tau/common/tau-assets.bin").read_bytes()
-    (card / "Assets/tau/common/tau-assets.bin").write_bytes(b"TAUA" + (9).to_bytes(2, "little") + bytes(6))
+    good_assets = (card / "Assets/tau_gallery/common/tau-assets.bin").read_bytes()
+    (card / "Assets/tau_gallery/common/tau-assets.bin").write_bytes(b"TAUA" + (9).to_bytes(2, "little") + bytes(6))
     rc, out = run(pkg, "--card", card, "--backup-dir", td / "bk8", "--replace", "--allow-release", "--compat", cpath, "--no-eject", "--yes")
     check("a card file in a format the release cannot read is refused BEFORE writing (review M3)",
           rc != 0 and "refused before writing" in out and "TAUA version 9" in out and not (td / "bk8").exists())
-    (card / "Assets/tau/common/tau-assets.bin").write_bytes(good_assets)
+    (card / "Assets/tau_gallery/common/tau-assets.bin").write_bytes(good_assets)
 
     # Auto-restore (review M3): a fault after the copy, or a failed card check, puts the card back and keeps the caches.
     import hashlib, os
     def snapshot():
         return {str(f.relative_to(card)): hashlib.sha256(f.read_bytes()).hexdigest() for f in sorted(card.rglob("*")) if f.is_file()}
-    rom = card / "Assets/tau/alfatreze.TAU/tau.rom"
+    rom = card / "Assets/tau_gallery/alfatreze.Tau Gallery/tau.rom"
     rom.write_bytes(rom.read_bytes() + b"OLD")                              # a card whose ROM differs from the package (an older build)
     before = snapshot()
     for stage in ("copy", "check"):
-        env = dict(os.environ, TAU_INSTALL_TEST_CORRUPT=f"{stage}:Assets/tau/alfatreze.TAU/tau.rom")
+        env = dict(os.environ, TAU_INSTALL_TEST_CORRUPT=f"{stage}:Assets/tau_gallery/alfatreze.Tau Gallery/tau.rom")
         r = subprocess.run(TOOL + [str(pkg), "--card", str(card), "--backup-dir", str(td / f"bk-{stage}"), "--replace", "--allow-release",
                                    "--compat", str(cpath), "--no-eject", "--yes"], capture_output=True, text=True, cwd=ROOT, env=env)
         o = r.stdout + r.stderr

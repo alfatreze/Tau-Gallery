@@ -25,7 +25,7 @@ with tempfile.TemporaryDirectory() as td:
     exe = Path(td) / "h"
     r = subprocess.run(["cc", "-std=gnu11", "-O1", "-w", "-o", str(exe), str(ROOT / "sim/p2_slot_open_harness.c")], capture_output=True, text=True)
     if r.returncode: print(r.stderr[-1500:]); sys.exit(1)
-    def template(path=b"/Assets/tau/common/tau-lib.tdb", off=32):
+    def template(path=b"/Assets/tau_gallery/common/a.b", off=32):
         """a 0190 response: header words, the length word at off-4, the path at off (the shape the firmware's heuristic expects). ASSUMED shape: no capture of a real APF response is in the repository; the template path is 30 bytes long so that the
         length word's low byte (0x1E) is not printable (a printable one would fuse with the path in the firmware's longest-printable-run search). The conclusions A and B hold for any shape: the path bytes are copied verbatim."""
         b = bytearray(256)
@@ -41,20 +41,20 @@ with tempfile.TemporaryDirectory() as td:
         """what APF reads: the length word at off-4 and that many bytes at off"""
         n = int.from_bytes(buf[off - 4:off], "big"); return n, buf[off:off + n]
     # A. byte-transparent for ASCII and UTF-8
-    base = "/Assets/tau/common/Music/"
+    base = "/Assets/tau_gallery/common/Music/"
     for label, name in (("ASCII control", "Cafe.mp3"), ("NFC (precomposed)", unicodedata.normalize("NFC", "Café.mp3")), ("NFD (decomposed, what macOS writes)", unicodedata.normalize("NFD", "Café.mp3")), ("CJK", "日本語.mp3")):
         p = (base + name).encode("utf-8"); rc, err, buf = run(p); n, got = apf_view(buf)
         check("A. %s: the struct carries the exact UTF-8 bytes (%d) and their byte length" % (label, len(p)), rc == 1 and n == len(p) and got == p, (rc, err, n, got))
     p = (base + "Caf\xe9.mp3").encode("latin-1"); rc, err, buf = run(p); n, got = apf_view(buf)
     check("B. a Latin-1 byte 0xE9 in the name also goes through unchanged (%d bytes)" % len(p), rc == 1 and n == len(p) and got == p, (rc, err, n, got))
     # C. the old bug's mechanism: a non-ASCII byte inside the TEMPLATE's path
-    bad = template(path="/Assets/tau/common/Caf\xe9/x.mp3".encode("latin-1"))
-    p = b"/Assets/tau/common/Music/A.mp3"; rc, err, buf = run(p, tpl=bad); n, got = apf_view(buf)
+    bad = template(path="/Assets/tau_gallery/common/Caf\xe9/x.mp3".encode("latin-1"))
+    p = b"/Assets/tau_gallery/common/Music/A.mp3"; rc, err, buf = run(p, tpl=bad); n, got = apf_view(buf)
     check("C. a template whose path holds a non-ASCII byte: the length word is NOT patched (APF would read %d bytes of a %d-byte path): the old player's bug" % (n, len(p)), rc == 1 and n != len(p), (rc, n, got))
     nad = template(); rc, err, buf = run(p, tpl=nad); n, got = apf_view(buf)
     check("C. the same path in the ASCII library template (Player 2's own) is fine", rc == 1 and n == len(p) and got == p, (rc, n, got))
     # D. capacity
-    ascii_ok = b"/Assets/tau/common/" + b"a" * 150 + b".mp3"
+    ascii_ok = b"/Assets/tau_gallery/common/" + b"a" * 150 + b".mp3"
     rc1, _, _ = run(ascii_ok); check("D. an ASCII path of %d bytes fits" % len(ascii_ok), rc1 == 1)
     lim = next(n for n in range(10, 400) if run(b"/" + b"a" * n)[0] == 0)
     check("D. the longest path that fits is %d bytes (SLOT_E_TOOLONG above): %d characters of 3-byte UTF-8 (CJK) at the most, %d of 2-byte (accented, Cyrillic)" % (lim - 1, (lim - 2) // 3, (lim - 2) // 2), 120 < lim < 230, lim)

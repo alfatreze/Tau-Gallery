@@ -7,10 +7,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DIST = ROOT / "dist"
-CORE_DIR = DIST / "Cores/alfatreze.TAU"
-ASSET_DIR = DIST / "Assets/tau/alfatreze.TAU"   # build-bound files are core-specific (tools/tau_layout.py)
-PLATFORM_JSON = DIST / "Platforms/tau.json"
-PLATFORM_ART = DIST / "Platforms/_images/tau.bin"
+CORE_DIR = DIST / "Cores/alfatreze.Tau Gallery"
+ASSET_DIR = DIST / "Assets/tau_gallery/alfatreze.Tau Gallery"   # build-bound files are core-specific (tools/tau_layout.py)
+PLATFORM_JSON = DIST / "Platforms/tau_gallery.json"
+PLATFORM_ART = DIST / "Platforms/_images/tau_gallery.bin"
 
 
 def read_json(path):
@@ -24,27 +24,27 @@ def main():
     platform = read_json(PLATFORM_JSON)["platform"]
 
     assert core["author"] == "alfatreze"
-    assert core["shortname"] == "TAU"
-    assert core["platform_ids"] == ["tau"]
+    assert core["shortname"] == "Tau Gallery"
+    assert core["platform_ids"] == ["tau_gallery"]
     # Pocket hardware does not render the superscript-alpha metadata glyph.
     # Keep OS-visible strings ASCII and carry the brand mark in artwork and in
     # Tau's own framebuffer, where the project controls glyph rendering.
     assert 0 < len(core["description"]) <= 63, "core.json description must be 1..63 characters (Pocket limit)"
-    assert "Tau Omega" in core["description"], "the description should say that music is synced with Tau Omega"
-    assert core.get("url") == "https://github.com/alfatreze/Tau-Alpha" and len(core["url"]) <= 63, "core.json needs the repository url (openFPGA Library requirement, 63 characters at most)"
-    assert platform["name"] == "TAU"
+    assert "gallery" in core["description"].lower(), "the description should say what the core is"
+    assert core.get("url") == "https://github.com/alfatreze/Tau-Gallery" and len(core["url"]) <= 63, "core.json needs the repository url (openFPGA Library requirement, 63 characters at most)"
+    assert platform["name"] == "Tau Gallery"
     assert platform["manufacturer"] == "alfatreze"
 
     firmware = next(slot for slot in data if slot["id"] == 1)
     splash = next(slot for slot in data if slot["id"] == 4)
     assert firmware["filename"] == "tau.rom"
     assert splash["filename"] == "tau-loading.bin"
-    assert (ASSET_DIR / firmware["filename"]).is_file()
+    # the ROM, cold image and bitstream are build products: dist/ carries them only for a release (make_release.py), so they are not required here
     assert (ASSET_DIR / splash["filename"]).is_file()
     for slot in data:                                    # H4: every build-bound slot reads from the core's own folder
         if slot.get("filename") in ("tau.rom", "tau-cold.bin", "tau-loading.bin", "tau-packs.bin"):
             assert int(str(slot["parameters"]), 16) & 2, f"data slot {slot['id']} ({slot['filename']}) must be core-specific (parameter bit 1)"
-    assert not any((DIST / "Assets/tau/common" / n).exists() for n in ("tau.rom", "tau-cold.bin", "tau-loading.bin", "tau-packs.bin")), \
+    assert not any((DIST / "Assets/tau_gallery/common" / n).exists() for n in ("tau.rom", "tau-cold.bin", "tau-loading.bin", "tau-packs.bin")), \
         "build-bound files must not be in the platform-wide common/ folder"
     assert PLATFORM_ART.stat().st_size == 521 * 165 * 2
     assert (CORE_DIR / "icon.bin").stat().st_size == 36 * 36 * 2

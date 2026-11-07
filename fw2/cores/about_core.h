@@ -56,7 +56,7 @@ static inline void ab_fill(const about_in_t *in, uint32_t r, about_row_t *o)
 #define HEAD(s) do { o->kind = AB_HEAD; LBL(s); } while (0)
 #define TEXT(s) do { o->kind = AB_TEXT; ab_str(v, 0, C, s); } while (0)
     switch (r) {
-    case AR_TAU_H: HEAD("TAU"); break;
+    case AR_TAU_H: HEAD("TAU GALLERY"); break;
     case AR_VERSION: LBL("VERSION"); { uint32_t i = 0; while (in->version[i] && in->version[i] != '+' && i + 1u < C) { v[i] = in->version[i]; i++; } v[i] = 0; } break;
     case AR_BUILD: LBL("BUILD"); { const char *p = in->version; while (*p && *p != '+') p++; if (*p == '+') ab_str(v, 0, C, p + 1); else ab_str(v, 0, C, "RELEASE"); } break;
     case AR_CHANNEL: LBL("CHANNEL"); ab_str(v, 0, C, ab_has(in->version, "-dev") ? "DEV" : (ab_has(in->version, "-preview") || ab_has(in->version, "-alpha") || ab_has(in->version, "-beta")) ? "PREVIEW" : "STABLE"); break;
