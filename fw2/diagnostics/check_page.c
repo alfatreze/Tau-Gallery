@@ -14,6 +14,7 @@
 #include "blit_check.h"
 #include "sdram_soak.h"
 #include "name_matrix.h"
+#include "sd_probe.h"
 
 #define BG UI_BG_SCREEN
 #define DIM UI_DIM
@@ -27,6 +28,23 @@ enum { T_FONT = 0, T_ICONS, T_AUDIO, T_TRACKS, T_ST110, T_ST150, T_ST200, T_PI11
 static const char *const names[T_N] = { "FONT MEMORY", "ICONS", "AUDIO 20 S", "TRACK CHANGES X6", "STRETCH 1.10X", "STRETCH 1.50X", "STRETCH 2.00X", "PITCH 1.10X", "PITCH 1.50X", "PITCH 2.00X", "GFX ISSUE", "BLIT OPS", "NAME MATRIX" };
 static const uint8_t mode_of[T_N] = { 0, 0, 0, 0, 2, 2, 2, 1, 1, 1, 0, 0, 0 }, sel_of[T_N] = { 0, 0, 0, 0, 0, 2, 4, 2, 5, 7, 0, 0, 0 };    /* Stretch list 1.10 1.25 1.50 1.75 2.00; Pitch list 0.85 0.95 1.10 1.20 1.30 1.50 1.75 2.00 */
 uint32_t check_mask, check_under;
+/* M-1 SD feed probe (L1): sequential 4 KB commands on the cold-image slot (data slot 6, tau-cold.bin, always on the card). Blocks about a quarter of a second; refused while a track plays (one command in flight). */
+extern uint8_t _tag_start;
+static sd_probe_t sdp; static uint8_t sd_state;      /* 0 not run, 1 done, 2 refused (playing), 3 failed */
+static char *put_u(char *q, uint32_t v) { char t[10]; uint32_t n = 0; do { t[n++] = (char)('0' + v % 10u); v /= 10u; } while (v); while (n) *q++ = t[--n]; return q; }
+static void sd_run(void)
+{
+    if (mp.playing) { sd_state = 2u; return; }
+    sd_probe_run(&sdp, 6u, 1u << 20, 4096u, (uint32_t)(uintptr_t)&_tag_start, 2000u);
+    sd_state = sdp.ok ? 1u : 3u;
+}
+static void sd_line(char *s)
+{
+    char *q = s;
+    if (sd_state == 1u) { q = put_u(q, sdp.kbps); for (const char *p = " KB/S W"; *p; p++) *q++ = *p; q = put_u(q, sdp.worst_cyc / (CLK_HZ / 1000u)); *q++ = 'M'; *q++ = 'S'; *q++ = ' '; *q++ = 'N'; q = put_u(q, sdp.n); }
+    else { const char *p = sd_state == 2u ? "SD STOP PLAYBACK" : sd_state == 3u ? "SD READ FAILED" : "SD L1 TO RUN"; while (*p) *q++ = *p++; }
+    *q = 0;
+}
 static uint8_t res[T_N]; static uint32_t val[T_N];
 static uint8_t state, cur, step, dirty = 1;               /* state 0 ready, 1 running, 2 done, 3 refused */
 static uint32_t t0, u0, gen0;
@@ -125,6 +143,7 @@ void check_page_exit(void) { if (state == 1u) finish(2u); }
 int check_page_key(uint32_t edge)
 {
     if (edge & KEY_X) { soak_cycle(); dirty = 1; return 0; }                                    /* X: the SDRAM soak, off / 16 k / 64 k / 128 k operations a second, beside whatever plays and draws */
+    if ((edge & KEY_L1) && state != 1u) { sd_run(); dirty = 1; return 0; }
     if ((edge & KEY_Y) && state != 1u) { for (uint32_t i = 0; i < T_N; i++) { res[i] = 0; val[i] = 0; } begin_test(T_NAMES); state = 2u; publish(); dirty = 1; return 0; }   /* Y: only the accented-name matrix (no track needed); the result is the NAME MATRIX row and Info NM RES A / B */
     if (edge & KEY_B) { if (state == 1u) { finish(2u); return 0; } return 1; }
     if ((edge & KEY_A) && state != 1u) {
@@ -170,10 +189,11 @@ void check_page_draw(void)
         gfx_text(10, y + 2, names[i], DIM, BG);
         gfx_text(GFX_W - 10 - gfx_text_width(v), y + 2, v, res[i] == 2u ? ACC : FG, BG);
     }
+    { char l[48]; sd_line(l); gfx_rect(0, 300, GFX_W, 16, BG); gfx_text(10, 300, l, sd_state == 3u ? ACC : DIM, BG); }
     gfx_rect(0, GFX_H - 44, GFX_W, 44, BG);
     { char s[40]; uint32_t n = 0; const char *p = "X SOAK L"; while (*p) s[n++] = *p++; s[n++] = (char)('0' + soak_level()); s[n++] = ' '; s[n++] = 'F'; const uint32_t f = soak_st.fails > 99u ? 99u : soak_st.fails; if (f > 9u) s[n++] = (char)('0' + f / 10u); s[n++] = (char)('0' + f % 10u); s[n++] = ' '; s[n++] = 'P'; s[n++] = (char)('0' + (soak_st.pass > 9u ? 9u : soak_st.pass)); s[n] = 0;
       gfx_text(10, GFX_H - 40, s, soak_st.fails ? ACC : DIM, BG); }
-    gfx_text(10, GFX_H - 20, state == 1u ? "B STOP" : "A RUN  Y NAMES  B BACK", DIM, BG);
+    gfx_text(10, GFX_H - 20, state == 1u ? "B STOP" : "A RUN  Y NAMES  L1 SD  B BACK", DIM, BG);
     dirty = 0;
 }
 uint32_t check_page_dirty(void) { return dirty; }

@@ -8,7 +8,8 @@
     "fw2/diagnostics/sdram_soak.c",
     "fw2/diagnostics/soak_hot.c",
     "fw2/diagnostics/preset_probe.c",
-    "fw2/diagnostics/name_matrix.c"
+    "fw2/diagnostics/name_matrix.c",
+    "fw2/diagnostics/sd_probe.c"
   ],
   "settings_rows_left_out_when_off": [
     "DIAGNOSTICS",
