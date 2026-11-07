@@ -164,7 +164,7 @@ def main():
         core_id, label = f"alfatreze.{short}", args.semver
         out = root / f"work/diagnostics/tau-{sch}-{args.semver}{'-diag' if args.diagnostic_core else ''}/pocket"
     else:
-        nn = f"{args.number:02d}"
+        nn = f"{args.number:03d}"
         platform, short, label = tau_layout.DEV_PLATFORM, f"Tau Gallery DEV {nn}", f"numbered test build {nn}"
         core_id, title, platforms = f"alfatreze.{short}", tau_layout.DEV_PLATFORM_NAME, list(tau_layout.CHANNELS["dev"]["platforms"])
         out = root / f"work/diagnostics/tau-dev-{nn}/pocket"
