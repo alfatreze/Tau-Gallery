@@ -34,7 +34,7 @@ uint32_t check_mask, check_under;
 extern uint8_t _tag_start;
 #define SD_SLOT_A 6u
 #define SD_SLOT_B 4u
-#define SD_SPAN_B 98304u                   /* tau-loading.bin is 98,370 bytes: 24 whole 4 KB commands */
+#define SD_SPAN_B 12288u                   /* tau-loading.bin (the boot splash) is 14,502 bytes since the Tau Gallery art: 3 whole 4 KB commands, read in a loop. It was 98 KB with the Tau Alpha splash, and the old span failed at 12 KB (EOF). Keep it under the file size */
 static sd_probe_t sdA, sdB, sdS; static uint8_t sd_state, sd_view;      /* sd_state: 0 not run, 1 done, 2 refused (playing) */
 static char *put_u(char *q, uint32_t v) { char t[10]; uint32_t n = 0; do { t[n++] = (char)('0' + v % 10u); v /= 10u; } while (v); while (n) *q++ = t[--n]; return q; }
 static char *put_s(char *q, const char *p) { while (*p) *q++ = *p++; return q; }
