@@ -1,0 +1,35 @@
+# Tau Gallery M1 design: browse and view (2026-11-09)
+
+Plan: `../../docs/GALLERY_ANALYSIS_2026-11-07.md` (sections 6.5, 7, 8; M1 row of the milestone table). M1 is the first MVP: your photos on the Pocket, with no RTL beyond M0. Process: host tools and tests first, then firmware, then a Pocket. M0 proved what M1 stands on (docs/M0_DESIGN.md 6d, 6e): the 800 x 720 viewer, the mode switch, interrupts, and single reads of 4 to 128 KB landing in SDRAM at about 1.5 MB/s.
+
+## 1. Slices
+
+| # | Slice | Status |
+|---|---|---|
+| M1.1 | Formats and the host converter: TGY container v0 (one picture), TGIX folder index with a thumbnail atlas, `tools/gallery/tgy_convert.py`, tests with mutants | **done, host-tested** (`python3 sim/test_tgy.py`, 10 tests, `--mutants` 10 of 10 killed; the five test photos convert in 0.7 s) |
+| M1.2 | Firmware readers (C, host-tested against files the Python tool wrote): index, thumbnails of a page, header of a picture | not started |
+| M1.3 | Firmware gallery: browser grid in UI mode, open a picture, land the fit canvas in the plane, viewer mode, back | not started |
+| M1.4 | Package with a few real photos, install, Pocket run, owner review (grid, picture quality, buttons, load times) | not started |
+| M1.5 | Delete the music player pieces and the audio source files (M0.8's second half) once M1.3 stands on its own | not started |
+
+## 2. Decisions taken (change any of them cheaply now, expensively after M1.4)
+
+1. **The fit view is one contiguous read.** The M1 level of a picture is the "fit canvas": the picture with its EXIF orientation applied, scaled to fit 800 x 720 (never enlarged unless `--upscale`), centred on black, stored exactly as the viewer plane wants it (rows of 800 pixels of R, G, B bytes, 2,400 bytes a row, 1,728,000 bytes). Opening a picture is one data-slot read of that run with the landing window set to the plane base: about 1.1 s at 1.6 MB/s (measured rate for large commands), no copy, no tile placement. The plan's tiles (128 x 128, tile-contiguous) are for zoom and pan (M2): they need strided placement into a plane, which is Talos's unverified reach (A1 to A4), and M1 does not wait for that. The level table of the file has `layout` and `mode` fields so tile levels and TGY payloads are added later without a new format; a reader rejects a level it does not know.
+2. **A picture is ONE file, 4 KB aligned inside.** Header (64 bytes), level table, the 96 x 72 RGB565 thumbnail at 4,096, the canvas at 20,480. File size 1,748,992 bytes for every picture in M1 (the canvas is always 800 x 720), so 100 pictures are 175 MB.
+3. **The folder index is the library slot.** `tau-library.tdb` (a TGIX v0 file: header, 160-byte entries with the path on the card, a Latin-1 display name, size, original width and height, then the thumbnail atlas, 13,824 bytes each in entry order) is read through data slot 5, whose declared file is `tau-library.tdb`: the converter writes the index under that name (`--index-name`) so no new slot or loader entry is needed. A page of 16 thumbnails is 221 KB contiguous in the atlas: one read.
+4. **Pictures are opened by path** with the existing open-by-path command (`slot_open_path`, proven for tracks) on the picture slot (slot 2, renamed "Picture" with the extension `tgy` in M1.3). The path comes from the index.
+5. **Pixels stay 8 bits per channel in the file** even though the handheld display shows 5/6/5 (docs/M0_DESIGN.md 6d, skill entry KB-237): the dock may show more, and the stored format should not be the limit. Thumbnails are RGB565 (they are only ever shown in the 565 UI). A dither to 565 in the viewer's last stage stays an option (M0 open item).
+6. **The grid is drawn by firmware in UI mode**: 4 x 4 thumbnails of 96 x 72 on the 400 x 360 UI (plan section 7). A thumbnail reaches the screen as 4 KB reads into the tag zone and mailbox writes into the framebuffer (about 30 ms each, 0.5 s a page); a faster path (Talos copy from SDRAM rows) is an M2 matter.
+7. **Names:** the display name is the file name without extension, Latin-1 (other characters become `?`), 39 bytes; the path is UTF-8, under 96 bytes. Longer paths stop the converter with a clear error, they are never cut.
+8. **Orientation and colour:** the converter applies EXIF orientation (all eight) and converts to RGB; ICC profiles are not applied in M1 (sRGB assumed), a known limit.
+
+## 3. File formats (v0)
+
+TGY header, little-endian, 64 bytes: magic `TGY\0`, u16 version 0, u16 header size 64, u32 width, u32 height (orientation applied, original size), u8 channels 3, u8 tile_log2 7, u8 orientation 0 (applied), u8 flags, u32 level count, u32 level table offset (64), u32 thumbnail offset, u32 thumbnail bytes, u16 thumbnail width and height, u32 meta offset and length (0), u32 file size, u32 CRC-32 of bytes 0 to 51, 8 reserved. Level entry, 48 bytes: u32 width, u32 height of the canvas, u16 content x, y, w, h (the picture's rectangle on the canvas), u8 layout (0 raster), u8 mode (0 RAW), u8 pixel format (0 RGB888), u8 kind (0 fit canvas), u32 row stride (2,400), u32 data offset, u32 data length, u32 index offset and length (0), u32 CRC-32 of the data, u32 reserved. The reference implementation is `tools/gallery/tgy.py` (`pack_tgy`, `parse_tgy`, `level_bytes`, `pack_index`, `parse_index`); the tests are the specification of the damage a reader must refuse (bad magic, version, header checksum, size, level checksum, unknown layout, mode or pixel format).
+
+## 4. Open items for M1.2 to M1.4
+
+- Slot 2's declaration (name "Picture", extension `tgy`) and whether the Pocket's own file picker should be used instead of the index (it is not: the player's way, an index written by a host tool, is the proven one).
+- A card layout for the pictures (`Assets/tau_gallery/common/photos/` by default).
+- The first-picture experience: a progress bar while 1.7 MB lands (about 1.1 s), and which key does what (A opens, B back, L1 and R1 page, Left and Right neighbour picture).
+- Memory: a plane is 1.7 MB of the 64 MB SDRAM; the next picture can be landed into a second plane while the first is shown (M2 prefetch), the viewer switches by the base register at a vblank.
