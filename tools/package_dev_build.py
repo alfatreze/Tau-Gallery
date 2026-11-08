@@ -27,6 +27,8 @@ VARIANTS = {   # fw/build.sh target -> (ROM dir, kind text, default note)
     # writes to work/ram192k/release when RAM_192K=1, so dist/ is never touched. Needs --build-flags with RAM_192K=1.
     # Player 2 (docs/features/PLAYER_V2_SPEC.md): built by fw2/build.sh, not fw/build.sh. Needs --build-flags (any KEY=VAL, e.g. PLAYER2=1) so the package is always built right here.
     "player2":    ("player2", "Player 2 build (new player, docs/features/PLAYER_V2_SPEC.md)", "new player, S2 platform page"),
+    # Tau Gallery M0 test page (fw2/build_gallery.sh -> work/diagnostics/gallery): a hot-RAM program for the stripped Gallery bitstream. Built by hand first (make gallery-firmware), never by --build-flags.
+    "gallery":    ("gallery", "Gallery M0 test page (viewer, mode switch, landing reads, interrupts)", "fw2/gallery on the stripped bitstream"),
     "tempo":      ("release", "release-style build with Cymo tempo for MP3 (Settings > Playback > TEMPO)", "pitch-preserving MP3 speed, release-style",
                    "release", "work/ram192k"),
 }
@@ -200,7 +202,7 @@ def main():
         desc = desc[:60] + "..."
     m["description"] = desc
     save(c / "core.json", j)
-    slots_lib.add_library_slot(c, persist_words=args.variant != "player2")                       # data slot 5 + persist words 24-26 (27 retired)
+    slots_lib.add_library_slot(c, persist_words=args.variant not in ("player2", "gallery"))                       # data slot 5 + persist words 24-26 (27 retired)
     if len(platform) > 15 or not re.fullmatch(r"[a-z0-9][a-z0-9_]*", platform):
         raise ValueError(f"invalid Analogue Pocket platform shortname: {platform!r}")
     if len(short) > 31: raise ValueError(f"core shortname exceeds Pocket limit: {short!r}")
