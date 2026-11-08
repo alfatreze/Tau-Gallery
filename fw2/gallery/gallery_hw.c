@@ -5,7 +5,13 @@
 #include "../stream/slot.h"
 
 const uint32_t gal_land_len[GAL_LAND_KINDS] = { 4096u, 16384u, 65536u, 131072u };
-extern uint32_t _tag_start[];                                            /* the 4 KB landing zone in core RAM (fw2/platform/link.ld) */
+extern uint32_t _tag_start[];
+/* The tag zone as the CPU must read what the bridge wrote into it: through the UNCACHED alias (address + 0xC0000000). The ordinary address goes through the data cache (cacheability is address bit 31),
+ * which keeps the lines of the previous read: DEV 003's first runs compared landed data with a stale reference and reported 991 bad words that were not there. */
+#ifndef GAL_TAGWIN
+#define GAL_TAGWIN ((const volatile uint32_t *)(uintptr_t)(0xC0000000u + (uint32_t)(uintptr_t)_tag_start))
+#endif
+                                            /* the 4 KB landing zone in core RAM (fw2/platform/link.ld) */
 extern void irq_enable(uint32_t mask), irq_disable(void);              /* fw2/platform/start.S */
 
 static void spin_ms(uint32_t ms) { const uint32_t t = cycles(), n = (CLK_HZ / 1000u) * ms; while ((uint32_t)(cycles() - t) < n) { } }
@@ -58,7 +64,7 @@ static void poison_and_check(gal_land_t *r, uint32_t len)
         const uint32_t off = k ? len - 4096u : 0u, ha = GAL_LAND_BASE + off / 2u;
         if (!k || len > 4096u) {
             if (!slot_read_blocking(GAL_SLOT, off, (uint32_t)(uintptr_t)_tag_start, 4096u, CLK_HZ)) { r->bad = 0xFFFFFFFFu; return; }
-            const volatile uint32_t *ref = (const volatile uint32_t *)_tag_start;
+            const volatile uint32_t *ref = GAL_TAGWIN;
             for (uint32_t i = 0; i < 1024u; i++) {
                 uint32_t got = 0;
                 if (gfx_mb_read(ha + 2u * i, &got)) { r->bad++; continue; }
@@ -111,7 +117,7 @@ void gal_land_map(gal_map_t *r)
     for (uint32_t i = 0; i < sizeof *r / 4u; i++) ((uint32_t *)r)[i] = 0;
     for (uint32_t b = 0; b < GAL_MAP_BLOCKS; b++) {                       /* the reference: four normal reads, into core RAM, then copied out of the landing zone */
         if (!slot_read_blocking(GAL_SLOT, b * 4096u, (uint32_t)(uintptr_t)_tag_start, 4096u, CLK_HZ)) { for (uint32_t b2 = 0; b2 < GAL_MAP_BLOCKS; b2++) r->match[b2] = -1; return; }
-        for (uint32_t i = 0; i < 1024u; i++) ref[b][i] = ((const volatile uint32_t *)_tag_start)[i];
+        for (uint32_t i = 0; i < 1024u; i++) ref[b][i] = GAL_TAGWIN[i];
     }
     for (uint32_t i = 0; i < GAL_MAP_BLOCKS * 1024u; i++) gfx_mb_write(GAL_LAND_BASE + 2u * i, 0xA5A5A5A5u);      /* poison the whole window */
     while (!(REG_RD(R_LAND_STATUS) & 1u)) { }

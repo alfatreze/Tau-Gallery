@@ -1,7 +1,7 @@
 /* Host test of fw2/gallery/gallery_hw.c against a model of the Tau Gallery hardware: the SDRAM mailbox and plane, the mode sequencer, the landing path, the interrupt block and the data-slot reads.
  * The model is what docs/M0_DESIGN.md says the RTL does (tests of the RTL itself: make test-rtl-view-soc, -land, -irq-soc). What this checks is the firmware: that the plane lands in the frozen format,
  * that the switch, landing and interrupt tests measure and judge what they claim to, and (with a broken model: -DMUT=n) that a wrong landing path, a missing interrupt or a failed read is NOT reported as good.
- * Prints "GALLERY HW ok n" per check; exit 1 on any failure. Mutants: 1 landing swaps bytes, 2 landing writes nothing, 3 landing drops the last word, 4 interrupts never fire, 5 mode switch never completes, 6 reads fail, 7 landed blocks after the first repeat block 0, 8 the plane is written at 5/6/5 bits. */
+ * Prints "GALLERY HW ok n" per check; exit 1 on any failure. Mutants: 1 landing swaps bytes, 2 landing writes nothing, 3 landing drops the last word, 4 interrupts never fire, 5 mode switch never completes, 6 reads fail, 7 landed blocks after the first repeat block 0, 8 the plane is written at 5/6/5 bits, 9 the tag zone is read through a stale data cache. */
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
@@ -58,6 +58,7 @@ static void wr(uint32_t a, uint32_t v)
 int gfx_mb_write(uint32_t a, uint32_t d) { if (a + 1u >= HW_N) return -1; if (MUT == 8 && a >= 0x200000u && a < 0x300000u) d &= 0xF8FCF8FFu; mem[a] = (uint16_t)d; mem[a + 1u] = (uint16_t)(d >> 16); return 0; }
 int gfx_mb_read(uint32_t a, uint32_t *o) { if (a + 1u >= HW_N) return -1; *o = (uint32_t)mem[a] | (uint32_t)mem[a + 1u] << 16; return 0; }
 uint32_t _tag_start[1024];
+static uint32_t tag_stale[1024]; static int tag_stale_set;
 static uint8_t fbyte(uint32_t i) { return (uint8_t)(i * 7u + (i >> 8) * 13u + 5u); }       /* the file in slot 6 */
 static uint32_t reads, read_fail_after = 0xFFFFFFFFu;
 int slot_read_blocking(uint32_t slot, uint32_t off, uint32_t dst, uint32_t len, uint32_t to)
@@ -73,13 +74,15 @@ int slot_read_blocking(uint32_t slot, uint32_t off, uint32_t dst, uint32_t len, 
             else mem[h] = (uint16_t)((mem[h] & ~(0xFFu << (8u * b))) | (uint32_t)v << (8u * b));
         }
         land_words += words;
-    } else for (uint32_t i = 0; i < len; i++) ((uint8_t *)_tag_start)[i] = fbyte(off + i);
+    } else { for (uint32_t i = 0; i < len; i++) ((uint8_t *)_tag_start)[i] = fbyte(off + i); if (!tag_stale_set) { memcpy(tag_stale, _tag_start, sizeof tag_stale); tag_stale_set = 1; } }
     clk += len * 78u; seq++; irq_pend |= 1u;                                    /* about 850 KB/s */
     if ((irq_mask & 1u) && MUT != 4) irq_handler(irq_pend & irq_mask);
     return 1;
 }
 void irq_enable(uint32_t m) { irq_mask = m; }
 void irq_disable(void) { irq_mask = 0; }
+/* MUT 9 models the data cache: the CPU reads the tag zone through a copy taken at the first command and never refreshed (the ordinary address); otherwise it reads the zone itself (the uncached alias). */
+#define GAL_TAGWIN ((const volatile uint32_t *)(MUT == 9 ? tag_stale : _tag_start))
 #include "../fw2/gallery/gallery_pattern.c"
 #include "../fw2/gallery/gallery_hw.c"
 static int fails;
@@ -119,7 +122,7 @@ int main(void)
         bad_all += r.bad;
         if (MUT == 0) { chk(10 + (int)k, good && gal_kbps(r.len, r.cmd_cyc) > 700u && gal_kbps(r.len, r.cmd_cyc) < 900u); }
     }
-    chk(14, (MUT == 1 || MUT == 2 || MUT == 3 || MUT == 6 || MUT == 7) ? !ok_all : ok_all);   /* a broken landing path or a failed read is caught by a field the page judges on; the others leave it alone */
+    chk(14, (MUT == 1 || MUT == 2 || MUT == 3 || MUT == 6 || MUT == 7 || MUT == 9) ? !ok_all : ok_all);   /* a broken landing path or a failed read is caught by a field the page judges on; the others leave it alone */
     (void)bad_all;
     /* 4b: where landed data goes (the map) and the plane read back */
     gal_map_t mp; gal_land_map(&mp);
@@ -129,6 +132,7 @@ int main(void)
     else if (MUT == 3) chk(16, mp.match[3] == -1 && mp.bad_block == 4u && mp.bad_word == 1023u && mp.got == 0xA5A5A5A5u);                                       /* the last word is missing */
     else if (MUT == 1) chk(16, mp.match[0] == -1 && mp.bad_block == 1u);
     else if (MUT == 6) chk(16, !mp.cmd_ok);
+    else if (MUT == 9) chk(16, mp.bad_block != 0u);                                                                                                          /* a stale reference shows as a mismatch where the landing is right */
     else chk(16, mp.cmd_ok && mp.bad_block == 0u);
     { gal_fill(GP_RAMP, 0); gal_verify_t vr; gal_plane_verify(&vr, GP_RAMP);
       if (MUT == 8) chk(17, vr.bad > 0u && vr.words == 432000u); else chk(17, vr.bad == 0u && vr.words == 432000u && vr.timeouts == 0u); }
