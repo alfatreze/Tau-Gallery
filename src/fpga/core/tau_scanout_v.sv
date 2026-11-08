@@ -30,6 +30,8 @@ module tau_scanout_v #(
     input  wire        clk_vid,
 
     input  wire        enable,            // clk_sys level: show the picture (black until it is set)
+    input  wire        hold,              // clk_vid: clear the counters (the module is not the picture)
+    input  wire [23:0] slot_word,         // the scaler-slot word, sent in the RGB word right after DE falls on every line
 
     input  wire        lb_we,
     input  wire [11:0] lb_waddr,          // {line parity, word 0..1199}
@@ -48,7 +50,8 @@ module tau_scanout_v #(
     output reg         video_de      = 1'b0,
     output reg         video_hs      = 1'b0,
     output reg         video_vs      = 1'b0,
-    output wire [9:0]  scan_vc
+    output wire [9:0]  scan_vc,
+    output wire        frame_end          // the last clock of a frame
 );
 
     localparam [9:0] H_TOT = 10'd900, V_TOT = 10'd740;
@@ -64,7 +67,7 @@ module tau_scanout_v #(
     wire v_last = (vc == V_TOT - 10'd1);
 
     always @(posedge clk_vid) begin
-        if (reset) begin
+        if (reset || hold) begin
             hc <= 10'd0;
             vc <= 10'd0;
         end else begin
@@ -74,6 +77,7 @@ module tau_scanout_v #(
     end
 
     assign scan_vc = vc;
+    assign frame_end = h_last && v_last;
 
     // ---- fill request and vertical-blank toggle ----------------------------
     wire [9:0] vc_next = v_last ? 10'd0 : vc + 10'd1;
@@ -155,7 +159,7 @@ module tau_scanout_v #(
     // ---- stage 2: the video outputs (grp holds {B,G,R} per pixel, the bus wants {R,G,B}) ----
     wire [23:0] rgb_x = (BUG == 9) ? s1_px : {s1_px[7:0], s1_px[15:8], s1_px[23:16]};        // BUG 9: byte order not swapped
     always @(posedge clk_vid) begin
-        video_rgb <= (s1_de && en_vid) ? rgb_x : 24'd0;
+        video_rgb <= (s1_de && en_vid) ? rgb_x : ((video_de && !s1_de && BUG != 11) ? slot_word : 24'd0);     // BUG 11: no slot word
         video_de  <= s1_de;
         video_hs  <= s1_hs;
         video_vs  <= s1_vs;

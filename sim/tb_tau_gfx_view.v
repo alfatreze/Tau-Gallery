@@ -80,7 +80,7 @@ module tb_tau_gfx_view #(parameter integer BUG_VIEW = 0, parameter integer SLOW 
         .p0_wr_req(p0_wr), .p0_rd_req(p0_rd), .p0_end_burst_req(p0_eb), .p0_available(p0_av), .p0_ready(p0_rdy), .p0_data_available(p0_da), .wsrc_addr(wsa), .wsrc_q(wsq),
         .video_rgb(rgb), .video_de(de), .video_hs(hs), .video_vs(vs), .scan_vc(svc),
         .gfx_idle(), .gfx_fence(), .gfx_free(), .gfx_ovf(), .gfx_underflow(uf),
-        .view_en(view_en), .view_base(BASE[24:0]), .view_stride(STRIDE[15:0]));
+        .view_en(view_en), .view_base(BASE[24:0]), .view_stride(STRIDE[15:0]), .vid_cur(), .vid_pend(), .vid_switches());
     vw_sdram_stub #(.BASE(BASE), .STRIDE(STRIDE), .SLOWRD(SLOW)) mem (.clk(clk_sdram), .p0_addr(p0_addr), .p0_data(p0_data), .p0_wr_len(p0_len), .p0_wr_stream(p0_str),
         .p0_wr_req(p0_wr), .p0_rd_req(p0_rd), .p0_end_burst_req(p0_eb), .p0_q(p0_q), .p0_available(p0_av), .p0_ready(p0_rdy), .p0_data_available(p0_da), .wsrc_addr(wsa), .wsrc_q(wsq));
 
@@ -93,35 +93,31 @@ module tb_tau_gfx_view #(parameter integer BUG_VIEW = 0, parameter integer SLOW 
         end
     endfunction
 
-    // the viewer is on screen when the muxed video shows 900 x 740 timing: wait for the switch, two frames to settle, then check two
-    integer cyc = 0, errors = 0, frames_seen = 0, x = 0, y = -1, pix_bad = 0, de_lines = 0, last_vs = 0, frame_clks = 0, uf0 = 0;
-    reg checking = 0, de_q = 0, vs_q = 0;
+    // the viewer is on screen from the first clock after the sequencer's switch (cur rises at the end of the pending frame): check every active pixel of its first two frames
+    integer cyc = 0, errors = 0, frames_done = 0, x = 0, y = -1, pix_bad = 0, de_lines = 0, f_start = 0, uf0 = 0;
+    reg checking = 0, de_q = 0, cur_q = 0;
+    wire v_fend = dut.g_view.v_fend, cur = dut.g_view.cur;
     always @(posedge clk_vid) begin
-        cyc <= cyc + 1; de_q <= de; vs_q <= vs;
+        cyc <= cyc + 1; de_q <= de; cur_q <= cur;
+        if (cur && !cur_q) begin checking = 1; f_start = cyc; y = -1; de_lines = 0; uf0 = uf; end
         if (checking) begin
             if (de) begin
                 if (!de_q) begin y = y + 1; x = 0; de_lines = de_lines + 1; end
-                if (!SLOW && frames_seen >= 1 && rgb !== pix(x, y)) begin pix_bad = pix_bad + 1; if (pix_bad < 4) $display("DIFF f=%0d x=%0d y=%0d got %h want %h", frames_seen, x, y, rgb, pix(x, y)); end
+                if (!SLOW && rgb !== pix(x, y)) begin pix_bad = pix_bad + 1; if (pix_bad < 4) $display("DIFF f=%0d x=%0d y=%0d got %h want %h", frames_done, x, y, rgb, pix(x, y)); end
                 x = x + 1;
             end
-            if (vs && !vs_q) begin
-                if (last_vs != 0 && cyc - last_vs != 666000) begin errors = errors + 1; $display("FAIL: frame is %0d clocks", cyc - last_vs); end
-                last_vs = cyc; y = -1;
-                if (frames_seen > 0 && de_lines != 720) begin errors = errors + 1; $display("FAIL: %0d active lines", de_lines); end
-                de_lines = 0; frames_seen = frames_seen + 1;
+            if (v_fend) begin
+                if (cyc - f_start + 1 != 666000) begin errors = errors + 1; $display("FAIL: frame is %0d clocks", cyc - f_start + 1); end
+                if (de_lines != 720) begin errors = errors + 1; $display("FAIL: %0d active lines", de_lines); end
+                f_start = cyc + 1; de_lines = 0; y = -1; frames_done = frames_done + 1;
             end
         end
     end
-    integer k;
     initial begin
         repeat (8) @(posedge clk_sys); reset = 0;
-        repeat (2 * 500 * 400) @(posedge clk_vid);               // UI frames run first
-        view_en = 1;
-        wait (dut.g_view.sel == 1'b1);
-        // two frames of the viewer to settle (its own counters ran all the time; the first lines after the switch had no fill)
-        repeat (666000 + 5000) @(posedge clk_vid);
-        uf0 = uf; checking = 1;
-        wait (frames_seen == 2);
+        repeat (300000) @(posedge clk_vid);                       // part of a UI frame
+        view_en = 1;                                              // the request: a pending UI frame, then the viewer from its first clock
+        wait (frames_done == 2);
         checking = 0;
         if (SLOW) begin if (uf == uf0) begin errors = errors + 1; $display("FAIL: slow memory but no late line counted"); end end
         else if (uf != uf0) begin errors = errors + 1; $display("FAIL: %0d late lines in the checked frames", uf - uf0); end

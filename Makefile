@@ -838,7 +838,10 @@ test-rtl-sdr-stat-win: | $(RTL_BUILD_DIR)
 
 rtl-lint:
 	$(VERILATOR) $(VERILATOR_LINT_FLAGS) --top-module tau_scanout -Isrc/fpga/core src/fpga/core/tau_scanout.sv src/fpga/core/tau_cdc_gray_bus.sv src/fpga/core/tau_cdc_gray_ctr.sv
-	$(VERILATOR) $(VERILATOR_LINT_FLAGS) --top-module tau_gfx src/fpga/core/tau_gfx.sv src/fpga/core/tau_talos.sv src/fpga/core/tau_scanout.sv src/fpga/core/tau_cdc_gray_ctr.sv src/fpga/core/tau_cdc_gray_bus.sv src/fpga/core/font_rom.v src/fpga/core/font_ram.v
+	$(VERILATOR) $(VERILATOR_LINT_FLAGS) --top-module tau_gfx src/fpga/core/tau_gfx.sv src/fpga/core/tau_talos.sv src/fpga/core/tau_scanout.sv src/fpga/core/tau_scanout_v.sv src/fpga/core/tau_vidmode.sv src/fpga/core/tau_cdc_gray_ctr.sv src/fpga/core/tau_cdc_gray_bus.sv src/fpga/core/font_rom.v src/fpga/core/font_ram.v
+	$(VERILATOR) $(VERILATOR_LINT_FLAGS) -GVIEW_ENABLE=1 --top-module tau_gfx src/fpga/core/tau_gfx.sv src/fpga/core/tau_talos.sv src/fpga/core/tau_scanout.sv src/fpga/core/tau_scanout_v.sv src/fpga/core/tau_vidmode.sv src/fpga/core/tau_cdc_gray_ctr.sv src/fpga/core/tau_cdc_gray_bus.sv src/fpga/core/font_rom.v src/fpga/core/font_ram.v
+	$(VERILATOR) $(VERILATOR_LINT_FLAGS) --top-module tau_scanout_v -Isrc/fpga/core src/fpga/core/tau_scanout_v.sv src/fpga/core/tau_cdc_gray_bus.sv src/fpga/core/tau_cdc_gray_ctr.sv
+	$(VERILATOR) $(VERILATOR_LINT_FLAGS) --top-module tau_vidmode src/fpga/core/tau_vidmode.sv
 	$(VERILATOR) $(VERILATOR_LINT_FLAGS) --top-module tgt_cmd src/fpga/core/tgt_cmd.v
 	$(VERILATOR) $(VERILATOR_LINT_FLAGS) --top-module pcm_fifo src/fpga/core/pcm_fifo.v
 	$(VERILATOR) $(VERILATOR_LINT_FLAGS) --top-module tau_flac_lpc src/fpga/core/tau_flac_lpc.sv
@@ -881,7 +884,7 @@ test-clk66:
 	$(PYTHON) sim/test_clk66.py --build
 
 # Tau Gallery M0: the 800 x 720 packed RGB888 viewer scan-out (tau_scanout_v): every pixel of two enabled frames against a golden picture, black while disabled, the frame and sync
-# geometry of the mode Tau V ran on a Pocket, and a slow filler counted as late lines. The mutation run (BUG 1..10) must FAIL for every value; each run is about a minute.
+# geometry of the mode Tau V ran on a Pocket, and a slow filler counted as late lines. The mutation run (BUG 1..11) must FAIL for every value; each run is about a minute.
 .PHONY: test-rtl-scanout-v test-rtl-scanout-v-mutation
 SCANOUT_V_SRC = sim/tb_tau_scanout_v.v src/fpga/core/tau_scanout_v.sv src/fpga/core/tau_cdc_gray_ctr.sv src/fpga/core/tau_cdc_gray_bus.sv
 test-rtl-scanout-v: | $(RTL_BUILD_DIR)
@@ -893,12 +896,12 @@ test-rtl-scanout-v: | $(RTL_BUILD_DIR)
 	grep -q "PASS  BUG=0 SLOW=0" $(RTL_BUILD_DIR)/tb_tau_scanout_v.log; grep -q "PASS  BUG=0 SLOW=1" $(RTL_BUILD_DIR)/tb_tau_scanout_v_slow.log
 test-rtl-scanout-v-mutation: | $(RTL_BUILD_DIR)
 	@set -e; \
-	for b in 1 2 3 4 5 6 7 8 9 10; do \
+	for b in 1 2 3 4 5 6 7 8 9 10 11; do \
 	  s=0; [ $$b = 10 ] && s=1; \
 	  $(IVERILOG) -g2012 -Isrc/fpga/core -Ptb_tau_scanout_v.BUG=$$b -Ptb_tau_scanout_v.SLOW=$$s -o $(RTL_BUILD_DIR)/tb_tau_scanout_v_m$$b.vvp $(SCANOUT_V_SRC); \
 	  ( $(VVP) $(RTL_BUILD_DIR)/tb_tau_scanout_v_m$$b.vvp > $(RTL_BUILD_DIR)/tb_tau_scanout_v_m$$b.log 2>&1 & ); \
 	done; \
-	for b in 1 2 3 4 5 6 7 8 9 10; do \
+	for b in 1 2 3 4 5 6 7 8 9 10 11; do \
 	  while ! grep -qE "PASS|FAILED|TIMEOUT" $(RTL_BUILD_DIR)/tb_tau_scanout_v_m$$b.log 2>/dev/null; do sleep 2; done; \
 	  if grep -q "^FAILED" $(RTL_BUILD_DIR)/tb_tau_scanout_v_m$$b.log || grep -q TIMEOUT $(RTL_BUILD_DIR)/tb_tau_scanout_v_m$$b.log; then echo "mutant $$b killed"; else echo "MUTANT $$b SURVIVED"; exit 1; fi; \
 	done
@@ -906,7 +909,7 @@ test-rtl-scanout-v-mutation: | $(RTL_BUILD_DIR)
 # Tau Gallery M0.2: the real graphics path with VIEW_ENABLE = 1 shows a packed RGB888 plane that sits in an SDRAM model with its own base and stride (every pixel of two
 # frames after the mode switch, no late line, 666,000-clock frame); a slow memory is counted as late lines; the Talos mutants BUG_VIEW 1..5 must FAIL. About two minutes each.
 .PHONY: test-rtl-gfx-view test-rtl-gfx-view-mutation
-GFX_VIEW_SRC = sim/tb_tau_gfx_view.v src/fpga/core/tau_gfx.sv src/fpga/core/tau_talos.sv src/fpga/core/tau_scanout.sv src/fpga/core/tau_scanout_v.sv src/fpga/core/tau_cdc_gray_ctr.sv src/fpga/core/tau_cdc_gray_bus.sv src/fpga/core/font_rom.v src/fpga/core/font_ram.v
+GFX_VIEW_SRC = sim/tb_tau_gfx_view.v src/fpga/core/tau_gfx.sv src/fpga/core/tau_talos.sv src/fpga/core/tau_scanout.sv src/fpga/core/tau_scanout_v.sv src/fpga/core/tau_vidmode.sv src/fpga/core/tau_cdc_gray_ctr.sv src/fpga/core/tau_cdc_gray_bus.sv src/fpga/core/font_rom.v src/fpga/core/font_ram.v
 test-rtl-gfx-view: | $(RTL_BUILD_DIR)
 	@set -e; \
 	$(IVERILOG) -g2012 -Isrc/fpga/core -o $(RTL_BUILD_DIR)/tb_tau_gfx_view.vvp $(GFX_VIEW_SRC); \
@@ -924,3 +927,38 @@ test-rtl-gfx-view-mutation: | $(RTL_BUILD_DIR)
 	  while ! grep -qE "^PASSED|^FAILED" $(RTL_BUILD_DIR)/tb_tau_gfx_view_m$$b.log 2>/dev/null; do sleep 2; done; \
 	  if grep -q "^FAILED" $(RTL_BUILD_DIR)/tb_tau_gfx_view_m$$b.log; then echo "mutant $$b killed"; else echo "MUTANT $$b SURVIVED"; exit 1; fi; \
 	done
+
+# Tau Gallery M0.3: the mode sequencer (tau_vidmode) with both scan-outs: UI 400 x 360 as 1666 x 400 and viewer 800 x 720 as 900 x 740 at 40 MHz, the output mux, a UI -> viewer -> UI
+# sequence with the scaler-slot word on every line (the target slot during the pending frame), the geometry changing at a frame wrap, the switch counter. Mutants 1..4 must FAIL.
+.PHONY: test-rtl-vidmode test-rtl-vidmode-mutation
+VIDMODE_SRC = sim/tb_tau_vidmode.v src/fpga/core/tau_vidmode.sv src/fpga/core/tau_scanout.sv src/fpga/core/tau_scanout_v.sv src/fpga/core/tau_cdc_gray_ctr.sv src/fpga/core/tau_cdc_gray_bus.sv
+test-rtl-vidmode: | $(RTL_BUILD_DIR)
+	@set -e; \
+	$(IVERILOG) -g2012 -Isrc/fpga/core -o $(RTL_BUILD_DIR)/tb_tau_vidmode.vvp $(VIDMODE_SRC); \
+	$(VVP) $(RTL_BUILD_DIR)/tb_tau_vidmode.vvp | tee $(RTL_BUILD_DIR)/tb_tau_vidmode.log | grep -E "PASS|FAIL"; grep -qE "^ *PASS" $(RTL_BUILD_DIR)/tb_tau_vidmode.log
+test-rtl-vidmode-mutation: | $(RTL_BUILD_DIR)
+	@set -e; \
+	for b in 1 2 3 4; do \
+	  $(IVERILOG) -g2012 -Isrc/fpga/core -Ptb_tau_vidmode.BUG=$$b -o $(RTL_BUILD_DIR)/tb_tau_vidmode_m$$b.vvp $(VIDMODE_SRC); \
+	  ( $(VVP) $(RTL_BUILD_DIR)/tb_tau_vidmode_m$$b.vvp > $(RTL_BUILD_DIR)/tb_tau_vidmode_m$$b.log 2>&1 & ); \
+	done; \
+	for b in 1 2 3 4; do \
+	  while ! grep -qE "^ *(PASS|FAILED)" $(RTL_BUILD_DIR)/tb_tau_vidmode_m$$b.log 2>/dev/null; do sleep 2; done; \
+	  if grep -qE "^ *FAILED" $(RTL_BUILD_DIR)/tb_tau_vidmode_m$$b.log; then echo "mutant $$b killed"; else echo "MUTANT $$b SURVIVED"; exit 1; fi; \
+	done
+
+# Tau Gallery M0.3: the viewer registers of tau_soc (VID_MODE, VIEW_BASE, VIEW_STRIDE, VIEW_CAPS) read and written by the real CPU; mutant: the cur and pend inputs swapped must FAIL;
+# a second run builds the SoC without the viewer: every register reads 0, writes change nothing, the outputs are constant.
+.PHONY: test-rtl-view-soc
+VIEW_SOC_SRC = $(subst sim/tb_halcyon_soc.v,sim/tb_view_soc.v,$(HALCYON_SOC_SRC))
+test-rtl-view-soc: $(RTL_BUILD_DIR)/tau_soc_sim.v
+	$(RV_BIN)/riscv-none-elf-gcc -march=rv32im -mabi=ilp32 -mno-relax -O2 -ffreestanding -nostdlib -nostartfiles -Wl,--no-warn-rwx-segments -T sim/fw_ifetch/link.ld sim/fw_ifetch/start.S sim/fw_view/main.c -o $(RTL_BUILD_DIR)/fw_view.elf
+	$(RV_BIN)/riscv-none-elf-objcopy -O binary $(RTL_BUILD_DIR)/fw_view.elf $(RTL_BUILD_DIR)/fw_view.bin
+	$(RV_BIN)/riscv-none-elf-gcc -march=rv32im -mabi=ilp32 -mno-relax -O2 -ffreestanding -nostdlib -nostartfiles -Wl,--no-warn-rwx-segments -DOFF=1 -T sim/fw_ifetch/link.ld sim/fw_ifetch/start.S sim/fw_view/main.c -o $(RTL_BUILD_DIR)/fw_view_off.elf
+	$(RV_BIN)/riscv-none-elf-objcopy -O binary $(RTL_BUILD_DIR)/fw_view_off.elf $(RTL_BUILD_DIR)/fw_view_off.bin
+	@set -e; $(IVERILOG) -g2012 -Isrc/fpga/core -o $(RTL_BUILD_DIR)/tb_view_soc.vvp $(VIEW_SOC_SRC); \
+	  $(VVP) $(RTL_BUILD_DIR)/tb_view_soc.vvp +ROM=$(RTL_BUILD_DIR)/fw_view.bin | tee $(RTL_BUILD_DIR)/view_soc.log | tail -12; grep -q "^PASSED" $(RTL_BUILD_DIR)/view_soc.log
+	@set -e; $(IVERILOG) -g2012 -Isrc/fpga/core -Ptb_view_soc.SWAP=1 -o $(RTL_BUILD_DIR)/tb_view_soc_mut.vvp $(VIEW_SOC_SRC); \
+	  if $(VVP) $(RTL_BUILD_DIR)/tb_view_soc_mut.vvp +ROM=$(RTL_BUILD_DIR)/fw_view.bin | grep -q "^FAIL\|VIEW FAIL"; then echo "mutant killed: cur and pend swapped"; else echo "MUTANT SURVIVED: swapped inputs"; exit 1; fi
+	@set -e; $(IVERILOG) -g2012 -Isrc/fpga/core -Ptb_view_soc.ENABLE=0 -o $(RTL_BUILD_DIR)/tb_view_soc_off.vvp $(VIEW_SOC_SRC); \
+	  $(VVP) $(RTL_BUILD_DIR)/tb_view_soc_off.vvp +ROM=$(RTL_BUILD_DIR)/fw_view_off.bin | tee $(RTL_BUILD_DIR)/view_soc_off.log | tail -6; grep -q "^PASSED" $(RTL_BUILD_DIR)/view_soc_off.log

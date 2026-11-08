@@ -352,6 +352,16 @@ wire [31:0] soc_sdram_wb_debug_adapter_rdata, soc_sdram_wb_debug_cpu_rdata;
 `define TAU_RTC_EN 1
 // Pack watchdog (tau_wdog inside tau_soc, MMIO 0x1DC-0x1E8, docs/features/PACK_WATCHDOG_PLAN.md): ALWAYS built since v0.7.0 (owner, 2026-11-06: default on, so no release bundle can forget it; fitted on two seeds as `wdog-w3`, B-940).
 // TAU_NO_WDOG leaves it out (the registers then read 0 and the firmware just runs a pack's tick, protected by the soft limit only). The old opt-in macro TAU_WDOG is accepted and does nothing.
+// Tau Gallery viewer (M0.3, docs/M0_DESIGN.md): TAU_VIEW adds the 800 x 720 viewer scan-out, the mode sequencer and the VID_MODE / VIEW_* registers (0x1EC-0x1F8); it needs the
+// 40 MHz video clocks (TAU_VID40: the PLL's clk_vid and its twin at 600/15, 900 x 740 and 1666 x 400 totals). Without it the core is the 400 x 360 player of before.
+`ifdef TAU_VIEW
+`ifndef TAU_VID40
+`error "TAU_VIEW requires TAU_VID40"
+`endif
+`define TAU_VIEW_EN 1
+`else
+`define TAU_VIEW_EN 0
+`endif
 `ifndef TAU_NO_WDOG
 `define TAU_WDOG_EN 1
 `else
@@ -432,9 +442,9 @@ assign soc_vblank_rd = 17'd0;
 `endif
 
 `ifdef TAU_PHASE2_WINDOW
-tau_soc #(.PHASE2_WINDOW_ENABLE(1), .PSRAM_WINDOW_ENABLE(`TAU_PSRAM_WIN_EN), .PSRAM_IFETCH_ENABLE(`TAU_PSRAM_IFE_EN), .SDRAM_BUSY_ENABLE(`TAU_SDR_BUSY_EN), .BLIT_ENABLE(`TAU_BLIT_EN), .VBLANK_ENABLE(`TAU_VBLANK_EN), .SPEC_ENABLE(`TAU_SPEC_EN), .WAVE_ENABLE(`TAU_WAVE_EN), .STATS_ENABLE(`TAU_STATS_EN), .POLY_ENABLE(`TAU_POLY_EN), .DBUF_ENABLE(`TAU_DBUF_EN), .LPC_ENABLE(`TAU_LPC_EN), .CYMO_RESAMP_ENABLE(`TAU_CYMO_RESAMP_EN), .I2S_DIAG_ENABLE(`TAU_I2S_DIAG_EN), .AUDIO16_ENABLE(`TAU_AUDIO16_EN), .GAIN_ENABLE(`TAU_GAIN_EN), .PCM_RING_ENABLE(`TAU_PCM_RING_EN), .GAIN_BOOST(`TAU_GAIN_BOOST_EN), .HALCYON_ENABLE(`TAU_HALCYON_EN), .WIDE_EQ_ENABLE(`TAU_WIDE_EQ_EN), .FONT_RAM_ENABLE(`TAU_FONT_RAM_EN), .RTC_ENABLE(`TAU_RTC_EN), .SDA_ENABLE(`TAU_SDA_EN), .WDOG_ENABLE(`TAU_WDOG_EN)) u_soc (
+tau_soc #(.VIEW_ENABLE(`TAU_VIEW_EN), .PHASE2_WINDOW_ENABLE(1), .PSRAM_WINDOW_ENABLE(`TAU_PSRAM_WIN_EN), .PSRAM_IFETCH_ENABLE(`TAU_PSRAM_IFE_EN), .SDRAM_BUSY_ENABLE(`TAU_SDR_BUSY_EN), .BLIT_ENABLE(`TAU_BLIT_EN), .VBLANK_ENABLE(`TAU_VBLANK_EN), .SPEC_ENABLE(`TAU_SPEC_EN), .WAVE_ENABLE(`TAU_WAVE_EN), .STATS_ENABLE(`TAU_STATS_EN), .POLY_ENABLE(`TAU_POLY_EN), .DBUF_ENABLE(`TAU_DBUF_EN), .LPC_ENABLE(`TAU_LPC_EN), .CYMO_RESAMP_ENABLE(`TAU_CYMO_RESAMP_EN), .I2S_DIAG_ENABLE(`TAU_I2S_DIAG_EN), .AUDIO16_ENABLE(`TAU_AUDIO16_EN), .GAIN_ENABLE(`TAU_GAIN_EN), .PCM_RING_ENABLE(`TAU_PCM_RING_EN), .GAIN_BOOST(`TAU_GAIN_BOOST_EN), .HALCYON_ENABLE(`TAU_HALCYON_EN), .WIDE_EQ_ENABLE(`TAU_WIDE_EQ_EN), .FONT_RAM_ENABLE(`TAU_FONT_RAM_EN), .RTC_ENABLE(`TAU_RTC_EN), .SDA_ENABLE(`TAU_SDA_EN), .WDOG_ENABLE(`TAU_WDOG_EN)) u_soc (
 `else
-tau_soc #(.SDRAM_BUSY_ENABLE(`TAU_SDR_BUSY_EN), .BLIT_ENABLE(`TAU_BLIT_EN), .VBLANK_ENABLE(`TAU_VBLANK_EN), .SPEC_ENABLE(`TAU_SPEC_EN), .WAVE_ENABLE(`TAU_WAVE_EN), .STATS_ENABLE(`TAU_STATS_EN), .POLY_ENABLE(`TAU_POLY_EN), .DBUF_ENABLE(`TAU_DBUF_EN), .LPC_ENABLE(`TAU_LPC_EN), .CYMO_RESAMP_ENABLE(`TAU_CYMO_RESAMP_EN), .I2S_DIAG_ENABLE(`TAU_I2S_DIAG_EN), .AUDIO16_ENABLE(`TAU_AUDIO16_EN), .GAIN_ENABLE(`TAU_GAIN_EN), .PCM_RING_ENABLE(`TAU_PCM_RING_EN), .GAIN_BOOST(`TAU_GAIN_BOOST_EN), .HALCYON_ENABLE(`TAU_HALCYON_EN), .WIDE_EQ_ENABLE(`TAU_WIDE_EQ_EN), .FONT_RAM_ENABLE(`TAU_FONT_RAM_EN), .RTC_ENABLE(`TAU_RTC_EN), .SDA_ENABLE(`TAU_SDA_EN), .WDOG_ENABLE(`TAU_WDOG_EN)) u_soc (
+tau_soc #(.VIEW_ENABLE(`TAU_VIEW_EN), .SDRAM_BUSY_ENABLE(`TAU_SDR_BUSY_EN), .BLIT_ENABLE(`TAU_BLIT_EN), .VBLANK_ENABLE(`TAU_VBLANK_EN), .SPEC_ENABLE(`TAU_SPEC_EN), .WAVE_ENABLE(`TAU_WAVE_EN), .STATS_ENABLE(`TAU_STATS_EN), .POLY_ENABLE(`TAU_POLY_EN), .DBUF_ENABLE(`TAU_DBUF_EN), .LPC_ENABLE(`TAU_LPC_EN), .CYMO_RESAMP_ENABLE(`TAU_CYMO_RESAMP_EN), .I2S_DIAG_ENABLE(`TAU_I2S_DIAG_EN), .AUDIO16_ENABLE(`TAU_AUDIO16_EN), .GAIN_ENABLE(`TAU_GAIN_EN), .PCM_RING_ENABLE(`TAU_PCM_RING_EN), .GAIN_BOOST(`TAU_GAIN_BOOST_EN), .HALCYON_ENABLE(`TAU_HALCYON_EN), .WIDE_EQ_ENABLE(`TAU_WIDE_EQ_EN), .FONT_RAM_ENABLE(`TAU_FONT_RAM_EN), .RTC_ENABLE(`TAU_RTC_EN), .SDA_ENABLE(`TAU_SDA_EN), .WDOG_ENABLE(`TAU_WDOG_EN)) u_soc (
 `endif
     .clk     (clk_sys),
     .rst     (cpu_reset),
@@ -502,6 +512,7 @@ tau_soc #(.SDRAM_BUSY_ENABLE(`TAU_SDR_BUSY_EN), .BLIT_ENABLE(`TAU_BLIT_EN), .VBL
     .fb_font_wdata(soc_font_wdata),
     .fb_cmd_full  (soc_fb_cmd_full),
     .fb_gfx_idle(soc_gfx_idle), .fb_gfx_fence(soc_gfx_fence), .fb_gfx_free(soc_gfx_free), .fb_gfx_ovf(soc_gfx_ovf), .fb_gfx_underflow(soc_gfx_underflow),
+    .fb_view_req(soc_view_req), .fb_view_base(soc_view_base), .fb_view_stride(soc_view_stride), .fb_vid_cur(gfx_vid_cur), .fb_vid_pend(gfx_vid_pend), .fb_vid_switches(gfx_vid_switches),
 
     .dt_addr  (soc_dt_addr),
     .dt_wren  (soc_dt_wren),
@@ -905,7 +916,9 @@ wire sdram_probe_bar = vid_de_w && (sdram_probe_y < 9'd8) &&
 tau_cdc_sync1 #(.STAGES(3)) u_text_light_sync (.clk_dst(clk_sdram), .d_src(soc_text_light), .q_dst(fb_text_light));
 tau_cdc_sync1 #(.STAGES(3)) u_dbuf_cpu_buf_sync (.clk_dst(clk_sdram), .d_src(soc_dbuf_cpu_buf), .q_dst(fb_dbuf_cpu_buf));   // Helios H2 (B-340), same treatment as text_light
 
-tau_gfx #(.BLIT_BLEND_ENABLE(`TAU_BLIT_BLEND_EN), .DBUF_ENABLE(`TAU_DBUF_EN), .FONT_RAM_ENABLE(`TAU_FONT_RAM_EN)) u_fb (
+wire        soc_view_req;   wire [24:0] soc_view_base;   wire [15:0] soc_view_stride;   // Tau Gallery viewer (M0.3), tau_soc -> tau_gfx
+wire        gfx_vid_cur, gfx_vid_pend;   wire [15:0] gfx_vid_switches;   // and tau_gfx -> tau_soc
+tau_gfx #(.BLIT_BLEND_ENABLE(`TAU_BLIT_BLEND_EN), .DBUF_ENABLE(`TAU_DBUF_EN), .FONT_RAM_ENABLE(`TAU_FONT_RAM_EN), .VIEW_ENABLE(`TAU_VIEW_EN)) u_fb (
     .reset    (~pll_locked),
     .clk_sys  (clk_sys),
     .clk_sdram(clk_sdram),
@@ -968,7 +981,8 @@ tau_gfx #(.BLIT_BLEND_ENABLE(`TAU_BLIT_BLEND_EN), .DBUF_ENABLE(`TAU_DBUF_EN), .F
     .p0_is_fill(fb_p0_is_fill), .p0_rd_len(fb_p0_rd_len),
 
     .video_rgb(vid_rgb_w), .video_de(vid_de_w), .video_hs(vid_hs_w), .video_vs(vid_vs_w), .scan_vc(vid_vc_w),
-    .gfx_idle(soc_gfx_idle), .gfx_fence(soc_gfx_fence), .gfx_free(soc_gfx_free), .gfx_ovf(soc_gfx_ovf), .gfx_underflow(soc_gfx_underflow)
+    .gfx_idle(soc_gfx_idle), .gfx_fence(soc_gfx_fence), .gfx_free(soc_gfx_free), .gfx_ovf(soc_gfx_ovf), .gfx_underflow(soc_gfx_underflow),
+    .view_en(soc_view_req), .view_base(soc_view_base), .view_stride(soc_view_stride), .vid_cur(gfx_vid_cur), .vid_pend(gfx_vid_pend), .vid_switches(gfx_vid_switches)
 );
 
 `ifdef TAU_PHASE2_PROBE

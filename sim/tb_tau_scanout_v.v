@@ -8,7 +8,9 @@ module tb_tau_scanout_v #(parameter integer BUG = 0, parameter integer SLOW = 0)
     always #5    clk_sdram = ~clk_sdram;   // 100 MHz
     always #7.5  clk_sys = ~clk_sys;       // 66.667 MHz
 
-    reg enable = 1'b0, enable_set = 1'b0;
+    reg enable = 1'b0, enable_set = 1'b0, hold = 1'b0;
+    wire [23:0] slot_word = 24'h002000;                  // scaler slot 1: bits [23:13] = 1, function [2:0] = 0
+    wire frame_end;
     wire        lb_we_w;
     reg         lb_we = 0; reg [11:0] lb_waddr = 0; reg [15:0] lb_wdata = 0;
     reg  [9:0]  fill_done_line = 0; reg fill_seen = 0;
@@ -17,10 +19,10 @@ module tb_tau_scanout_v #(parameter integer BUG = 0, parameter integer SLOW = 0)
     wire [23:0] rgb; wire de, hs, vs; wire [9:0] scan_vc;
 
     tau_scanout_v #(.BUG(BUG)) dut (
-        .reset(reset), .clk_sys(clk_sys), .clk_sdram(clk_sdram), .clk_vid(clk_vid), .enable(enable),
+        .reset(reset), .clk_sys(clk_sys), .clk_sdram(clk_sdram), .clk_vid(clk_vid), .enable(enable), .hold(hold), .slot_word(slot_word),
         .lb_we(lb_we), .lb_waddr(lb_waddr), .lb_wdata(lb_wdata), .fill_done_line(fill_done_line), .fill_seen(fill_seen),
         .underflow_cnt(underflow), .fill_req_tgl(fill_req_tgl), .fill_line_req(fill_line_req), .vblank_tgl(vblank_tgl),
-        .video_rgb(rgb), .video_de(de), .video_hs(hs), .video_vs(vs), .scan_vc(scan_vc));
+        .video_rgb(rgb), .video_de(de), .video_hs(hs), .video_vs(vs), .scan_vc(scan_vc), .frame_end(frame_end));
 
     // ---- the golden picture ----------------------------------------------
     function [23:0] pix(input integer x, input integer y);
@@ -63,7 +65,7 @@ module tb_tau_scanout_v #(parameter integer BUG = 0, parameter integer SLOW = 0)
     // ---- the checker ---------------------------------------------------------
     integer cyc = 0, errors = 0, frame = 0;
     reg de_q = 0, hs_q = 0, vs_q = 0, tgl_q = 0;
-    integer x = 0, y = -1, de_clks = 0, de_lines = 0, hs_len = 0, hs_between = 0, vs_hs = 0, last_de_fall = 0, last_vs_rise = 0, vb_cycle = 0, black_bad = 0, pix_bad = 0, frame_clks = 0;
+    integer x = 0, y = -1, de_clks = 0, de_lines = 0, hs_len = 0, hs_between = 0, vs_hs = 0, last_de_fall = 0, last_vs_rise = 0, vb_cycle = 0, black_bad = 0, pix_bad = 0, slot_bad = 0, nz_bad = 0, frame_clks = 0;
     integer hs_after_vs = 0, hs_before_vs = 0, first_de_seen = 0, vs_pulses = 0;
     reg in_vs = 0, hs_pos_chk = 0;
     task fail(input [255:0] msg); begin errors = errors + 1; if (errors < 12) $display("FAIL: %0s (frame %0d, cycle %0d)", msg, frame, cyc); end endtask
@@ -72,6 +74,11 @@ module tb_tau_scanout_v #(parameter integer BUG = 0, parameter integer SLOW = 0)
         cyc <= cyc + 1;
         de_q <= de; hs_q <= hs; vs_q <= vs; tgl_q <= vblank_tgl;
         if (vblank_tgl != tgl_q) vb_cycle <= cyc;
+        // sideband: the scaler-slot word in the first clock after DE falls, zero in every other blank clock
+        if (!de) begin
+            if (de_q) begin if (rgb !== slot_word) slot_bad = slot_bad + 1; end
+            else if (rgb !== 24'd0) nz_bad = nz_bad + 1;
+        end
         // pixels
         if (de) begin
             if (!de_q) begin y = y + 1; x = 0; de_lines = de_lines + 1; end
@@ -126,9 +133,11 @@ module tb_tau_scanout_v #(parameter integer BUG = 0, parameter integer SLOW = 0)
         end else begin
             if (underflow != 0) fail("fast filler: a late line was counted");
             if (black_bad != 0) fail("frame 0 was not black with enable low");
+            if (slot_bad != 0) fail("the slot word is missing after DE falls");
+            if (nz_bad != 0) fail("a blank clock is not zero");
             if (pix_bad != 0) fail("pixels differ from the golden picture");
         end
-        $display("%s  BUG=%0d SLOW=%0d: black_bad=%0d pix_bad=%0d late=%0d errors=%0d", errors == 0 ? "PASS" : "FAILED", BUG, SLOW, black_bad, pix_bad, underflow, errors);
+        $display("%s  BUG=%0d SLOW=%0d: black_bad=%0d pix_bad=%0d slot_bad=%0d nz_bad=%0d late=%0d errors=%0d", errors == 0 ? "PASS" : "FAILED", BUG, SLOW, black_bad, pix_bad, slot_bad, nz_bad, underflow, errors);
         if (errors != 0) $finish(1); else $finish;
     end
     initial begin #400000000; $display("TIMEOUT"); $finish(1); end

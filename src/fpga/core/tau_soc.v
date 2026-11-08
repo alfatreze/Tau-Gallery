@@ -115,6 +115,9 @@ module tau_soc #(
     parameter SDA_ENABLE = 0,
     // Pack watchdog (tau_wdog.sv, docs/features/PACK_WATCHDOG_PLAN.md): registers 0x1DC-0x1E8; its expiry is the CPU's timer interrupt. With 0 the registers read 0, writes are ignored and the interrupt input stays tied to 0.
     parameter WDOG_ENABLE = 0,
+    // Tau Gallery viewer (docs/M0_DESIGN.md, M0.3): registers 0x1EC-0x1F8: VID_MODE (request the 400 x 360 UI or the 800 x 720 viewer, read back the mode on the bus, the pending flag
+    // and the switch count), VIEW_BASE and VIEW_STRIDE (the plane in SDRAM), VIEW_CAPS. With 0 they read 0, writes are ignored and the outputs are constant.
+    parameter VIEW_ENABLE = 0,
     parameter BUG_FONT_NO_INC = 0,      // mutation hooks for sim/tb_font_soc.v (1 must make it fail): the index does not step after a data write / the completed-load counter never counts
     parameter BUG_FONT_NO_GEN = 0
 ) (
@@ -205,6 +208,13 @@ module tau_soc #(
     input  wire [8:0]   fb_gfx_free,
     input  wire [15:0]  fb_gfx_ovf,
     input  wire [15:0]  fb_gfx_underflow,
+    // Tau Gallery viewer (VIEW_ENABLE): the mode request and the plane, to tau_gfx; the mode on the bus, the pending flag and the switch count, from it (clk_sys)
+    output wire         fb_view_req,
+    output wire [24:0]  fb_view_base,
+    output wire [15:0]  fb_view_stride,
+    input  wire         fb_vid_cur,
+    input  wire         fb_vid_pend,
+    input  wire [15:0]  fb_vid_switches,
 
     // core_bridge_cmd's datatable: a dual-port BRAM whose OTHER port APF can
     // read and write over the bridge at 0xF8xx2xxx. That is what makes the
@@ -1201,6 +1211,13 @@ module tau_soc #(
     localparam [8:0] R_STATS_CTL = 9'h1AC, R_STATS_IDX = 9'h1B0, R_STATS_DATA = 9'h1B4;
     localparam [8:0] R_RTC_ST = 9'h1C4, R_RTC_EPOCH = 9'h1C8, R_RTC_DATE = 9'h1CC, R_RTC_TIME = 9'h1D0;   // wall clock (read only)
     localparam [8:0] R_SDA_SEL = 9'h1D4, R_SDA_VAL = 9'h1D8;
+    localparam [8:0] R_VID_MODE = 9'h1EC, R_VIEW_BASE = 9'h1F0, R_VIEW_STRIDE = 9'h1F4, R_VIEW_CAPS = 9'h1F8;   // Tau Gallery viewer (M0.3)
+    reg         view_req_r = 1'b0;
+    reg  [24:0] view_base_r = 25'd0;
+    reg  [15:0] view_stride_r = 16'd1200;
+    assign fb_view_req    = (VIEW_ENABLE != 0) && view_req_r;
+    assign fb_view_base   = (VIEW_ENABLE != 0) ? view_base_r : 25'd0;
+    assign fb_view_stride = (VIEW_ENABLE != 0) ? view_stride_r : 16'd0;
     localparam [8:0] R_WDOG_ARM = 9'h1DC, R_WDOG_ST = 9'h1E0, R_WDOG_ACK = 9'h1E4, R_WDOG_CNT = 9'h1E8;   // pack watchdog (ARM write-only, ST and CNT read-only, ACK write-only)                                          // per-port SDRAM statistics window
     reg         stats_ctl_we = 1'b0, stats_idx_we = 1'b0;
     reg  [1:0]  stats_ctl_d  = 2'd0;
@@ -1487,6 +1504,9 @@ module tau_soc #(
                 R_WDOG_ARM:  if (WDOG_ENABLE != 0) begin wdog_arm_d <= dDAT_MOSI; wdog_arm_we <= 1'b1; end
                 R_WDOG_ACK:  if (WDOG_ENABLE != 0) wdog_ack_we <= 1'b1;
                 R_SDA_SEL:   if (SDA_ENABLE != 0) begin sda_wd <= dDAT_MOSI[4:0]; sda_we <= 1'b1; end   // the window ignores it while a snapshot is pending
+                R_VID_MODE:    if (VIEW_ENABLE != 0) view_req_r <= dDAT_MOSI[0];
+                R_VIEW_BASE:   if (VIEW_ENABLE != 0) view_base_r <= dDAT_MOSI[24:0];
+                R_VIEW_STRIDE: if (VIEW_ENABLE != 0) view_stride_r <= dDAT_MOSI[15:0];
                 9'h100:     begin poly_clear <= dDAT_MOSI[0]; poly_go <= dDAT_MOSI[1]; end
                 9'h104:     begin poly_push_d <= dDAT_MOSI; poly_push_we <= 1'b1; end
                 9'h108:     begin poly_idx_d <= dDAT_MOSI[4:0]; poly_idx_we <= 1'b1; end
@@ -1641,6 +1661,10 @@ module tau_soc #(
             R_WDOG_ST:     mmio_rdata = (WDOG_ENABLE != 0) ? wdog_status : 32'd0;           // [31] present, [1] expired, [0] armed
             R_WDOG_CNT:    mmio_rdata = (WDOG_ENABLE != 0) ? wdog_counts : 32'd0;           // [31:16] arms, [15:0] expiries (wrap)
             R_SDA_SEL:     mmio_rdata = (SDA_ENABLE != 0) ? sda_status : 32'd0;          // [31] present, [8] a snapshot is pending, [4:0] the selection
+            R_VID_MODE:    mmio_rdata = (VIEW_ENABLE != 0) ? {fb_vid_switches, 13'd0, view_req_r, fb_vid_pend, fb_vid_cur} : 32'd0;   // [31:16] completed switches, [2] requested, [1] pending, [0] on the bus
+            R_VIEW_BASE:   mmio_rdata = (VIEW_ENABLE != 0) ? {7'd0, view_base_r} : 32'd0;
+            R_VIEW_STRIDE: mmio_rdata = (VIEW_ENABLE != 0) ? {16'd0, view_stride_r} : 32'd0;
+            R_VIEW_CAPS:   mmio_rdata = (VIEW_ENABLE != 0) ? 32'h80000003 : 32'd0;                    // [31] present, [1] 800 x 720 viewer, [0] mode sequencer
             R_SDA_VAL:     mmio_rdata = (SDA_ENABLE != 0) ? sda_val : 32'd0;             // the snapshot of the selected counter (stable until the next select)
             R_STATS_DATA:  mmio_rdata = stats_rd;                                      // audio statistics read-out word at STATS_IDX (0 when not built)
             R_FONT_IDX:    mmio_rdata = (FONT_RAM_ENABLE != 0) ? {19'd0, font_idx} : 32'd0;

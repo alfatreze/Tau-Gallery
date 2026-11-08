@@ -38,13 +38,26 @@ module mf_pllbase_0002 (
 `endif
         .phase_shift0("0 ps"),
         .duty_cycle0(50),
+`ifdef TAU_VID40
+        .output_clock_frequency1("40.000000 MHz"),   // Tau Gallery M0.3 (as Tau V's `O2`, proven on a Pocket): 800 x 720 viewer, 600 MHz VCO / 15, 900 x 740 total = 60.06 Hz
+        .phase_shift1("0 ps"),
+        .duty_cycle1(50),
+        .output_clock_frequency2("40.000000 MHz"),
+        .phase_shift2("6250 ps"),                    // a quarter of the 25 ns period
+        .duty_cycle2(50),
+`else
         .output_clock_frequency1("12.000000 MHz"),
         .phase_shift1("0 ps"),
         .duty_cycle1(50),
         .output_clock_frequency2("12.000000 MHz"),
         .phase_shift2("20833 ps"),
         .duty_cycle2(50),
+`endif
+`ifdef TAU_MEM150
+        .output_clock_frequency3("150.000000 MHz"),  // SDRAM at 600 MHz VCO / 4 (Tau V memory test core, 289/284 MB/s on a Pocket; M0 builds both clocks, D7)
+`else
         .output_clock_frequency3("100.000000 MHz"),
+`endif
         .phase_shift3("0 ps"),
         .duty_cycle3(50),
         .output_clock_frequency4("0 MHz"),

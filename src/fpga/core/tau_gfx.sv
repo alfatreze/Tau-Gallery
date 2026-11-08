@@ -226,9 +226,12 @@ module tau_gfx #(
     output wire [15:0] gfx_underflow,   // scanout lines whose fill was late (saturating counter of the Gray count, wraps at 2^16)
 
     // Tau Gallery viewer (VIEW_ENABLE; ignored and may be left open when it is 0): see tau_talos.sv and docs/M0_DESIGN.md
-    input  wire        view_en,         // clk_sys level: show the viewer picture (applied at the next vblank)
+    input  wire        view_en,         // clk_sys level: the requested mode, 1 = 800 x 720 viewer (scaler slot 1), 0 = 400 x 360 UI (slot 0); see tau_vidmode.sv
     input  wire [24:0] view_base,       // word address of plane line 0
-    input  wire [15:0] view_stride      // words per plane line
+    input  wire [15:0] view_stride,     // words per plane line
+    output wire        vid_cur,         // clk_sys (synchronised): the mode on the bus
+    output wire        vid_pend,        // clk_sys (synchronised): a switch is under way (the pending frame)
+    output wire [15:0] vid_switches     // clk_sys: completed mode switches (wraps)
 );
 
     wire        u_fill_req_tgl, u_vblank_tgl;
@@ -237,7 +240,7 @@ module tau_gfx #(
     wire [9:0]  fill_line_req;
     wire        fill_done_inc, fill_seen;
     wire [9:0]  fill_done_line;
-    wire        vlb_we, view_active_w;
+    wire        vlb_we, view_active_w, view_target;
     wire [11:0] vlb_waddr;
     wire [15:0] vlb_wdata;
     wire        lb_we;
@@ -319,13 +322,15 @@ module tau_gfx #(
         .lb_we(lb_we), .lb_waddr(lb_waddr), .lb_wdata(lb_wdata),
         .fill_done_inc(fill_done_inc), .fill_done_line(fill_done_line), .fill_seen(fill_seen),
         .gfx_idle(gfx_idle), .gfx_fence(gfx_fence), .gfx_free(gfx_free), .gfx_ovf(gfx_ovf),
-        .view_en(view_en), .view_base(view_base), .view_stride(view_stride),
+        .view_en(view_target), .view_base(view_base), .view_stride(view_stride),
         .vlb_we(vlb_we), .vlb_waddr(vlb_waddr), .vlb_wdata(vlb_wdata), .view_active(view_active_w)
     );
 
     wire [23:0] u_rgb; wire u_de, u_hs, u_vs; wire [8:0] u_vc; wire [15:0] u_uf;
+    wire        u_hold, u_fend;
+    wire [23:0] slot_w;
 
-    tau_scanout u_scanout (
+    tau_scanout #(.H_TOT((VIEW_ENABLE != 0) ? 1666 : 500), .MODE_EN(VIEW_ENABLE)) u_scanout (
         .reset(reset), .clk_sys(clk_sys), .clk_sdram(clk_sdram), .clk_vid(clk_vid),
         .cmd_push(cmd_push),
         .lb_we(lb_we), .lb_waddr(lb_waddr), .lb_wdata(lb_wdata),
@@ -333,38 +338,56 @@ module tau_gfx #(
         .underflow_cnt(u_uf),
         .fill_req_tgl(u_fill_req_tgl), .fill_line_req(u_fill_line_req), .vblank_tgl(u_vblank_tgl),
         .video_rgb(u_rgb), .video_de(u_de), .video_hs(u_hs), .video_vs(u_vs),
-        .scan_vc(u_vc)
+        .scan_vc(u_vc),
+        .hold(u_hold), .slot_word(slot_w), .frame_end(u_fend)
     );
 
     generate
         if (VIEW_ENABLE != 0) begin : g_view
-            // The viewer scan-out (tau_scanout_v) beside the UI one. Talos's latched mode (view_active, clk_sdram) picks which one the fill engine serves and which one
-            // is the picture: the mode changes at a vblank edge, so the switch happens in the blanking of the frame.
-            wire        v_fill_req_tgl, v_vblank_tgl;
+            // The viewer scan-out (tau_scanout_v) beside the UI one, both on the 40 MHz pixel clock (UI as 1666 x 400, viewer as 900 x 740). tau_vidmode picks the one on the
+            // bus: at a frame wrap the other takes over from its first clock, and the scaler-slot word goes out on every line of the frame before (docs/M0_DESIGN.md section 2).
+            wire        v_fill_req_tgl, v_vblank_tgl, v_fend, v_hold;
             wire [9:0]  v_fill_line_req, v_vc;
             wire [23:0] v_rgb; wire v_de, v_hs, v_vs; wire [15:0] v_uf;
+            wire        cur, pend, tgt, target;
+            wire [15:0] sw;
+            tau_vidmode u_mode (.clk_vid(clk_vid), .reset(reset), .req_view(view_en), .ui_fend(u_fend), .v_fend(v_fend),
+                .cur_view(cur), .pend(pend), .tgt_view(tgt), .hold_ui(u_hold), .hold_v(v_hold), .slot_word(slot_w), .target_view(target), .switches(sw));
             tau_scanout_v u_scanout_v (
                 .reset(reset), .clk_sys(clk_sys), .clk_sdram(clk_sdram), .clk_vid(clk_vid),
-                .enable(view_en),
+                .enable(view_en), .hold(v_hold), .slot_word(slot_w),
                 .lb_we(vlb_we), .lb_waddr(vlb_waddr), .lb_wdata(vlb_wdata),
                 .fill_done_line(fill_done_line), .fill_seen(fill_seen),
                 .underflow_cnt(v_uf),
                 .fill_req_tgl(v_fill_req_tgl), .fill_line_req(v_fill_line_req), .vblank_tgl(v_vblank_tgl),
-                .video_rgb(v_rgb), .video_de(v_de), .video_hs(v_hs), .video_vs(v_vs), .scan_vc(v_vc)
+                .video_rgb(v_rgb), .video_de(v_de), .video_hs(v_hs), .video_vs(v_vs), .scan_vc(v_vc), .frame_end(v_fend)
             );
-            reg [1:0] sel_s = 2'b00;
-            always @(posedge clk_vid) sel_s <= {sel_s[0], view_active_w};
-            wire sel = sel_s[1];
-            assign fill_req_tgl  = sel ? v_fill_req_tgl  : u_fill_req_tgl;
-            assign fill_line_req = sel ? v_fill_line_req : u_fill_line_req;
-            assign vblank_tgl    = sel ? v_vblank_tgl    : u_vblank_tgl;
-            assign video_rgb     = sel ? v_rgb : u_rgb;
-            assign video_de      = sel ? v_de  : u_de;
-            assign video_hs      = sel ? v_hs  : u_hs;
-            assign video_vs      = sel ? v_vs  : u_vs;
-            assign scan_vc       = sel ? v_vc[8:0] : u_vc;
-            assign gfx_underflow = view_en ? v_uf : u_uf;
+            // Talos takes the mode of the NEXT frame (the target while a switch is pending) at the vblank edge of the frame in progress, so the fill engine is in the new mode when
+            // the new frame's first request arrives. The level crosses clk_vid -> clk_sdram through two flops (quasi-static: it only changes at a frame wrap).
+            reg [1:0] tgt_s = 2'b00;
+            always @(posedge clk_sdram) tgt_s <= {tgt_s[0], target};
+            assign view_target = tgt_s[1];
+            reg [1:0] cur_s = 2'b00, pend_s = 2'b00;
+            always @(posedge clk_sys) begin cur_s <= {cur_s[0], cur}; pend_s <= {pend_s[0], pend}; end
+            assign vid_cur  = cur_s[1];
+            assign vid_pend = pend_s[1];
+            tau_cdc_gray_bus #(.W(16), .STAGES(3)) u_sw_cdc (.clk_src(clk_vid), .d_src(sw), .clk_dst(clk_sys), .q_dst(vid_switches));
+            assign fill_req_tgl  = cur ? v_fill_req_tgl  : u_fill_req_tgl;
+            assign fill_line_req = cur ? v_fill_line_req : u_fill_line_req;
+            assign vblank_tgl    = cur ? v_vblank_tgl    : u_vblank_tgl;
+            assign video_rgb     = cur ? v_rgb : u_rgb;
+            assign video_de      = cur ? v_de  : u_de;
+            assign video_hs      = cur ? v_hs  : u_hs;
+            assign video_vs      = cur ? v_vs  : u_vs;
+            assign scan_vc       = cur ? v_vc[8:0] : u_vc;
+            assign gfx_underflow = cur_s[1] ? v_uf : u_uf;
         end else begin : g_noview
+            assign view_target   = 1'b0;
+            assign vid_cur       = 1'b0;
+            assign vid_pend      = 1'b0;
+            assign vid_switches  = 16'd0;
+            assign u_hold        = 1'b0;
+            assign slot_w        = 24'd0;
             assign fill_req_tgl  = u_fill_req_tgl;
             assign fill_line_req = u_fill_line_req;
             assign vblank_tgl    = u_vblank_tgl;

@@ -63,6 +63,11 @@
 #define R_WDOG_ST    0x800001E0u        /* read: [31] built in, [1] expired (sticky until acknowledged), [0] armed (0 when not built) */
 #define R_WDOG_ACK   0x800001E4u        /* write any value: clear the expiry and drop the interrupt */
 #define R_WDOG_CNT   0x800001E8u        /* read: [31:16] arms, [15:0] expiries (wrap) */
+/* Tau Gallery viewer (docs/M0_DESIGN.md, bitstream built with TAU_VIEW and TAU_VID40; each reads 0 without it). Scaler slot 0 = 400 x 360 UI, slot 1 = 800 x 720 viewer (video.json). */
+#define R_VID_MODE   0x800001ECu        /* write bit 0: requested mode (1 = viewer). read: [31:16] completed switches, [2] requested, [1] pending (the frame before the switch), [0] mode on the bus */
+#define R_VIEW_BASE  0x800001F0u        /* [24:0] SDRAM word address of plane line 0 (a packed RGB888 plane: 800 pixels of R, G, B bytes per line = 1,200 words); applied at the next vblank */
+#define R_VIEW_STRIDE 0x800001F4u       /* [15:0] words from one plane line to the next (at least 1,200), applied at the next vblank */
+#define R_VIEW_CAPS  0x800001F8u        /* read: [31] present, [1] 800 x 720 viewer, [0] mode sequencer */
 #define R_SDA_SEL    0x800001D4u        /* per-port SDRAM statistics window (tau_sdr_stat_win.sv): write {port[1:0], stat[2:0]} (stat 0 requests, 1 words, 2 busy cycles, 3 worst wait, 4 urgent over the bound, 5 bad requests; port 0 scan-out, 1 engine, 2 CPU) -- ignored while pending; read [31] built in, [8] a snapshot is pending, [4:0] the selection */
 #define R_SDA_VAL    0x800001D8u        /* read: the snapshot of the selected counter, stable until the next select; valid once R_SDA_SEL bit 8 is 0 */
 #define R_DBUF_CPU   0x80000118u        /* Helios H2: bit 0 = the buffer plain RECT/CHAR/COPY commands target (rows of the visible frame only; the off-screen stash rows are shared); read bit 31 = built in */

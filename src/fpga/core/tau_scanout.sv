@@ -24,7 +24,12 @@ module tau_scanout #(
     parameter BUG_VS        = 0,  // vertical sync one line late
     parameter BUG_PAINT_SYN = 0,  // painted synchroniser only two flops
     parameter BUG_NO_NEXT   = 0,  // late check ignores "the next line is also fine"
-    parameter BUG_EXPAND    = 0   // RGB565 expanded with bit replication
+    parameter BUG_EXPAND    = 0,  // RGB565 expanded with bit replication
+    // Tau Gallery M0.3 (docs/M0_DESIGN.md): H_TOT is the line length in clocks (500 at 12 MHz; 1666 at 40 MHz keeps 400 lines at 60 Hz, 400 active clocks per line).
+    // MODE_EN = 1 enables the mode-switch ports: `hold` clears the counters (the module is not the picture), `slot_word` is the scaler-slot word sent in the RGB word
+    // right after DE falls on every line, `frame_end` is the last clock of a frame. With MODE_EN = 0 (the default) they are ignored and the module is what it was.
+    parameter H_TOT = 500,
+    parameter MODE_EN = 0
 ) (
     input  wire        reset,
     input  wire        clk_sys,
@@ -51,7 +56,11 @@ module tau_scanout #(
     output reg         video_de      = 1'b0,
     output reg         video_hs      = 1'b0,
     output reg         video_vs      = 1'b0,
-    output wire [8:0]  scan_vc
+    output wire [8:0]  scan_vc,
+
+    input  wire        hold,
+    input  wire [23:0] slot_word,
+    output wire        frame_end
 );
 
     wire _unused_ok = &{1'b0, fill_done_inc, 1'b0};
@@ -59,11 +68,11 @@ module tau_scanout #(
     // ---- counters ----------------------------------------------------------
     reg [10:0] hc = 11'd0;
     reg [10:0] vc = 11'd0;
-    wire h_last = (hc == 11'd499);
+    wire h_last = (hc == H_TOT - 1);
     wire v_last = (vc == 11'd399);
 
     always @(posedge clk_vid) begin
-        if (reset) begin
+        if (reset || ((MODE_EN != 0) && hold)) begin
             hc <= 11'd0;
             vc <= 11'd0;
         end else begin
@@ -73,6 +82,7 @@ module tau_scanout #(
     end
 
     assign scan_vc = vc[8:0];
+    assign frame_end = h_last && v_last;
 
     // ---- fill request and vertical-blank toggle ----------------------------
     wire [10:0] vc_next  = v_last ? 11'd0 : vc + 11'd1;
@@ -143,7 +153,7 @@ module tau_scanout #(
             end
         end else begin : g_nolat
             always @(posedge clk_vid) begin
-                video_rgb <= rgb_n;
+                video_rgb <= ((MODE_EN != 0) && video_de && !s1_de) ? slot_word : rgb_n;     // the scaler-slot word in the first clock after DE falls
                 video_de  <= s1_de;
                 video_hs  <= s1_hs;
                 video_vs  <= s1_vs;
