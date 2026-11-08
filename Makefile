@@ -902,3 +902,25 @@ test-rtl-scanout-v-mutation: | $(RTL_BUILD_DIR)
 	  while ! grep -qE "PASS|FAILED|TIMEOUT" $(RTL_BUILD_DIR)/tb_tau_scanout_v_m$$b.log 2>/dev/null; do sleep 2; done; \
 	  if grep -q "^FAILED" $(RTL_BUILD_DIR)/tb_tau_scanout_v_m$$b.log || grep -q TIMEOUT $(RTL_BUILD_DIR)/tb_tau_scanout_v_m$$b.log; then echo "mutant $$b killed"; else echo "MUTANT $$b SURVIVED"; exit 1; fi; \
 	done
+
+# Tau Gallery M0.2: the real graphics path with VIEW_ENABLE = 1 shows a packed RGB888 plane that sits in an SDRAM model with its own base and stride (every pixel of two
+# frames after the mode switch, no late line, 666,000-clock frame); a slow memory is counted as late lines; the Talos mutants BUG_VIEW 1..5 must FAIL. About two minutes each.
+.PHONY: test-rtl-gfx-view test-rtl-gfx-view-mutation
+GFX_VIEW_SRC = sim/tb_tau_gfx_view.v src/fpga/core/tau_gfx.sv src/fpga/core/tau_talos.sv src/fpga/core/tau_scanout.sv src/fpga/core/tau_scanout_v.sv src/fpga/core/tau_cdc_gray_ctr.sv src/fpga/core/tau_cdc_gray_bus.sv src/fpga/core/font_rom.v src/fpga/core/font_ram.v
+test-rtl-gfx-view: | $(RTL_BUILD_DIR)
+	@set -e; \
+	$(IVERILOG) -g2012 -Isrc/fpga/core -o $(RTL_BUILD_DIR)/tb_tau_gfx_view.vvp $(GFX_VIEW_SRC); \
+	$(IVERILOG) -g2012 -Isrc/fpga/core -Ptb_tau_gfx_view.SLOW=3 -o $(RTL_BUILD_DIR)/tb_tau_gfx_view_slow.vvp $(GFX_VIEW_SRC); \
+	( $(VVP) $(RTL_BUILD_DIR)/tb_tau_gfx_view.vvp > $(RTL_BUILD_DIR)/tb_tau_gfx_view.log 2>&1 & $(VVP) $(RTL_BUILD_DIR)/tb_tau_gfx_view_slow.vvp > $(RTL_BUILD_DIR)/tb_tau_gfx_view_slow.log 2>&1 & wait ); \
+	grep -E "PASSED|FAILED|DIFF|FAIL" $(RTL_BUILD_DIR)/tb_tau_gfx_view.log $(RTL_BUILD_DIR)/tb_tau_gfx_view_slow.log; \
+	grep -q "^PASSED" $(RTL_BUILD_DIR)/tb_tau_gfx_view.log; grep -q "^PASSED" $(RTL_BUILD_DIR)/tb_tau_gfx_view_slow.log
+test-rtl-gfx-view-mutation: | $(RTL_BUILD_DIR)
+	@set -e; \
+	for b in 1 2 3 4 5; do \
+	  $(IVERILOG) -g2012 -Isrc/fpga/core -Ptb_tau_gfx_view.BUG_VIEW=$$b -o $(RTL_BUILD_DIR)/tb_tau_gfx_view_m$$b.vvp $(GFX_VIEW_SRC); \
+	  ( $(VVP) $(RTL_BUILD_DIR)/tb_tau_gfx_view_m$$b.vvp > $(RTL_BUILD_DIR)/tb_tau_gfx_view_m$$b.log 2>&1 & ); \
+	done; \
+	for b in 1 2 3 4 5; do \
+	  while ! grep -qE "^PASSED|^FAILED" $(RTL_BUILD_DIR)/tb_tau_gfx_view_m$$b.log 2>/dev/null; do sleep 2; done; \
+	  if grep -q "^FAILED" $(RTL_BUILD_DIR)/tb_tau_gfx_view_m$$b.log; then echo "mutant $$b killed"; else echo "MUTANT $$b SURVIVED"; exit 1; fi; \
+	done

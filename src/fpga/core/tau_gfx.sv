@@ -77,7 +77,9 @@ module tau_gfx #(
     parameter BUG_POP_STALE = 0,       // 1: the original command-pop race (sim/tb_tau_gfx_diff.v, tb_tau_gfx_t3.v MUT 5 only): see tau_talos.sv
     parameter CBLIT_BURST = 1,         // Talos 2 T3b: a CBLIT source row in one burst (0 = the per-pixel path); see tau_talos.sv
     parameter BUG_CBLIT_EARLY = 0, BUG_CBLIT_SHIFT = 0,  // mutation hooks (sim/tb_tau_gfx_cblit.v)
-    parameter FILL_WORDS = 400         // Talos 2 T3b: words read per scanout fill (512 = the old behaviour); see tau_talos.sv
+    parameter FILL_WORDS = 400,        // Talos 2 T3b: words read per scanout fill (512 = the old behaviour); see tau_talos.sv
+    parameter BUG_VIEW = 0,            // mutation hook of the viewer fill (sim/tb_tau_gfx_view.v), see tau_talos.sv
+    parameter VIEW_ENABLE = 0          // Tau Gallery M0.2: 1 adds the 800 x 720 RGB888 viewer (tau_scanout_v) beside the 400 x 360 UI; 0 = exactly the old module
 ) (
     input  wire        reset,
     input  wire        clk_sys,     // CPU / FIFO write domain
@@ -221,13 +223,23 @@ module tau_gfx #(
     output wire [31:0] gfx_fence,       // FENCE commands retired (monotonic, wraps at 2^32)
     output wire [8:0]  gfx_free,        // free command-queue slots
     output wire [15:0] gfx_ovf,         // pushes dropped because the queue was full (saturating)
-    output wire [15:0] gfx_underflow    // scanout lines whose fill was late (saturating counter of the Gray count, wraps at 2^16)
+    output wire [15:0] gfx_underflow,   // scanout lines whose fill was late (saturating counter of the Gray count, wraps at 2^16)
+
+    // Tau Gallery viewer (VIEW_ENABLE; ignored and may be left open when it is 0): see tau_talos.sv and docs/M0_DESIGN.md
+    input  wire        view_en,         // clk_sys level: show the viewer picture (applied at the next vblank)
+    input  wire [24:0] view_base,       // word address of plane line 0
+    input  wire [15:0] view_stride      // words per plane line
 );
 
+    wire        u_fill_req_tgl, u_vblank_tgl;
+    wire [9:0]  u_fill_line_req;
     wire        fill_req_tgl, vblank_tgl;
     wire [9:0]  fill_line_req;
     wire        fill_done_inc, fill_seen;
     wire [9:0]  fill_done_line;
+    wire        vlb_we, view_active_w;
+    wire [11:0] vlb_waddr;
+    wire [15:0] vlb_wdata;
     wire        lb_we;
     wire [9:0]  lb_waddr;
     wire [15:0] lb_wdata;
@@ -250,7 +262,7 @@ module tau_gfx #(
         .BUG_FONT_NO_WRITE(BUG_FONT_NO_WRITE),
         .BUG_FENCE_ANY(BUG_FENCE_ANY),
         .BUG_POP_STALE(BUG_POP_STALE),
-        .CBLIT_BURST(CBLIT_BURST), .BUG_CBLIT_EARLY(BUG_CBLIT_EARLY), .BUG_CBLIT_SHIFT(BUG_CBLIT_SHIFT), .FILL_WORDS(FILL_WORDS)
+        .CBLIT_BURST(CBLIT_BURST), .BUG_CBLIT_EARLY(BUG_CBLIT_EARLY), .BUG_CBLIT_SHIFT(BUG_CBLIT_SHIFT), .FILL_WORDS(FILL_WORDS), .VIEW_ENABLE(VIEW_ENABLE), .BUG_VIEW(BUG_VIEW)
     ) u_talos (
         .reset(reset), .clk_sys(clk_sys), .clk_sdram(clk_sdram), .clk_vid(clk_vid),
         .cmd_push(cmd_push),
@@ -306,19 +318,64 @@ module tau_gfx #(
         .fill_req_tgl(fill_req_tgl), .fill_line_req(fill_line_req), .vblank_tgl(vblank_tgl),
         .lb_we(lb_we), .lb_waddr(lb_waddr), .lb_wdata(lb_wdata),
         .fill_done_inc(fill_done_inc), .fill_done_line(fill_done_line), .fill_seen(fill_seen),
-        .gfx_idle(gfx_idle), .gfx_fence(gfx_fence), .gfx_free(gfx_free), .gfx_ovf(gfx_ovf)
+        .gfx_idle(gfx_idle), .gfx_fence(gfx_fence), .gfx_free(gfx_free), .gfx_ovf(gfx_ovf),
+        .view_en(view_en), .view_base(view_base), .view_stride(view_stride),
+        .vlb_we(vlb_we), .vlb_waddr(vlb_waddr), .vlb_wdata(vlb_wdata), .view_active(view_active_w)
     );
+
+    wire [23:0] u_rgb; wire u_de, u_hs, u_vs; wire [8:0] u_vc; wire [15:0] u_uf;
 
     tau_scanout u_scanout (
         .reset(reset), .clk_sys(clk_sys), .clk_sdram(clk_sdram), .clk_vid(clk_vid),
         .cmd_push(cmd_push),
         .lb_we(lb_we), .lb_waddr(lb_waddr), .lb_wdata(lb_wdata),
         .fill_done_inc(fill_done_inc), .fill_done_line(fill_done_line), .fill_seen(fill_seen),
-        .underflow_cnt(gfx_underflow),
-        .fill_req_tgl(fill_req_tgl), .fill_line_req(fill_line_req), .vblank_tgl(vblank_tgl),
-        .video_rgb(video_rgb), .video_de(video_de), .video_hs(video_hs), .video_vs(video_vs),
-        .scan_vc(scan_vc)
+        .underflow_cnt(u_uf),
+        .fill_req_tgl(u_fill_req_tgl), .fill_line_req(u_fill_line_req), .vblank_tgl(u_vblank_tgl),
+        .video_rgb(u_rgb), .video_de(u_de), .video_hs(u_hs), .video_vs(u_vs),
+        .scan_vc(u_vc)
     );
+
+    generate
+        if (VIEW_ENABLE != 0) begin : g_view
+            // The viewer scan-out (tau_scanout_v) beside the UI one. Talos's latched mode (view_active, clk_sdram) picks which one the fill engine serves and which one
+            // is the picture: the mode changes at a vblank edge, so the switch happens in the blanking of the frame.
+            wire        v_fill_req_tgl, v_vblank_tgl;
+            wire [9:0]  v_fill_line_req, v_vc;
+            wire [23:0] v_rgb; wire v_de, v_hs, v_vs; wire [15:0] v_uf;
+            tau_scanout_v u_scanout_v (
+                .reset(reset), .clk_sys(clk_sys), .clk_sdram(clk_sdram), .clk_vid(clk_vid),
+                .enable(view_en),
+                .lb_we(vlb_we), .lb_waddr(vlb_waddr), .lb_wdata(vlb_wdata),
+                .fill_done_line(fill_done_line), .fill_seen(fill_seen),
+                .underflow_cnt(v_uf),
+                .fill_req_tgl(v_fill_req_tgl), .fill_line_req(v_fill_line_req), .vblank_tgl(v_vblank_tgl),
+                .video_rgb(v_rgb), .video_de(v_de), .video_hs(v_hs), .video_vs(v_vs), .scan_vc(v_vc)
+            );
+            reg [1:0] sel_s = 2'b00;
+            always @(posedge clk_vid) sel_s <= {sel_s[0], view_active_w};
+            wire sel = sel_s[1];
+            assign fill_req_tgl  = sel ? v_fill_req_tgl  : u_fill_req_tgl;
+            assign fill_line_req = sel ? v_fill_line_req : u_fill_line_req;
+            assign vblank_tgl    = sel ? v_vblank_tgl    : u_vblank_tgl;
+            assign video_rgb     = sel ? v_rgb : u_rgb;
+            assign video_de      = sel ? v_de  : u_de;
+            assign video_hs      = sel ? v_hs  : u_hs;
+            assign video_vs      = sel ? v_vs  : u_vs;
+            assign scan_vc       = sel ? v_vc[8:0] : u_vc;
+            assign gfx_underflow = view_en ? v_uf : u_uf;
+        end else begin : g_noview
+            assign fill_req_tgl  = u_fill_req_tgl;
+            assign fill_line_req = u_fill_line_req;
+            assign vblank_tgl    = u_vblank_tgl;
+            assign video_rgb     = u_rgb;
+            assign video_de      = u_de;
+            assign video_hs      = u_hs;
+            assign video_vs      = u_vs;
+            assign scan_vc       = u_vc;
+            assign gfx_underflow = u_uf;
+        end
+    endgenerate
 
 endmodule
 

@@ -7,7 +7,7 @@ Plan: `../../docs/GALLERY_ANALYSIS_2026-11-07.md` (sections 8.2, 12.7, 12.11, 12
 | # | Slice | Status |
 |---|---|---|
 | M0.1 | `tau_scanout_v`: viewer timing and RGB888 scan-out, testbench, mutants | **done, simulated** (`make test-rtl-scanout-v`, 10 of 10 mutants killed) |
-| M0.2 | Talos fill engine for the viewer: plane base and stride registers, 1,200-word line (3 requests of 400), `lb_waddr` of 12 bits | next |
+| M0.2 | Talos fill engine for the viewer: plane base and stride, 1,200-word line (3 requests of 400), 12-bit line-buffer address, `tau_gfx` with both scan-outs | **done, simulated** (`make test-rtl-gfx-view`, mutants BUG_VIEW 1..5 killed; the 8 existing graphics regressions pass with the viewer off) |
 | M0.3 | PLL: `clk_vid` and its twin 12 MHz to 40 MHz (600/15, twin 6,250 ps), `core_top` video mux by mode, `video.json` with two scaler slots, UI re-timing to about 1,666 x 400 | after M0.2 |
 | M0.4 | Port structure: at most four scheduler ports, read and write muxes (model: Tau V `tau_tvc_pmux`) | after M0.3 |
 | M0.5 | Landing path: bridge-to-SDRAM dual-clock FIFO and burst master (model: Tau V `tau_tvc_subw`) | after M0.4 |
@@ -33,7 +33,13 @@ A line is 800 pixels of 3 bytes, memory order R, G, B, no padding: 2,400 bytes =
 - **Tests.** `sim/tb_tau_scanout_v.v`: a golden picture, a filler model (1,200 words per requested line), every active pixel of two enabled frames, black while disabled, 800 clocks x 720 lines, frame = 666,000 clocks, hs 40 clocks and 24 after the end of the active line, vs 4 lines with 7 hs pulses before and 10 after, the vblank toggle one clock before vs, a slow filler counted as late lines. Mutants BUG 1..10 (window, hs, vs, vblank, request lead, enable, line half, group word, byte order, late counter) all killed.
 - **Not yet checked:** timing in Quartus at 40 MHz; the interface to the real fill engine (M0.2); the late-line counter against the real SDRAM scheduler.
 
-## 5. Fill engine change (M0.2)
+## 5. Fill engine change (M0.2, done)
+
+Implemented behind `VIEW_ENABLE` (default 0, so every old testbench and the oracle diff see the same engine cycle for cycle). With it on: `view_en`, `view_base` (25-bit word address of plane line 0) and `view_stride` (16-bit words per plane line) are quasi-static CPU registers, latched in Talos at the next vblank edge (never mid-frame; informal CDC like `blt_src_base`); the line address is `base + line * stride` (a DSP multiply in two registered stages, the start waits three clocks for it); a line is three requests of 400 words (`vaddr` steps by 400, `vcont` marks a continuation, `fill_chunk` counts, `vline` and `vlb_par` hold the line number and buffer half for all three), written to the viewer's line buffer through `vlb_*` (12-bit address, {parity, word 0..1199}); `fill_done_line` is reported after the last chunk. `tau_gfx` instantiates `tau_scanout_v` beside `tau_scanout`; Talos's latched mode picks which one is served and shown (video outputs, fill toggles and counters are muxed, the select synchronised into `clk_vid`). Known limits: a mode change while a fill is in flight glitches that one line; the UI scan-out keeps running while the viewer is shown (a few ALMs wasted).
+
+Test `sim/tb_tau_gfx_view.v`: the real `tau_gfx` with `VIEW_ENABLE = 1` and an SDRAM model that holds a packed RGB888 plane at a base of 4096 words with a stride of 1,208 (not 1,200, so the stride is really used); the UI runs first, `view_en` is set, the outputs switch to the viewer at a vblank, one frame settles and one whole frame is checked pixel by pixel (576,000 pixels), the frame is 666,000 clocks, the late counter does not move; with a slow memory (3 wait clocks per word) it counts late lines. Mutants (Talos `BUG_VIEW`): 1 chunk step 399, 2 wrong line half, 3 word index not restarted, 4 stride ignored, 5 no wait for the multiplier: all killed.
+
+(The text below is the design as written before M0.2.)
 
 `tau_talos` fills from `line * 512` words, 400 words per request, into a 1,024-word line buffer. For the viewer: line address = plane base + line * stride, three requests of 400 words (or six of 200: Tau V's fetch uses 200), `lb_waddr` of 12 bits, a mode bit chosen by the scan-out in use. The existing contract tests (`test-rtl-gfx-fill`, the oracle diff) must keep passing with the mode bit low, and the viewer mode gets its own test against `tau_scanout_v`.
 

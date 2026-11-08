@@ -141,7 +141,12 @@ module tau_talos #(
     // Talos 2 T3b: the number of words a scanout fill reads per line. The picture is 400 pixels wide; the old engine read the whole 512-word stride (a fill every
     // scanline, about a fifth of its cycles wasted). 512 = the old behaviour (the differential test with the pre-split original runs with it), 400 = the picture only.
     // (tb_tau_gfx_fill.v drives 399 as a mutant.)
-    parameter FILL_WORDS = 400
+    parameter FILL_WORDS = 400,
+    // Tau Gallery M0.2 (docs/M0_DESIGN.md section 5): 1 adds the viewer fill, a packed RGB888 plane line of 1,200 words fetched as three requests of FILL_WORDS (400)
+    // words from view_base + line * view_stride, written to the viewer's line buffer (vlb_*). The mode, base and stride are latched at the next vblank edge, so a
+    // change never lands mid-frame. 0 (the default): every added input is ignored and the engine is cycle for cycle what it was.
+    parameter VIEW_ENABLE = 0,
+    parameter BUG_VIEW = 0       // mutation hook (sim/tb_tau_gfx_view.v): 1 chunk step 399, 2 wrong line half, 3 word index not restarted, 4 stride ignored, 5 no wait for the product
 ) (
     input  wire        reset,
     input  wire        clk_sys,     // CPU / FIFO write domain
@@ -292,7 +297,17 @@ module tau_talos #(
     output wire        gfx_idle,
     output wire [31:0] gfx_fence,
     output reg  [8:0]  gfx_free,
-    output reg  [15:0] gfx_ovf
+    output reg  [15:0] gfx_ovf,
+
+    // Tau Gallery viewer fill (VIEW_ENABLE). view_en / view_base (word address of plane line 0) / view_stride (words per plane line) are quasi-static CPU registers
+    // (informal CDC, the precedent of blt_src_base). vlb_* is the viewer line buffer's write port (clk_sdram): vlb_waddr = {line parity, word 0..1199}.
+    input  wire        view_en,
+    input  wire [24:0] view_base,
+    input  wire [15:0] view_stride,
+    output reg         vlb_we    = 1'b0,
+    output reg  [11:0] vlb_waddr = 12'd0,
+    output reg  [15:0] vlb_wdata = 16'd0,
+    output wire        view_active           // the latched mode (clk_sdram): the viewer is the picture, not the 400 x 360 UI
 );
 
     // ---- Geometry ----------------------------------------------------------
@@ -734,6 +749,30 @@ module tau_talos #(
     assign    dbuf_flip_pending = flip_pending_r;
     reg       fill_lb = 0;
 
+    // ---- Tau Gallery viewer fill (M0.2) ------------------------------------
+    reg        view_l = 1'b0;                       // latched at a vblank edge
+    reg [24:0] vbase_l = 25'd0;
+    reg [15:0] vstride_l = 16'd0;
+    reg [25:0] vo_p1 = 26'd0, vo = 26'd0;           // line * stride, two registered stages (a DSP block)
+    reg [1:0]  fill_age = 2'd0;                     // clocks since the line number changed: the product is valid at 3
+    reg [1:0]  fill_chunk = 2'd0;                   // 0..2: the third of the line being read or just read
+    reg        vcont = 1'b0;                        // set by A_FILL_END (which can last several clocks): the next request continues the same line
+    reg [10:0] vword = 11'd0;                       // word index in the line, 0..1199
+    reg [24:0] vaddr = 25'd0;                       // address of the next chunk
+    reg [9:0]  vline = 10'd0;                       // the line being filled, held for its three chunks
+    reg        vlb_par = 1'b0;
+    assign view_active = (VIEW_ENABLE != 0) && view_l;
+    wire [24:0] va_w = vcont ? vaddr : (vbase_l + vo[24:0]);
+    always @(posedge clk_sdram) begin
+        if (VIEW_ENABLE != 0) begin
+            if (reset) view_l <= 1'b0;
+            else if (vblank_edge) begin view_l <= view_en; vbase_l <= view_base; vstride_l <= view_stride; end
+            vo_p1 <= (BUG_VIEW == 4) ? (fill_line * 16'd1200) : (fill_line * vstride_l);
+            vo    <= vo_p1;
+            if (fill_req_edge) fill_age <= 2'd0; else if (fill_age != 2'd3) fill_age <= fill_age + 2'd1;
+        end
+    end
+
     // RECT/RUN state (a RUN is just a RECT of height 1 -- one code path)
     reg        rect_active = 0;
     reg [18:0] rect_addr;
@@ -1069,6 +1108,7 @@ module tau_talos #(
         p0_end_burst_req <= 1'b0;
         p0_wr_stream     <= 1'b0;
         lb_we            <= 1'b0;
+        vlb_we           <= 1'b0;
         fill_done_inc    <= 1'b0;
         pop_d            <= 1'b0;
         retire_inc       <= retire_now;
@@ -1141,8 +1181,15 @@ module tau_talos #(
             case (astate)
                 // ---------------------------------------------------- IDLE --
                 A_IDLE: begin
-                    if (fill_pending && can_sdram) begin
-                        p0_addr   <= dbuf_addr({fill_line, 9'd0}, dbuf_disp_buf);   // *512; H2 (B-340): buffer-1 offset if that's what's displayed
+                    if (fill_pending && can_sdram && !(view_active && fill_age != 2'd3 && BUG_VIEW != 5)) begin
+                        if (view_active) begin                                       // M0.2: plane line * stride, one third of the line per request
+                            p0_addr <= va_w;
+                            vcont   <= 1'b0;
+                            vaddr   <= va_w + ((BUG_VIEW == 1) ? 25'd399 : {16'd0, FILL_WORDS[8:0]});
+                            if (vcont) fill_chunk <= fill_chunk + 2'd1;
+                            else begin fill_chunk <= 2'd0; if (BUG_VIEW != 3) vword <= 11'd0; vline <= fill_line; vlb_par <= (BUG_VIEW == 2) ? ~fill_line[0] : fill_line[0]; end
+                        end else
+                            p0_addr   <= dbuf_addr({fill_line, 9'd0}, dbuf_disp_buf);   // *512; H2 (B-340): buffer-1 offset if that's what's displayed
                         p0_rd_req <= 1'b1;
                         fill_cnt  <= 0;
                         astate    <= A_FILL;
@@ -1452,9 +1499,16 @@ module tau_talos #(
                 // ------------------------------------------- scanout FILL --
                 A_FILL: begin
                     if (p0_data_available) begin
-                        lb_we    <= 1'b1;
-                        lb_waddr <= {fill_lb, fill_cnt[8:0]};
-                        lb_wdata <= p0_q;
+                        if (view_active) begin
+                            vlb_we    <= 1'b1;
+                            vlb_waddr <= {vlb_par, vword};
+                            vlb_wdata <= p0_q;
+                            vword     <= vword + 11'd1;
+                        end else begin
+                            lb_we    <= 1'b1;
+                            lb_waddr <= {fill_lb, fill_cnt[8:0]};
+                            lb_wdata <= p0_q;
+                        end
                         if (fill_cnt == FILL_WORDS - 1) begin
                             p0_end_burst_req <= 1'b1;
                             astate <= A_FILL_END;
@@ -1462,8 +1516,13 @@ module tau_talos #(
                     end
                 end
                 A_FILL_END: begin
-                    fill_pending <= 1'b0;
-                    if (fill_pending) begin fill_done_inc <= 1'b1; fill_done_line <= fill_line; fill_seen <= 1'b1; end
+                    if (view_active && fill_chunk != 2'd2) begin
+                        vcont <= 1'b1;                                                // M0.2: the next third of the same line; fill_pending stays set
+                    end else begin
+                        vcont        <= 1'b0;
+                        fill_pending <= 1'b0;
+                        if (fill_pending) begin fill_done_inc <= 1'b1; fill_done_line <= view_active ? vline : fill_line; fill_seen <= 1'b1; end
+                    end
                     if (p0_available) astate <= A_IDLE;
                 end
 
