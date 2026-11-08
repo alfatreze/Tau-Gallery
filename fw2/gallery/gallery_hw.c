@@ -89,6 +89,56 @@ void gal_land_test(gal_land_t *r, uint32_t len)
     if (r->cmd_ok && r->idle_ok) poison_and_check(r, len);
 }
 
+void gal_plane_verify(gal_verify_t *r, uint32_t pat)
+{
+    static uint8_t line[GAL_LINE_BYTES];
+    for (uint32_t i = 0; i < sizeof *r / 4u; i++) ((uint32_t *)r)[i] = 0;
+    for (uint32_t y = 0; y < GAL_H && r->timeouts < 8u; y++) {
+        gal_line(pat, y, line);
+        const uint32_t a = GAL_PLANE_BASE + y * GAL_LINE_WORDS16;
+        for (uint32_t k = 0; k < GAL_LINE_WORDS32; k++) {
+            uint32_t got = 0; const uint32_t exp = gal_pack32(line, k);
+            if (gfx_mb_read(a + 2u * k, &got)) { r->timeouts++; if (r->timeouts >= 8u) break; continue; }
+            if (got != exp) { if (!r->bad) { r->first_idx = y * GAL_LINE_WORDS32 + k; r->got = got; r->exp = exp; } r->bad++; }
+            r->words++;
+        }
+    }
+}
+
+void gal_land_map(gal_map_t *r)
+{
+    static uint32_t ref[GAL_MAP_BLOCKS][1024];
+    for (uint32_t i = 0; i < sizeof *r / 4u; i++) ((uint32_t *)r)[i] = 0;
+    for (uint32_t b = 0; b < GAL_MAP_BLOCKS; b++) {                       /* the reference: four normal reads, into core RAM, then copied out of the landing zone */
+        if (!slot_read_blocking(GAL_SLOT, b * 4096u, (uint32_t)(uintptr_t)_tag_start, 4096u, CLK_HZ)) { for (uint32_t b2 = 0; b2 < GAL_MAP_BLOCKS; b2++) r->match[b2] = -1; return; }
+        for (uint32_t i = 0; i < 1024u; i++) ref[b][i] = ((const volatile uint32_t *)_tag_start)[i];
+    }
+    for (uint32_t i = 0; i < GAL_MAP_BLOCKS * 1024u; i++) gfx_mb_write(GAL_LAND_BASE + 2u * i, 0xA5A5A5A5u);      /* poison the whole window */
+    while (!(REG_RD(R_LAND_STATUS) & 1u)) { }
+    REG_WR(R_LAND_BASE, GAL_LAND_BASE); REG_WR(R_LAND_CTRL, 1u);
+    r->cmd_ok = (uint32_t)slot_read_blocking(GAL_SLOT, 0u, 0x40000000u, GAL_MAP_BLOCKS * 4096u, CLK_HZ * 4u);
+    const uint32_t t1 = cycles();
+    while (!(REG_RD(R_LAND_STATUS) & 1u) && (uint32_t)(cycles() - t1) < CLK_HZ / 20u) { }
+    r->idle_ok = (REG_RD(R_LAND_STATUS) & 1u) ? 1u : 0u; r->words = REG_RD(R_LAND_WORDS); r->ovf = REG_RD(R_LAND_OVF);
+    static uint32_t got[1024];
+    for (uint32_t j = 0; j < GAL_MAP_BLOCKS; j++) {
+        uint32_t same[GAL_MAP_BLOCKS] = { 1, 1, 1, 1 }, poison = 1, zero = 1;
+        for (uint32_t i = 0; i < 1024u; i++) {
+            uint32_t w = 0; gfx_mb_read(GAL_LAND_BASE + j * 2048u + 2u * i, &w); got[i] = w;
+            for (uint32_t b = 0; b < GAL_MAP_BLOCKS; b++) if (w != ref[b][i]) same[b] = 0;
+            if (w != 0xA5A5A5A5u) poison = 0;
+            if (w) zero = 0;
+        }
+        r->match[j] = same[j] ? (int8_t)j : -1;
+        for (uint32_t b = 0; b < GAL_MAP_BLOCKS && r->match[j] < 0; b++) if (same[b]) r->match[j] = (int8_t)b;
+        if (r->match[j] < 0) r->match[j] = poison ? -2 : zero ? -3 : -1;
+        if (r->match[j] != (int8_t)j && !r->bad_word && !r->bad_block) {         /* the first block that is not its own file block: where and what */
+            r->bad_block = j + 1u;
+            for (uint32_t i = 0; i < 1024u; i++) if (got[i] != ref[j][i]) { r->bad_word = i; r->got = got[i]; r->exp = ref[j][i]; break; }
+        }
+    }
+}
+
 volatile uint32_t gal_irq_count[4];
 void irq_handler(uint32_t pend)                                          /* overrides the weak one of start.S: count each source, acknowledge what the CSR showed */
 {

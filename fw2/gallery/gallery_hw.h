@@ -28,6 +28,16 @@ typedef struct {
 } gal_land_t;
 void gal_land_test(gal_land_t *r, uint32_t len);
 
+/* Where does landed data go? One 16 KB read into the window, then each 4 KB block of the window is matched against normal reads of the four 4 KB blocks of the file: match[j] = the file block that landed block j equals,
+ * or -1 equals none of them, -2 never written (still the poison), -3 all zero. bad_block / bad_word / got / exp describe the first word of the first block that is not its own file block. */
+#define GAL_MAP_BLOCKS 4u
+typedef struct { uint32_t cmd_ok, idle_ok, words, ovf, bad_block, bad_word, got, exp; int8_t match[GAL_MAP_BLOCKS]; } gal_map_t;
+void gal_land_map(gal_map_t *r);
+
+/* The plane read back through the mailbox and compared with the pattern: the SDRAM holds what was written (words = 32-bit mailbox words compared, bad = differing, first_* describe the first). */
+typedef struct { uint32_t words, bad, first_idx, got, exp, timeouts; } gal_verify_t;
+void gal_plane_verify(gal_verify_t *r, uint32_t pat);
+
 typedef struct { uint32_t vsync, vsync_win_ms, cmd, cmd_n, sw, sw_n; } gal_irq_t;
 void gal_irq_test(gal_irq_t *r);                                         /* vsync interrupts over 1 s, one per data-slot command (16 of 4 KB), one per mode switch */
 extern volatile uint32_t gal_irq_count[4];

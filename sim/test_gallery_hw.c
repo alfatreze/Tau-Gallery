@@ -1,7 +1,7 @@
 /* Host test of fw2/gallery/gallery_hw.c against a model of the Tau Gallery hardware: the SDRAM mailbox and plane, the mode sequencer, the landing path, the interrupt block and the data-slot reads.
  * The model is what docs/M0_DESIGN.md says the RTL does (tests of the RTL itself: make test-rtl-view-soc, -land, -irq-soc). What this checks is the firmware: that the plane lands in the frozen format,
  * that the switch, landing and interrupt tests measure and judge what they claim to, and (with a broken model: -DMUT=n) that a wrong landing path, a missing interrupt or a failed read is NOT reported as good.
- * Prints "GALLERY HW ok n" per check; exit 1 on any failure. Mutants: 1 landing swaps bytes, 2 landing writes nothing, 3 landing drops the last word, 4 interrupts never fire, 5 mode switch never completes, 6 reads fail. */
+ * Prints "GALLERY HW ok n" per check; exit 1 on any failure. Mutants: 1 landing swaps bytes, 2 landing writes nothing, 3 landing drops the last word, 4 interrupts never fire, 5 mode switch never completes, 6 reads fail, 7 landed blocks after the first repeat block 0, 8 the plane is written at 5/6/5 bits. */
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
@@ -55,7 +55,7 @@ static void wr(uint32_t a, uint32_t v)
 #include "../fw2/gfx/gfx.h"
 #include "../fw2/stream/slot.h"
 /* the two mailbox calls, the data-slot read and the interrupt controls, modelled */
-int gfx_mb_write(uint32_t a, uint32_t d) { if (a + 1u >= HW_N) return -1; mem[a] = (uint16_t)d; mem[a + 1u] = (uint16_t)(d >> 16); return 0; }
+int gfx_mb_write(uint32_t a, uint32_t d) { if (a + 1u >= HW_N) return -1; if (MUT == 8 && a >= 0x200000u && a < 0x300000u) d &= 0xF8FCF8FFu; mem[a] = (uint16_t)d; mem[a + 1u] = (uint16_t)(d >> 16); return 0; }
 int gfx_mb_read(uint32_t a, uint32_t *o) { if (a + 1u >= HW_N) return -1; *o = (uint32_t)mem[a] | (uint32_t)mem[a + 1u] << 16; return 0; }
 uint32_t _tag_start[1024];
 static uint8_t fbyte(uint32_t i) { return (uint8_t)(i * 7u + (i >> 8) * 13u + 5u); }       /* the file in slot 6 */
@@ -68,7 +68,7 @@ int slot_read_blocking(uint32_t slot, uint32_t off, uint32_t dst, uint32_t len, 
         const uint32_t words = len / 4u - (MUT == 3 ? 1u : 0u);
         if (MUT != 2) for (uint32_t i = 0; i < words * 4u; i++) {
             const uint32_t pos = ((dst & 0x0FFFFFFFu) + i), h = land_base + pos / 2u, b = pos & 1u;
-            const uint8_t v = fbyte(off + i);
+            const uint8_t v = fbyte(off + (MUT == 7 && pos >= 4096u ? (i & 4095u) : i));      /* MUT 7: every block after the first holds block 0 */
             if (MUT == 1) { const uint32_t sw = pos ^ 1u; mem[land_base + sw / 2u] = (uint16_t)((mem[land_base + sw / 2u] & ~(0xFFu << (8u * (sw & 1u)))) | (uint32_t)v << (8u * (sw & 1u))); (void)h; (void)b; }
             else mem[h] = (uint16_t)((mem[h] & ~(0xFFu << (8u * b))) | (uint32_t)v << (8u * b));
         }
@@ -97,7 +97,7 @@ int main(void)
             uint8_t px[3]; gal_pixel(pat, x, y, px);
             for (uint32_t c = 0; c < 3; c++) { const uint32_t b = y * 2400u + 3u * x + c; const uint8_t got = (uint8_t)(mem[GAL_PLANE_BASE + b / 2u] >> (8u * (b & 1u))); if (got != px[c]) wrong++; }
         }
-        chk(1 + (int)pat, bad == 0u && wrong == 0u);
+        chk(1 + (int)pat, MUT == 8 ? (wrong > 0u) : (bad == 0u && wrong == 0u));          /* MUT 8: the 5/6/5 writes must show as wrong pixels */
     }
     chk(5, prog_calls == 4u * 24u);                                        /* every 30 lines of 720 */
     chk(6, mem[GAL_PLANE_BASE + 864000u] == 0xEEEEu && mem[GAL_PLANE_BASE - 1u] == 0xEEEEu);   /* nothing outside the plane */
@@ -119,8 +119,19 @@ int main(void)
         bad_all += r.bad;
         if (MUT == 0) { chk(10 + (int)k, good && gal_kbps(r.len, r.cmd_cyc) > 700u && gal_kbps(r.len, r.cmd_cyc) < 900u); }
     }
-    chk(14, (MUT == 1 || MUT == 2 || MUT == 3 || MUT == 6) ? !ok_all : ok_all);   /* a broken landing path or a failed read is caught by a field the page judges on; the others leave it alone */
+    chk(14, (MUT == 1 || MUT == 2 || MUT == 3 || MUT == 6 || MUT == 7) ? !ok_all : ok_all);   /* a broken landing path or a failed read is caught by a field the page judges on; the others leave it alone */
     (void)bad_all;
+    /* 4b: where landed data goes (the map) and the plane read back */
+    gal_map_t mp; gal_land_map(&mp);
+    if (MUT == 0) chk(16, mp.cmd_ok && mp.idle_ok && mp.words == 4096u && mp.ovf == 0u && mp.bad_block == 0u && mp.match[0] == 0 && mp.match[1] == 1 && mp.match[2] == 2 && mp.match[3] == 3);
+    else if (MUT == 7) chk(16, mp.match[0] == 0 && mp.match[1] == 0 && mp.match[2] == 0 && mp.match[3] == 0 && mp.bad_block == 2u && mp.bad_word == 0u);        /* duplicated block shows as its source, first bad is block 1 */
+    else if (MUT == 2) chk(16, mp.match[0] == -2 && mp.match[3] == -2 && mp.bad_block == 1u && mp.got == 0xA5A5A5A5u);                                         /* never written: poison */
+    else if (MUT == 3) chk(16, mp.match[3] == -1 && mp.bad_block == 4u && mp.bad_word == 1023u && mp.got == 0xA5A5A5A5u);                                       /* the last word is missing */
+    else if (MUT == 1) chk(16, mp.match[0] == -1 && mp.bad_block == 1u);
+    else if (MUT == 6) chk(16, !mp.cmd_ok);
+    else chk(16, mp.cmd_ok && mp.bad_block == 0u);
+    { gal_fill(GP_RAMP, 0); gal_verify_t vr; gal_plane_verify(&vr, GP_RAMP);
+      if (MUT == 8) chk(17, vr.bad > 0u && vr.words == 432000u); else chk(17, vr.bad == 0u && vr.words == 432000u && vr.timeouts == 0u); }
     /* 5: interrupts */
     read_fail_after = 0xFFFFFFFFu; reads = 0;
     gal_irq_t ir; gal_irq_test(&ir);

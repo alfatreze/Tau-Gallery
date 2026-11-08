@@ -1015,7 +1015,7 @@ test-rtl-irq-soc: $(RTL_BUILD_DIR)/tau_soc_sim.v
 	  if grep -q "^PASSED" $(RTL_BUILD_DIR)/irq_mut_$$n.log; then echo "MUTANT SURVIVED: $$n"; exit 1; else echo "mutant killed: $$n"; fi; \
 	done
 
-# Tau Gallery M0 test page (fw2/gallery): host tests of the patterns and of the hardware tests against a model (with six broken models that must be caught), and the firmware build.
+# Tau Gallery M0 test page (fw2/gallery): host tests of the patterns and of the hardware tests against a model (with eight broken models that must be caught), and the firmware build.
 .PHONY: test-gallery gallery-firmware
 test-gallery:
 	mkdir -p work
@@ -1023,7 +1023,7 @@ test-gallery:
 	work/gallery_pattern_test | /usr/bin/grep -c FAIL | /usr/bin/grep -qx 0
 	cc -O1 -w -o work/gallery_hw_test sim/test_gallery_hw.c
 	work/gallery_hw_test | /usr/bin/grep -c FAIL | /usr/bin/grep -qx 0
-	for m in 1 2 3 4 5 6; do cc -O1 -w -DMUT=$$m -o work/gallery_hw_mut sim/test_gallery_hw.c && work/gallery_hw_mut | /usr/bin/grep -c FAIL | /usr/bin/grep -qx 0 || { echo "gallery model mutant $$m not caught"; exit 1; }; done
-	@echo "test-gallery: PASSED (patterns, hardware tests, 6 broken models caught)"
+	for m in 1 2 3 4 5 6 7 8; do cc -O1 -w -DMUT=$$m -o work/gallery_hw_mut sim/test_gallery_hw.c && work/gallery_hw_mut | /usr/bin/grep -c FAIL | /usr/bin/grep -qx 0 || { echo "gallery model mutant $$m not caught"; exit 1; }; done
+	@echo "test-gallery: PASSED (patterns, hardware tests, 8 broken models caught)"
 gallery-firmware:
 	bash fw2/build_gallery.sh
