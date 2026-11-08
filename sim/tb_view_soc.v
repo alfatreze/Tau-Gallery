@@ -23,7 +23,8 @@ module tb_view_soc;
     reg  [8:0]  free_s = 9'd123;
     reg  [15:0] ovf = 16'd45, uf = 16'd7;
     reg vcur = 0, vpend = 0; reg [15:0] vsw = 16'd5; wire vreq; wire [24:0] vbase; wire [15:0] vstride;
-    tau_soc #(.VIEW_ENABLE(ENABLE)) u_soc (
+    reg lidle = 1; reg [31:0] lwords = 32'd1234, lovf = 32'd0; wire [24:0] lbase; wire lclear; integer clear_pulses = 0, clear_hi = 0;
+    tau_soc #(.VIEW_ENABLE(ENABLE), .LAND_ENABLE(ENABLE)) u_soc (
         .clk(clk), .rst(rst), .clk_74a(clk74),
         .ld_wr(ld_wr), .ld_addr(ld_addr), .ld_data(ld_data),
         .cont_key(32'd0), .in_menu(1'b0),
@@ -32,7 +33,7 @@ module tb_view_soc;
         .tgt_busy(1'b0), .tgt_done(1'b0), .tgt_seq(8'd0), .tgt_err(3'd0),
         .fb_cmd_full(full), .fb_gfx_idle(idle), .fb_gfx_fence(SWAP ? {16'd0, uf} : fence), .fb_gfx_free(free_s), .fb_gfx_ovf(ovf),
         .fb_gfx_underflow(SWAP ? fence[15:0] : uf), .dt_q(32'd0),
-        .fb_view_req(vreq), .fb_view_base(vbase), .fb_view_stride(vstride), .fb_vid_cur(SWAP ? vpend : vcur), .fb_vid_pend(SWAP ? vcur : vpend), .fb_vid_switches(vsw),
+        .fb_view_req(vreq), .fb_view_base(vbase), .fb_view_stride(vstride), .fb_vid_cur(SWAP ? vpend : vcur), .fb_vid_pend(SWAP ? vcur : vpend), .fb_vid_switches(vsw), .fb_land_base(lbase), .fb_land_clear(lclear), .fb_land_idle(lidle), .fb_land_words(lwords), .fb_land_ovf(lovf),
         .set_idx(set_idx), .set_wr(set_wr), .set_wdata(set_wdata), .set_rdata(32'd0),
         .sdram_busy(1'b0), .sdram_done(1'b0), .sdram_rdata(32'd0),
         .sdram_wb_accept(1'b0), .sdram_wb_done(1'b0), .sdram_wb_rdata(32'd0),
@@ -40,7 +41,7 @@ module tb_view_soc;
         .psram_done(1'b0), .psram_rdata(32'd0), .psram_guard(1'b0),
         .audio_l(audio_l), .audio_r(audio_r)
     );
-    reg [8*80-1:0] line; reg [31:0] last4 = 0; reg done = 0, ready = 0, ready2 = 0;
+    reg [8*80-1:0] line; reg [31:0] last4 = 0; reg done = 0, ready = 0, ready2 = 0, ready3 = 0;
     always @(posedge clk) if (u_soc.con_wr) begin
         last4 = {last4[23:0], u_soc.con_char};
         if (last4 == "FAIL") errors = errors + 1;
@@ -48,10 +49,13 @@ module tb_view_soc;
             $display("fw: %0s", line);
             if (line[8*5-1:0] == "READY") ready = 1;
             if (line[8*6-1:0] == "READY2") ready2 = 1;
+            if (line[8*6-1:0] == "READY3") ready3 = 1;
             if (line[8*4-1:0] == "DONE") done = 1;
             line = 0;
         end else line = {line[8*79-1:0], u_soc.con_char};
     end
+    reg clear_q = 0;
+    always @(posedge clk) begin if (lclear) clear_hi = clear_hi + 1; if (lclear && !clear_q) clear_pulses = clear_pulses + 1; clear_q <= lclear; end
     initial begin
         if (!$value$plusargs("ROM=%s", romfile)) romfile = "build/rtl/fw_view.bin";
         fd = $fopen(romfile, "rb");
@@ -68,7 +72,11 @@ module tb_view_soc;
         end else if (vreq !== 1'b0 || vbase !== 25'd0 || vstride !== 16'd0) begin errors = errors + 1; $display("FAIL: outputs not constant without the viewer"); end
         @(negedge clk); vcur <= 1; vpend <= 1; vsw <= 16'd6;
         if (ENABLE != 0) begin wait (ready2); @(negedge clk); vcur <= 0; vpend <= 1; end
+        if (ENABLE != 0) begin wait (ready3); @(negedge clk); lovf <= 32'd5; lidle <= 0; end
         wait (done); repeat (50) @(posedge clk);
+        if (ENABLE != 0 && (clear_pulses != 1 || clear_hi != 1)) begin errors = errors + 1; $display("FAIL: LAND_CTRL gave %0d pulses of %0d clocks, want one of one", clear_pulses, clear_hi); end
+        if (ENABLE == 0 && clear_pulses != 0) begin errors = errors + 1; $display("FAIL: a clear pulse without the landing path"); end
+        if (ENABLE != 0 && lbase !== 25'h1FFFFFF) begin errors = errors + 1; $display("FAIL: landing base output %h", lbase); end
         if (ENABLE != 0 && vreq !== 1'b0) begin errors = errors + 1; $display("FAIL: the request did not clear"); end
         if (errors == 0) $display("PASSED: tb_view_soc"); else $display("FAILED: %0d errors", errors);
         $finish;

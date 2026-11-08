@@ -8,6 +8,11 @@
 #define R_VIEW_BASE   0x800001F0u
 #define R_VIEW_STRIDE 0x800001F4u
 #define R_VIEW_CAPS   0x800001F8u
+#define R_LAND_BASE   0x80000200u
+#define R_LAND_CTRL   0x80000204u
+#define R_LAND_STATUS 0x80000208u
+#define R_LAND_WORDS  0x8000020Cu
+#define R_LAND_OVF    0x80000210u
 static void putc_(char c) { REG(CONSOLE) = (uint32_t)(uint8_t)c; }
 static void puts_(const char *s) { while (*s) putc_(*s++); }
 static void num_(uint32_t v) { char t[12]; int n = 0; do { t[n++] = (char)('0' + v % 10u); v /= 10u; } while (v); while (n) putc_(t[--n]); }
@@ -21,6 +26,8 @@ int main(void)
     puts_("READY\n");
     for (volatile uint32_t i = 0; i < 4000u; i++) { }
     chk(3, REG(R_VID_MODE) == 0u);
+    REG(R_LAND_BASE) = 0x123456u; REG(R_LAND_CTRL) = 1u;
+    chk(10, REG(R_LAND_BASE) == 0u && REG(R_LAND_STATUS) == 0u && REG(R_LAND_WORDS) == 0u && REG(R_LAND_OVF) == 0u);
 #else
     chk(1, REG(R_VIEW_CAPS) == 0x80000003u);                            /* present, viewer, sequencer */
     chk(2, REG(R_VID_MODE) == (5u << 16));                              /* five switches done, nothing requested, UI on the bus */
@@ -38,6 +45,15 @@ int main(void)
     chk(7, REG(R_VIEW_BASE) == 0x01FFFFFFu);                            /* 25 bits */
     REG(R_VID_MODE) = 0u;
     chk(8, (REG(R_VID_MODE) & 4u) == 0u);                               /* the request is gone */
+    /* the landing path registers (the bench drives idle = 1, 1234 words, 0 dropped, then 5 dropped and not idle) */
+    chk(10, REG(R_LAND_BASE) == 0u && REG(R_LAND_STATUS) == 0x80000001u && REG(R_LAND_WORDS) == 1234u && REG(R_LAND_OVF) == 0u);
+    REG(R_LAND_BASE) = 0xFFFFFFFFu;
+    chk(11, REG(R_LAND_BASE) == 0x01FFFFFFu);                            /* 25 bits */
+    REG(R_LAND_CTRL) = 1u;                                               /* the bench counts the pulse: exactly one clock */
+    REG(R_LAND_CTRL) = 0u;                                               /* writing 0 does nothing */
+    puts_("READY3\n");
+    for (volatile uint32_t i = 0; i < 2000u; i++) { }
+    chk(12, REG(R_LAND_STATUS) == 0x80000002u && REG(R_LAND_OVF) == 5u);
 #endif
     puts_("VIEW DONE\n");
     for (;;) { }

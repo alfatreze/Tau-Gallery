@@ -842,6 +842,8 @@ rtl-lint:
 	$(VERILATOR) $(VERILATOR_LINT_FLAGS) -GVIEW_ENABLE=1 --top-module tau_gfx src/fpga/core/tau_gfx.sv src/fpga/core/tau_talos.sv src/fpga/core/tau_scanout.sv src/fpga/core/tau_scanout_v.sv src/fpga/core/tau_vidmode.sv src/fpga/core/tau_cdc_gray_ctr.sv src/fpga/core/tau_cdc_gray_bus.sv src/fpga/core/font_rom.v src/fpga/core/font_ram.v
 	$(VERILATOR) $(VERILATOR_LINT_FLAGS) --top-module tau_scanout_v -Isrc/fpga/core src/fpga/core/tau_scanout_v.sv src/fpga/core/tau_cdc_gray_bus.sv src/fpga/core/tau_cdc_gray_ctr.sv
 	$(VERILATOR) $(VERILATOR_LINT_FLAGS) --top-module tau_vidmode src/fpga/core/tau_vidmode.sv
+	$(VERILATOR) $(VERILATOR_LINT_FLAGS) --top-module tau_sdram_p2mux src/fpga/core/tau_sdram_p2mux.sv
+	$(VERILATOR) $(VERILATOR_LINT_FLAGS) --top-module tau_land -Isrc/fpga/core src/fpga/core/tau_land.sv src/fpga/core/tau_cdc_gray_bus.sv src/fpga/core/tau_cdc_gray_ctr.sv
 	$(VERILATOR) $(VERILATOR_LINT_FLAGS) --top-module tgt_cmd src/fpga/core/tgt_cmd.v
 	$(VERILATOR) $(VERILATOR_LINT_FLAGS) --top-module pcm_fifo src/fpga/core/pcm_fifo.v
 	$(VERILATOR) $(VERILATOR_LINT_FLAGS) --top-module tau_flac_lpc src/fpga/core/tau_flac_lpc.sv
