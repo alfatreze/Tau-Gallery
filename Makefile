@@ -962,3 +962,53 @@ test-rtl-view-soc: $(RTL_BUILD_DIR)/tau_soc_sim.v
 	  if $(VVP) $(RTL_BUILD_DIR)/tb_view_soc_mut.vvp +ROM=$(RTL_BUILD_DIR)/fw_view.bin | grep -q "^FAIL\|VIEW FAIL"; then echo "mutant killed: cur and pend swapped"; else echo "MUTANT SURVIVED: swapped inputs"; exit 1; fi
 	@set -e; $(IVERILOG) -g2012 -Isrc/fpga/core -Ptb_view_soc.ENABLE=0 -o $(RTL_BUILD_DIR)/tb_view_soc_off.vvp $(VIEW_SOC_SRC); \
 	  $(VVP) $(RTL_BUILD_DIR)/tb_view_soc_off.vvp +ROM=$(RTL_BUILD_DIR)/fw_view_off.bin | tee $(RTL_BUILD_DIR)/view_soc_off.log | tail -6; grep -q "^PASSED" $(RTL_BUILD_DIR)/view_soc_off.log
+
+# Tau Gallery M0.4: the write mux that lets the landing path share the CPU scheduler port (tau_sdram_p2mux) against a model of a scheduler port (sim/sp_model.v): random CPU reads and
+# writes with random byte enables and random landing bursts, a busy SDRAM now and then, every read beat and every write checked, memory compared at the end. Mutants 1..7 must FAIL.
+.PHONY: test-rtl-p2mux
+P2MUX_SRC = sim/tb_tau_p2mux.v sim/sp_model.v src/fpga/core/tau_sdram_p2mux.sv
+test-rtl-p2mux: | $(RTL_BUILD_DIR)
+	@set -e; \
+	$(IVERILOG) -g2012 -o $(RTL_BUILD_DIR)/tb_tau_p2mux.vvp $(P2MUX_SRC); \
+	$(VVP) $(RTL_BUILD_DIR)/tb_tau_p2mux.vvp | tee $(RTL_BUILD_DIR)/tb_tau_p2mux.log | grep -E "PASS|FAIL"; grep -qE "^ *PASS" $(RTL_BUILD_DIR)/tb_tau_p2mux.log; \
+	for b in 1 2 3 4 5 6 7; do \
+	  $(IVERILOG) -g2012 -Ptb_tau_p2mux.BUG=$$b -o $(RTL_BUILD_DIR)/tb_tau_p2mux_m$$b.vvp $(P2MUX_SRC); \
+	  if $(VVP) $(RTL_BUILD_DIR)/tb_tau_p2mux_m$$b.vvp | grep -qE "^ *FAILED"; then echo "mutant $$b killed"; else echo "MUTANT $$b SURVIVED"; exit 1; fi; \
+	done
+
+# Tau Gallery M0.5: the bridge-to-SDRAM landing path (tau_land) with the CPU-port mux and a scheduler-port model: big-endian bridge words into little-endian SDRAM halfwords at base + 2 * offset,
+# bursts with gaps and new offsets, stray words outside the window ignored, a CPU in the same SDRAM, idle meaning "landed", the word count and clear; a nearly stalled SDRAM must overflow the FIFO
+# and the drop count must be exact (SLOW = 1). Mutants 1..11 must FAIL (7 and 11 are checked with SLOW = 1).
+.PHONY: test-rtl-land
+LAND_SRC = sim/tb_tau_land.v sim/sp_model.v src/fpga/core/tau_land.sv src/fpga/core/tau_sdram_p2mux.sv src/fpga/core/tau_cdc_gray_ctr.sv src/fpga/core/tau_cdc_gray_bus.sv
+test-rtl-land: | $(RTL_BUILD_DIR)
+	@set -e; \
+	$(IVERILOG) -g2012 -Isrc/fpga/core -o $(RTL_BUILD_DIR)/tb_tau_land.vvp $(LAND_SRC); \
+	$(IVERILOG) -g2012 -Isrc/fpga/core -Ptb_tau_land.SLOW=1 -o $(RTL_BUILD_DIR)/tb_tau_land_slow.vvp $(LAND_SRC); \
+	$(VVP) $(RTL_BUILD_DIR)/tb_tau_land.vvp | tee $(RTL_BUILD_DIR)/tb_tau_land.log | grep -E "PASS|FAIL"; grep -qE "^ *PASS" $(RTL_BUILD_DIR)/tb_tau_land.log; \
+	$(VVP) $(RTL_BUILD_DIR)/tb_tau_land_slow.vvp | tee $(RTL_BUILD_DIR)/tb_tau_land_slow.log | grep -E "PASS|FAIL"; grep -qE "^ *PASS" $(RTL_BUILD_DIR)/tb_tau_land_slow.log; \
+	for b in 1 2 3 4 5 6 7 8 9 10 11; do \
+	  s=0; if [ $$b = 7 ] || [ $$b = 11 ]; then s=1; fi; \
+	  $(IVERILOG) -g2012 -Isrc/fpga/core -Ptb_tau_land.BUG=$$b -Ptb_tau_land.SLOW=$$s -o $(RTL_BUILD_DIR)/tb_tau_land_m$$b.vvp $(LAND_SRC); \
+	  if $(VVP) $(RTL_BUILD_DIR)/tb_tau_land_m$$b.vvp | grep -qE "^ *(FAILED)"; then echo "mutant $$b killed"; else echo "MUTANT $$b SURVIVED"; exit 1; fi; \
+	done
+
+# Tau Gallery M0.6: the interrupt block (tau_soc IRQ_ENABLE, R_IRQ_PEND 0x214) and the external-interrupt path of the production start-up code on the real CPU: polling, three interrupts during
+# a computation that keeps every register live (the checksum must be unchanged), a masked source, an unmasked source. Mutants of start.S (sim/irq_start_mutants.py) must FAIL.
+.PHONY: test-rtl-irq-soc
+IRQ_SOC_SRC = $(subst sim/tb_halcyon_soc.v,sim/tb_irq_soc.v,$(HALCYON_SOC_SRC))
+IRQ_FW_FLAGS = -march=rv32im_zicsr -mabi=ilp32 -mno-relax -O1 -ffreestanding -nostdlib -nostartfiles -Wl,--no-warn-rwx-segments -Wl,--defsym=_stack_size=512 -T sim/fw_ifetch/link.ld
+test-rtl-irq-soc: $(RTL_BUILD_DIR)/tau_soc_sim.v
+	$(RVGCC) $(IRQ_FW_FLAGS) fw2/platform/start.S sim/fw_irq/mix.S sim/fw_irq/main.c -o $(RTL_BUILD_DIR)/fw_irq.elf
+	$(RVOBJ) -O binary $(RTL_BUILD_DIR)/fw_irq.elf $(RTL_BUILD_DIR)/fw_irq.bin
+	@set -e; $(IVERILOG) -g2012 -Isrc/fpga/core -o $(RTL_BUILD_DIR)/tb_irq_soc.vvp $(IRQ_SOC_SRC); \
+	  $(VVP) $(RTL_BUILD_DIR)/tb_irq_soc.vvp +ROM=$(RTL_BUILD_DIR)/fw_irq.bin | tee $(RTL_BUILD_DIR)/irq_soc.log | tail -16; grep -q "^PASSED" $(RTL_BUILD_DIR)/irq_soc.log
+	@set -e; names=$$($(PYTHON) sim/irq_start_mutants.py fw2/platform/start.S $(RTL_BUILD_DIR)/irq_mut); \
+	for n in $$names; do \
+	  $(RVGCC) $(IRQ_FW_FLAGS) $(RTL_BUILD_DIR)/irq_mut/start_$$n.S sim/fw_irq/mix.S sim/fw_irq/main.c -o $(RTL_BUILD_DIR)/fw_irq_$$n.elf; $(RVOBJ) -O binary $(RTL_BUILD_DIR)/fw_irq_$$n.elf $(RTL_BUILD_DIR)/fw_irq_$$n.bin; \
+	  ( $(VVP) $(RTL_BUILD_DIR)/tb_irq_soc.vvp +ROM=$(RTL_BUILD_DIR)/fw_irq_$$n.bin > $(RTL_BUILD_DIR)/irq_mut_$$n.log 2>&1 & ); \
+	done; \
+	for n in $$names; do \
+	  while ! grep -qE "^PASSED|^FAILED|^FAIL: timeout" $(RTL_BUILD_DIR)/irq_mut_$$n.log 2>/dev/null; do sleep 2; done; \
+	  if grep -q "^PASSED" $(RTL_BUILD_DIR)/irq_mut_$$n.log; then echo "MUTANT SURVIVED: $$n"; exit 1; else echo "mutant killed: $$n"; fi; \
+	done

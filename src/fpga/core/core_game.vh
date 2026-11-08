@@ -142,6 +142,10 @@ wire [1:0]  soc_fb_cmd_sx, soc_fb_cmd_sy;
 wire [1:0]  soc_fb_cmd_glyph_hi;   // B12 (B-454): BAR's lit-row count, high 2 bits
 wire        soc_fb_cmd_full;
 wire        soc_gfx_idle;   wire [31:0] soc_gfx_fence;   wire [8:0] soc_gfx_free;   wire [15:0] soc_gfx_ovf, soc_gfx_underflow;   // Talos 2 T3 status, tau_gfx -> tau_soc
+// Tau Gallery wires (M0.3 viewer, M0.5 landing path): declared before the tau_soc instance that uses them
+wire [24:0] soc_land_base;  wire soc_land_clear;  wire land_idle_w;  wire [31:0] land_words_w, land_ovf_w;   // Tau Gallery landing path (M0.5), tau_soc <-> tau_land
+wire        soc_view_req;   wire [24:0] soc_view_base;   wire [15:0] soc_view_stride;   // Tau Gallery viewer (M0.3), tau_soc -> tau_gfx
+wire        gfx_vid_cur, gfx_vid_pend;   wire [15:0] gfx_vid_switches;   // and tau_gfx -> tau_soc
 wire        soc_text_light, fb_text_light;   // theme/gamma: text weight table select, clk_sys -> clk_sdram
 // Phase F B1 (section 9): sticky blit addressing state, tau_soc -> tau_gfx.
 wire [24:0] soc_blt_src_base, soc_blt_dst_base;
@@ -362,6 +366,18 @@ wire [31:0] soc_sdram_wb_debug_adapter_rdata, soc_sdram_wb_debug_cpu_rdata;
 `else
 `define TAU_VIEW_EN 0
 `endif
+// Tau Gallery landing path (M0.5, tau_land.sv + tau_sdram_p2mux.sv: bridge words in the 0x4xxxxxxx window go to SDRAM through the CPU scheduler port) and interrupt block (M0.6: the pending
+// register 0x214 drives the CPU's external interrupts). Each is a macro of its own; they need the MMIO page registers 0x200-0x214 of tau_soc (LAND_ENABLE, IRQ_ENABLE).
+`ifdef TAU_LAND
+`define TAU_LAND_EN 1
+`else
+`define TAU_LAND_EN 0
+`endif
+`ifdef TAU_IRQ
+`define TAU_IRQ_EN 1
+`else
+`define TAU_IRQ_EN 0
+`endif
 `ifndef TAU_NO_WDOG
 `define TAU_WDOG_EN 1
 `else
@@ -442,9 +458,9 @@ assign soc_vblank_rd = 17'd0;
 `endif
 
 `ifdef TAU_PHASE2_WINDOW
-tau_soc #(.VIEW_ENABLE(`TAU_VIEW_EN), .PHASE2_WINDOW_ENABLE(1), .PSRAM_WINDOW_ENABLE(`TAU_PSRAM_WIN_EN), .PSRAM_IFETCH_ENABLE(`TAU_PSRAM_IFE_EN), .SDRAM_BUSY_ENABLE(`TAU_SDR_BUSY_EN), .BLIT_ENABLE(`TAU_BLIT_EN), .VBLANK_ENABLE(`TAU_VBLANK_EN), .SPEC_ENABLE(`TAU_SPEC_EN), .WAVE_ENABLE(`TAU_WAVE_EN), .STATS_ENABLE(`TAU_STATS_EN), .POLY_ENABLE(`TAU_POLY_EN), .DBUF_ENABLE(`TAU_DBUF_EN), .LPC_ENABLE(`TAU_LPC_EN), .CYMO_RESAMP_ENABLE(`TAU_CYMO_RESAMP_EN), .I2S_DIAG_ENABLE(`TAU_I2S_DIAG_EN), .AUDIO16_ENABLE(`TAU_AUDIO16_EN), .GAIN_ENABLE(`TAU_GAIN_EN), .PCM_RING_ENABLE(`TAU_PCM_RING_EN), .GAIN_BOOST(`TAU_GAIN_BOOST_EN), .HALCYON_ENABLE(`TAU_HALCYON_EN), .WIDE_EQ_ENABLE(`TAU_WIDE_EQ_EN), .FONT_RAM_ENABLE(`TAU_FONT_RAM_EN), .RTC_ENABLE(`TAU_RTC_EN), .SDA_ENABLE(`TAU_SDA_EN), .WDOG_ENABLE(`TAU_WDOG_EN)) u_soc (
+tau_soc #(.VIEW_ENABLE(`TAU_VIEW_EN), .LAND_ENABLE(`TAU_LAND_EN), .IRQ_ENABLE(`TAU_IRQ_EN), .PHASE2_WINDOW_ENABLE(1), .PSRAM_WINDOW_ENABLE(`TAU_PSRAM_WIN_EN), .PSRAM_IFETCH_ENABLE(`TAU_PSRAM_IFE_EN), .SDRAM_BUSY_ENABLE(`TAU_SDR_BUSY_EN), .BLIT_ENABLE(`TAU_BLIT_EN), .VBLANK_ENABLE(`TAU_VBLANK_EN), .SPEC_ENABLE(`TAU_SPEC_EN), .WAVE_ENABLE(`TAU_WAVE_EN), .STATS_ENABLE(`TAU_STATS_EN), .POLY_ENABLE(`TAU_POLY_EN), .DBUF_ENABLE(`TAU_DBUF_EN), .LPC_ENABLE(`TAU_LPC_EN), .CYMO_RESAMP_ENABLE(`TAU_CYMO_RESAMP_EN), .I2S_DIAG_ENABLE(`TAU_I2S_DIAG_EN), .AUDIO16_ENABLE(`TAU_AUDIO16_EN), .GAIN_ENABLE(`TAU_GAIN_EN), .PCM_RING_ENABLE(`TAU_PCM_RING_EN), .GAIN_BOOST(`TAU_GAIN_BOOST_EN), .HALCYON_ENABLE(`TAU_HALCYON_EN), .WIDE_EQ_ENABLE(`TAU_WIDE_EQ_EN), .FONT_RAM_ENABLE(`TAU_FONT_RAM_EN), .RTC_ENABLE(`TAU_RTC_EN), .SDA_ENABLE(`TAU_SDA_EN), .WDOG_ENABLE(`TAU_WDOG_EN)) u_soc (
 `else
-tau_soc #(.VIEW_ENABLE(`TAU_VIEW_EN), .SDRAM_BUSY_ENABLE(`TAU_SDR_BUSY_EN), .BLIT_ENABLE(`TAU_BLIT_EN), .VBLANK_ENABLE(`TAU_VBLANK_EN), .SPEC_ENABLE(`TAU_SPEC_EN), .WAVE_ENABLE(`TAU_WAVE_EN), .STATS_ENABLE(`TAU_STATS_EN), .POLY_ENABLE(`TAU_POLY_EN), .DBUF_ENABLE(`TAU_DBUF_EN), .LPC_ENABLE(`TAU_LPC_EN), .CYMO_RESAMP_ENABLE(`TAU_CYMO_RESAMP_EN), .I2S_DIAG_ENABLE(`TAU_I2S_DIAG_EN), .AUDIO16_ENABLE(`TAU_AUDIO16_EN), .GAIN_ENABLE(`TAU_GAIN_EN), .PCM_RING_ENABLE(`TAU_PCM_RING_EN), .GAIN_BOOST(`TAU_GAIN_BOOST_EN), .HALCYON_ENABLE(`TAU_HALCYON_EN), .WIDE_EQ_ENABLE(`TAU_WIDE_EQ_EN), .FONT_RAM_ENABLE(`TAU_FONT_RAM_EN), .RTC_ENABLE(`TAU_RTC_EN), .SDA_ENABLE(`TAU_SDA_EN), .WDOG_ENABLE(`TAU_WDOG_EN)) u_soc (
+tau_soc #(.VIEW_ENABLE(`TAU_VIEW_EN), .LAND_ENABLE(`TAU_LAND_EN), .IRQ_ENABLE(`TAU_IRQ_EN), .SDRAM_BUSY_ENABLE(`TAU_SDR_BUSY_EN), .BLIT_ENABLE(`TAU_BLIT_EN), .VBLANK_ENABLE(`TAU_VBLANK_EN), .SPEC_ENABLE(`TAU_SPEC_EN), .WAVE_ENABLE(`TAU_WAVE_EN), .STATS_ENABLE(`TAU_STATS_EN), .POLY_ENABLE(`TAU_POLY_EN), .DBUF_ENABLE(`TAU_DBUF_EN), .LPC_ENABLE(`TAU_LPC_EN), .CYMO_RESAMP_ENABLE(`TAU_CYMO_RESAMP_EN), .I2S_DIAG_ENABLE(`TAU_I2S_DIAG_EN), .AUDIO16_ENABLE(`TAU_AUDIO16_EN), .GAIN_ENABLE(`TAU_GAIN_EN), .PCM_RING_ENABLE(`TAU_PCM_RING_EN), .GAIN_BOOST(`TAU_GAIN_BOOST_EN), .HALCYON_ENABLE(`TAU_HALCYON_EN), .WIDE_EQ_ENABLE(`TAU_WIDE_EQ_EN), .FONT_RAM_ENABLE(`TAU_FONT_RAM_EN), .RTC_ENABLE(`TAU_RTC_EN), .SDA_ENABLE(`TAU_SDA_EN), .WDOG_ENABLE(`TAU_WDOG_EN)) u_soc (
 `endif
     .clk     (clk_sys),
     .rst     (cpu_reset),
@@ -513,6 +529,7 @@ tau_soc #(.VIEW_ENABLE(`TAU_VIEW_EN), .SDRAM_BUSY_ENABLE(`TAU_SDR_BUSY_EN), .BLI
     .fb_cmd_full  (soc_fb_cmd_full),
     .fb_gfx_idle(soc_gfx_idle), .fb_gfx_fence(soc_gfx_fence), .fb_gfx_free(soc_gfx_free), .fb_gfx_ovf(soc_gfx_ovf), .fb_gfx_underflow(soc_gfx_underflow),
     .fb_view_req(soc_view_req), .fb_view_base(soc_view_base), .fb_view_stride(soc_view_stride), .fb_vid_cur(gfx_vid_cur), .fb_vid_pend(gfx_vid_pend), .fb_vid_switches(gfx_vid_switches),
+    .fb_land_base(soc_land_base), .fb_land_clear(soc_land_clear), .fb_land_idle(land_idle_w), .fb_land_words(land_words_w), .fb_land_ovf(land_ovf_w),
 
     .dt_addr  (soc_dt_addr),
     .dt_wren  (soc_dt_wren),
@@ -784,6 +801,11 @@ wire [15:0] sa_dbg_pmiss, sa_phy_fault_count;
 wire [31:0] sa_refreshes;
 wire [95:0] sa_cnt_requests, sa_cnt_words, sa_cnt_busy;
 wire [47:0] sa_cnt_bad, sa_cnt_worst_wait, sa_cnt_urgent_over;
+wire        cb_req_valid, cb_req_ready, cb_req_we, cb_w_next, cb_r_valid, cb_r_last, cb_done;   // the CPU bridge's side of scheduler port 2
+wire [24:0] cb_req_addr;
+wire [9:0]  cb_req_len, cb_w_idx;
+wire [15:0] cb_w_data, cb_r_data;
+wire [1:0]  cb_w_be;
 tau_sdram_a_cpu u_sdram_cpu_bridge (
     .clk_sys(clk_sys), .rst_sys(cpu_reset),
     .sys_start(sdram_mux_start), .sys_wb_start(sdram_mux_wb_start), .sys_write(sdram_mux_write),
@@ -791,10 +813,33 @@ tau_sdram_a_cpu u_sdram_cpu_bridge (
     .sys_byte_en(sdram_mux_be), .sys_busy(soc_sdram_busy),
     .sys_done(soc_sdram_done), .sys_rdata(soc_sdram_rdata),
     .clk_sdram(clk_sdram), .rst_sdram(sa_rst_sdram),
-    .req_valid(sa_cpu_req_valid), .req_ready(sa_cpu_req_ready), .req_we(sa_cpu_req_we), .req_addr(sa_cpu_req_addr),
-    .req_len(sa_cpu_req_len), .w_next(sa_cpu_w_next), .w_idx(sa_cpu_w_idx), .w_data(sa_cpu_w_data), .w_be(sa_cpu_w_be),
-    .r_valid(sa_cpu_r_valid), .r_data(sa_cpu_r_data), .r_last(sa_cpu_r_last), .done(sa_cpu_done)
+    .req_valid(cb_req_valid), .req_ready(cb_req_ready), .req_we(cb_req_we), .req_addr(cb_req_addr),
+    .req_len(cb_req_len), .w_next(cb_w_next), .w_idx(cb_w_idx), .w_data(cb_w_data), .w_be(cb_w_be),
+    .r_valid(cb_r_valid), .r_data(cb_r_data), .r_last(cb_r_last), .done(cb_done)
 );
+`ifdef TAU_LAND
+// Tau Gallery M0.5: the landing path writes SDRAM through port 2 as the secondary client of tau_sdram_p2mux (the CPU bridge stays the primary one).
+wire        ld_valid, ld_ready, ld_we, ld_next, ld_done;  wire [24:0] ld_addr;  wire [9:0] ld_len, ld_idx;  wire [15:0] ld_wdata;
+tau_land u_land (
+    .clk_74a(clk_74a), .rst_74(~reset_n), .br_wr(bridge_wr), .br_addr(bridge_addr), .br_data(bridge_wr_data),
+    .clk_sys(clk_sys), .rst_sys(cpu_reset), .base(soc_land_base), .clear(soc_land_clear), .words(land_words_w), .ovf_count(land_ovf_w), .idle(land_idle_w),
+    .clk_mem(clk_sdram), .rst_mem(sa_rst_sdram), .a_valid(ld_valid), .a_ready(ld_ready), .a_we(ld_we), .a_addr(ld_addr), .a_len(ld_len),
+    .a_w_next(ld_next), .a_w_idx(ld_idx), .a_w_data(ld_wdata), .a_done(ld_done)
+);
+tau_sdram_p2mux u_p2mux (
+    .clk(clk_sdram), .rst(sa_rst_sdram),
+    .c_valid(cb_req_valid), .c_ready(cb_req_ready), .c_we(cb_req_we), .c_addr(cb_req_addr), .c_len(cb_req_len), .c_next(cb_w_next), .c_idx(cb_w_idx),
+    .c_wdata(cb_w_data), .c_be(cb_w_be), .c_r_valid(cb_r_valid), .c_r_data(cb_r_data), .c_r_last(cb_r_last), .c_done(cb_done),
+    .l_valid(ld_valid), .l_ready(ld_ready), .l_addr(ld_addr), .l_len(ld_len), .l_next(ld_next), .l_idx(ld_idx), .l_wdata(ld_wdata), .l_done(ld_done),
+    .s_valid(sa_cpu_req_valid), .s_ready(sa_cpu_req_ready), .s_we(sa_cpu_req_we), .s_addr(sa_cpu_req_addr), .s_len(sa_cpu_req_len),
+    .s_next(sa_cpu_w_next), .s_idx(sa_cpu_w_idx), .s_wdata(sa_cpu_w_data), .s_be(sa_cpu_w_be),
+    .s_r_valid(sa_cpu_r_valid), .s_r_data(sa_cpu_r_data), .s_r_last(sa_cpu_r_last), .s_done(sa_cpu_done)
+);
+`else
+assign sa_cpu_req_valid = cb_req_valid, sa_cpu_req_we = cb_req_we, sa_cpu_req_addr = cb_req_addr, sa_cpu_req_len = cb_req_len, sa_cpu_w_data = cb_w_data, sa_cpu_w_be = cb_w_be;
+assign cb_req_ready = sa_cpu_req_ready, cb_w_next = sa_cpu_w_next, cb_w_idx = sa_cpu_w_idx, cb_r_valid = sa_cpu_r_valid, cb_r_data = sa_cpu_r_data, cb_r_last = sa_cpu_r_last, cb_done = sa_cpu_done;
+assign land_idle_w = 1'b0, land_words_w = 32'd0, land_ovf_w = 32'd0;
+`endif
 // Per-port statistics of sched_v (requests, words, busy cycles, worst wait, urgent over the bound, bad requests; ports 0 scan-out, 1 engine, 2 CPU) read through a snapshot window in MMIO 0x1D4/0x1D8.
 `ifdef TAU_SDA_ON
 tau_sdr_stat_win u_sdr_stat_win (
@@ -916,8 +961,6 @@ wire sdram_probe_bar = vid_de_w && (sdram_probe_y < 9'd8) &&
 tau_cdc_sync1 #(.STAGES(3)) u_text_light_sync (.clk_dst(clk_sdram), .d_src(soc_text_light), .q_dst(fb_text_light));
 tau_cdc_sync1 #(.STAGES(3)) u_dbuf_cpu_buf_sync (.clk_dst(clk_sdram), .d_src(soc_dbuf_cpu_buf), .q_dst(fb_dbuf_cpu_buf));   // Helios H2 (B-340), same treatment as text_light
 
-wire        soc_view_req;   wire [24:0] soc_view_base;   wire [15:0] soc_view_stride;   // Tau Gallery viewer (M0.3), tau_soc -> tau_gfx
-wire        gfx_vid_cur, gfx_vid_pend;   wire [15:0] gfx_vid_switches;   // and tau_gfx -> tau_soc
 tau_gfx #(.BLIT_BLEND_ENABLE(`TAU_BLIT_BLEND_EN), .DBUF_ENABLE(`TAU_DBUF_EN), .FONT_RAM_ENABLE(`TAU_FONT_RAM_EN), .VIEW_ENABLE(`TAU_VIEW_EN)) u_fb (
     .reset    (~pll_locked),
     .clk_sys  (clk_sys),

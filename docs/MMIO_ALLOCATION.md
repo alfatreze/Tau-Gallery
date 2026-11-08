@@ -103,6 +103,12 @@ only 8 bits of offset (`mmio_reg`, 64 registers, 4-byte stride); offsets at
 | 0x1F0 | VIEW_BASE | R/W | `[24:0]` SDRAM word address of plane line 0 (packed RGB888, 1,200 words per line); latched in Talos at the next vblank edge. |
 | 0x1F4 | VIEW_STRIDE | R/W | `[15:0]` words per plane line (reset 1,200); latched with VIEW_BASE. |
 | 0x1F8 | VIEW_CAPS | R | `[31]` present, `[1]` viewer, `[0]` mode sequencer; 0 without `TAU_VIEW`. |
+| 0x200 | LAND_BASE | R/W | Tau Gallery landing path (`TAU_LAND`, `tau_land.sv`; the MMIO page is 1 KB since M0.5). `[24:0]` SDRAM halfword address of the first word of the window (bridge address `0x4xxxxxxx`). |
+| 0x204 | LAND_CTRL | W | bit 0: restart the word and dropped-word counts. |
+| 0x208 | LAND_STATUS | R | `[31]` present, `[1]` words were dropped (the FIFO was full), `[0]` idle (every accepted word is in SDRAM). |
+| 0x20C | LAND_WORDS | R | words accepted since the last clear. |
+| 0x210 | LAND_OVF | R | words dropped since the last clear. |
+| 0x214 | IRQ_PEND | R/W1C | Tau Gallery interrupts (`TAU_IRQ`): sticky pending bits, write 1 to clear. 0 data-slot command done, 1 vsync rising, 2 landing path idle (rising), 3 a video mode switch completed. The register is the CPU's external interrupt array (LiteX scheme: mask CSR 0xBC0, pending CSR 0xFC0, `mie.MEIE`, `mstatus.MIE`); reads 0 without the macro. |
 | 0x1DC-0x1FC | free | | B-287 widened the decode (0x100 upward is open); 0x00-0xFF is full. |
 
 `OP_CHAR` with the font memory: the glyph code is 8 bits, bit 7 is `R_FB_GO` bit 15 (`cmd_glyph_hi[0]`), bits 6:0 are bits 9:3 as before; glyph index 0..94 = U+0020..U+007E, 95..190 = U+00A0..U+00FF, any other code is the blank glyph 0. A command with bit 15 clear is exactly the old one.

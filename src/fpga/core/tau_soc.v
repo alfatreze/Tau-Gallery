@@ -118,6 +118,11 @@ module tau_soc #(
     // Tau Gallery viewer (docs/M0_DESIGN.md, M0.3): registers 0x1EC-0x1F8: VID_MODE (request the 400 x 360 UI or the 800 x 720 viewer, read back the mode on the bus, the pending flag
     // and the switch count), VIEW_BASE and VIEW_STRIDE (the plane in SDRAM), VIEW_CAPS. With 0 they read 0, writes are ignored and the outputs are constant.
     parameter VIEW_ENABLE = 0,
+    // Tau Gallery landing path (tau_land.sv, M0.5): registers 0x200-0x210 (base, clear, status, word count, overflow count). With 0 they read 0 and writes are ignored.
+    parameter LAND_ENABLE = 0,
+    // Tau Gallery interrupts (M0.6): the 32-bit pending register 0x214 (read; write 1 to clear a bit) drives the CPU's external interrupt inputs; the CPU's own mask CSR (0xBC0) enables
+    // them. Sources: bit 0 data-slot command done, bit 1 vsync rising, bit 2 landing path idle (rising), bit 3 a video mode switch completed. With 0 the inputs stay 0 as before.
+    parameter IRQ_ENABLE = 0,
     parameter BUG_FONT_NO_INC = 0,      // mutation hooks for sim/tb_font_soc.v (1 must make it fail): the index does not step after a data write / the completed-load counter never counts
     parameter BUG_FONT_NO_GEN = 0
 ) (
@@ -215,6 +220,12 @@ module tau_soc #(
     input  wire         fb_vid_cur,
     input  wire         fb_vid_pend,
     input  wire [15:0]  fb_vid_switches,
+    // Tau Gallery landing path (LAND_ENABLE): the SDRAM base of word offset 0 and a clear pulse out; idle, accepted-word count and dropped-word count in (clk_sys)
+    output wire [24:0]  fb_land_base,
+    output wire         fb_land_clear,
+    input  wire         fb_land_idle,
+    input  wire [31:0]  fb_land_words,
+    input  wire [31:0]  fb_land_ovf,
 
     // core_bridge_cmd's datatable: a dual-port BRAM whose OTHER port APF can
     // read and write over the bridge at 0xF8xx2xxx. That is what makes the
@@ -411,11 +422,12 @@ module tau_soc #(
         end
     endgenerate
 
+    wire [31:0] irq_ext;                   // Tau Gallery M0.6: the pending register below, declared here because the CPU instance uses it first
     VexRiscv cpu (
         .externalResetVector   (32'h00000000),
         .timerInterrupt        (wdog_irq),
         .softwareInterrupt     (1'b0),
-        .externalInterruptArray(32'b0),
+        .externalInterruptArray(irq_ext),
 
         .iBusWishbone_CYC      (iCYC),
         .iBusWishbone_STB      (iSTB),
@@ -1041,7 +1053,9 @@ module tau_soc #(
     // xm_reg is 8 bits: writes are gated below so a 0x1xx write can never alias into 0x0xx there) and xm_range (already
     // bounded to 0x88-0xAC, which cannot match with bit 8 set). Before this the decode ignored dADR[6] entirely, so every
     // register also answered at +0x100; nothing in the firmware used that.
-    wire [8:0] mmio_reg = {dADR[6:0], 2'b00};   // byte offset within the MMIO page
+    // Tau Gallery (M0.5): the page is now 256 word slots (1 KB): bit 9 of the offset is new, and the 0x1xx page was full. Offsets 0x000-0x1FF keep their meaning exactly; the new blocks take
+    // 0x200 upward. The compares below zero-extend; the one place that must know is the expansion window (xm_wr), gated below.
+    wire [9:0] mmio_reg = {dADR[7:0], 2'b00};   // byte offset within the MMIO page
 
     // Phase F section 9: sticky blit-engine state. Plain flops, no logic reads
     // them unless BLIT_ENABLE -- see the port declarations above and the reset
@@ -1105,7 +1119,7 @@ module tau_soc #(
 
     // Expansion window 0x88..0xAC (see docs/MMIO_ALLOCATION.md).
     assign xm_reg   = mmio_reg[7:0];
-    assign xm_wr    = d_req & d_is_mmio & dWE & ~mmio_reg[8];   // the expansion window is offsets 0x88-0xAC only
+    assign xm_wr    = d_req & d_is_mmio & dWE & ~mmio_reg[8] & ~mmio_reg[9];   // the expansion window is offsets 0x88-0xAC only
     assign xm_wdata = dDAT_MOSI;
     wire   xm_range = (mmio_reg >= 8'h88) && (mmio_reg <= 8'hAC);
 
@@ -1211,6 +1225,21 @@ module tau_soc #(
     localparam [8:0] R_STATS_CTL = 9'h1AC, R_STATS_IDX = 9'h1B0, R_STATS_DATA = 9'h1B4;
     localparam [8:0] R_RTC_ST = 9'h1C4, R_RTC_EPOCH = 9'h1C8, R_RTC_DATE = 9'h1CC, R_RTC_TIME = 9'h1D0;   // wall clock (read only)
     localparam [8:0] R_SDA_SEL = 9'h1D4, R_SDA_VAL = 9'h1D8;
+    localparam [9:0] R_LAND_BASE = 10'h200, R_LAND_CTRL = 10'h204, R_LAND_STATUS = 10'h208, R_LAND_WORDS = 10'h20C, R_LAND_OVF = 10'h210, R_IRQ_PEND = 10'h214;   // Tau Gallery (M0.5, M0.6)
+    reg  [24:0] land_base_r = 25'd0;
+    reg         land_clear_r = 1'b0;
+    assign fb_land_base  = (LAND_ENABLE != 0) ? land_base_r : 25'd0;
+    assign fb_land_clear = (LAND_ENABLE != 0) && land_clear_r;
+    // interrupts: sticky pending bits set by their sources, cleared by writing 1; the pending register is the CPU's external interrupt array
+    reg  [31:0] irq_pend = 32'd0;
+    reg         irq_done_q = 1'b0, irq_vs_q = 1'b0, irq_idle_q = 1'b0; reg [15:0] irq_sw_q = 16'd0;
+    reg         irq_clr_we = 1'b0; reg [31:0] irq_clr_d = 32'd0;
+    assign irq_ext = (IRQ_ENABLE != 0) ? irq_pend : 32'd0;
+    wire [3:0]  irq_set = { (fb_vid_switches != irq_sw_q), (fb_land_idle && !irq_idle_q), (vblank_rd[0] && !irq_vs_q), (tgt_done && !irq_done_q) };
+    always @(posedge clk) if (IRQ_ENABLE != 0) begin
+        irq_done_q <= tgt_done; irq_vs_q <= vblank_rd[0]; irq_idle_q <= fb_land_idle; irq_sw_q <= fb_vid_switches;
+        irq_pend <= (irq_pend & ~(irq_clr_we ? irq_clr_d : 32'd0)) | {28'd0, irq_set};
+    end
     localparam [8:0] R_VID_MODE = 9'h1EC, R_VIEW_BASE = 9'h1F0, R_VIEW_STRIDE = 9'h1F4, R_VIEW_CAPS = 9'h1F8;   // Tau Gallery viewer (M0.3)
     reg         view_req_r = 1'b0;
     reg  [24:0] view_base_r = 25'd0;
@@ -1413,7 +1442,7 @@ module tau_soc #(
         con_wr      <= 1'b0;
         tgt_go      <= 1'b0;
         fb_cmd_push <= 1'b0;
-        wave_ctl_we <= 1'b0; wave_idx_we <= 1'b0; stats_ctl_we <= 1'b0; stats_idx_we <= 1'b0; sda_we <= 1'b0; wdog_arm_we <= 1'b0; wdog_ack_we <= 1'b0;
+        wave_ctl_we <= 1'b0; wave_idx_we <= 1'b0; stats_ctl_we <= 1'b0; stats_idx_we <= 1'b0; sda_we <= 1'b0; land_clear_r <= 1'b0; irq_clr_we <= 1'b0; wdog_arm_we <= 1'b0; wdog_ack_we <= 1'b0;
         poly_clear <= 1'b0; poly_go <= 1'b0; poly_push_we <= 1'b0; poly_idx_we <= 1'b0;
         lpc_cfg_we <= 1'b0; lpc_coef_idx_we <= 1'b0; lpc_coef_data_we <= 1'b0;
         lpc_warm_idx_we <= 1'b0; lpc_warm_data_we <= 1'b0; lpc_residual_we <= 1'b0;
@@ -1505,6 +1534,9 @@ module tau_soc #(
                 R_WDOG_ACK:  if (WDOG_ENABLE != 0) wdog_ack_we <= 1'b1;
                 R_SDA_SEL:   if (SDA_ENABLE != 0) begin sda_wd <= dDAT_MOSI[4:0]; sda_we <= 1'b1; end   // the window ignores it while a snapshot is pending
                 R_VID_MODE:    if (VIEW_ENABLE != 0) view_req_r <= dDAT_MOSI[0];
+                R_LAND_BASE:   if (LAND_ENABLE != 0) land_base_r <= dDAT_MOSI[24:0];
+                R_LAND_CTRL:   if (LAND_ENABLE != 0 && dDAT_MOSI[0]) land_clear_r <= 1'b1;   // a one-clock pulse: restart the word and drop counts
+                R_IRQ_PEND:    if (IRQ_ENABLE != 0) begin irq_clr_d <= dDAT_MOSI; irq_clr_we <= 1'b1; end
                 R_VIEW_BASE:   if (VIEW_ENABLE != 0) view_base_r <= dDAT_MOSI[24:0];
                 R_VIEW_STRIDE: if (VIEW_ENABLE != 0) view_stride_r <= dDAT_MOSI[15:0];
                 9'h100:     begin poly_clear <= dDAT_MOSI[0]; poly_go <= dDAT_MOSI[1]; end
@@ -1661,6 +1693,11 @@ module tau_soc #(
             R_WDOG_ST:     mmio_rdata = (WDOG_ENABLE != 0) ? wdog_status : 32'd0;           // [31] present, [1] expired, [0] armed
             R_WDOG_CNT:    mmio_rdata = (WDOG_ENABLE != 0) ? wdog_counts : 32'd0;           // [31:16] arms, [15:0] expiries (wrap)
             R_SDA_SEL:     mmio_rdata = (SDA_ENABLE != 0) ? sda_status : 32'd0;          // [31] present, [8] a snapshot is pending, [4:0] the selection
+            R_LAND_BASE:   mmio_rdata = (LAND_ENABLE != 0) ? {7'd0, land_base_r} : 32'd0;
+            R_LAND_STATUS: mmio_rdata = (LAND_ENABLE != 0) ? {1'b1, 29'd0, (fb_land_ovf != 32'd0), fb_land_idle} : 32'd0;   // [31] present, [1] words were dropped, [0] idle (every accepted word is in SDRAM)
+            R_LAND_WORDS:  mmio_rdata = (LAND_ENABLE != 0) ? fb_land_words : 32'd0;
+            R_LAND_OVF:    mmio_rdata = (LAND_ENABLE != 0) ? fb_land_ovf : 32'd0;
+            R_IRQ_PEND:    mmio_rdata = (IRQ_ENABLE != 0) ? irq_pend : 32'd0;
             R_VID_MODE:    mmio_rdata = (VIEW_ENABLE != 0) ? {fb_vid_switches, 13'd0, view_req_r, fb_vid_pend, fb_vid_cur} : 32'd0;   // [31:16] completed switches, [2] requested, [1] pending, [0] on the bus
             R_VIEW_BASE:   mmio_rdata = (VIEW_ENABLE != 0) ? {7'd0, view_base_r} : 32'd0;
             R_VIEW_STRIDE: mmio_rdata = (VIEW_ENABLE != 0) ? {16'd0, view_stride_r} : 32'd0;

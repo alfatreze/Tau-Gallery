@@ -77,6 +77,12 @@ wd_resume:
 	.balign 4
 	.globl trap_entry
 trap_entry:
+	addi sp, sp, -8				/* Tau Gallery M0.6: an external interrupt (mcause 0x8000000B) must return to the interrupted code with every register intact, so t0 and t1 go on its stack first. */
+	sw t0, 0(sp)				/* The other paths below never return to it: the watchdog resumes through wd_resume (which restores sp from its buffer), anything else restarts. */
+	sw t1, 4(sp)
+	csrr t0, mcause
+	li t1, 0x8000000B
+	beq t0, t1, irq_entry
 	csrr t0, mcause
 	li t1, 0x80000007				/* machine timer interrupt = the watchdog */
 	bne t0, t1, 1f
@@ -92,6 +98,64 @@ trap_entry:
 	mret
 1:	la t0, _start
 	jr t0
+
+	.weak irq_handler				/* void irq_handler(uint32_t pending): C code, may be absent (then an external interrupt restarts like any other trap) */
+irq_entry:
+	addi sp, sp, -56
+	sw ra, 0(sp)
+	sw t2, 4(sp)
+	sw t3, 8(sp)
+	sw t4, 12(sp)
+	sw t5, 16(sp)
+	sw t6, 20(sp)
+	sw a0, 24(sp)
+	sw a1, 28(sp)
+	sw a2, 32(sp)
+	sw a3, 36(sp)
+	sw a4, 40(sp)
+	sw a5, 44(sp)
+	sw a6, 48(sp)
+	sw a7, 52(sp)
+	la t1, irq_handler
+	beqz t1, irq_restart
+	csrr a0, 0xFC0				/* the pending external lines (LiteX irq pending CSR) */
+	jalr t1
+	lw ra, 0(sp)
+	lw t2, 4(sp)
+	lw t3, 8(sp)
+	lw t4, 12(sp)
+	lw t5, 16(sp)
+	lw t6, 20(sp)
+	lw a0, 24(sp)
+	lw a1, 28(sp)
+	lw a2, 32(sp)
+	lw a3, 36(sp)
+	lw a4, 40(sp)
+	lw a5, 44(sp)
+	lw a6, 48(sp)
+	lw a7, 52(sp)
+	addi sp, sp, 56
+	lw t0, 0(sp)
+	lw t1, 4(sp)
+	addi sp, sp, 8
+	mret
+irq_restart:
+	la t0, _start
+	jr t0
+	.globl irq_enable			/* void irq_enable(uint32_t mask): enable the external lines in mask (CSR 0xBC0), then machine external interrupts and the global enable */
+irq_enable:
+	csrw 0xBC0, a0
+	li t0, 0x800
+	csrs mie, t0
+	li t0, 8
+	csrs mstatus, t0
+	ret
+	.globl irq_disable			/* void irq_disable(void): globally off and every line masked */
+irq_disable:
+	li t0, 8
+	csrc mstatus, t0
+	csrw 0xBC0, zero
+	ret
 	.section .cold_text,"ax"
 	.globl wd_irq_on
 wd_irq_on:

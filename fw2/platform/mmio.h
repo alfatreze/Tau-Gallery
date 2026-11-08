@@ -68,6 +68,15 @@
 #define R_VIEW_BASE  0x800001F0u        /* [24:0] SDRAM word address of plane line 0 (a packed RGB888 plane: 800 pixels of R, G, B bytes per line = 1,200 words); applied at the next vblank */
 #define R_VIEW_STRIDE 0x800001F4u       /* [15:0] words from one plane line to the next (at least 1,200), applied at the next vblank */
 #define R_VIEW_CAPS  0x800001F8u        /* read: [31] present, [1] 800 x 720 viewer, [0] mode sequencer */
+/* The MMIO page is 1 KB since M0.5 (offsets 0x200 and up). Landing path (bitstream built with TAU_LAND; each reads 0 without it): a data-slot read whose bridge address is 0x4xxxxxxx lands in SDRAM. */
+#define R_LAND_BASE  0x80000200u        /* [24:0] SDRAM halfword address of the first word of the window (bridge address 0x40000000); set before the read, keep it still until idle */
+#define R_LAND_CTRL  0x80000204u        /* write bit 0: restart the word and dropped-word counts */
+#define R_LAND_STATUS 0x80000208u       /* read: [31] present, [1] words were dropped (FIFO full), [0] idle (every accepted word is in SDRAM) */
+#define R_LAND_WORDS 0x8000020Cu        /* read: words accepted since the last clear */
+#define R_LAND_OVF   0x80000210u        /* read: words dropped since the last clear */
+/* Interrupts (bitstream built with TAU_IRQ; reads 0 without it): the pending register drives the CPU's external interrupt inputs; the CPU's own mask CSR (0xBC0) enables each line and the
+ * pending lines are readable in CSR 0xFC0. fw2/platform/start.S has the trap path (irq_enable, irq_disable, and a weak irq_handler(pending) that the firmware may define). */
+#define R_IRQ_PEND   0x80000214u        /* read: pending sources (sticky); write 1 to a bit to clear it. 0 data-slot command done, 1 vsync rising, 2 landing path idle (rising), 3 a video mode switch completed */
 #define R_SDA_SEL    0x800001D4u        /* per-port SDRAM statistics window (tau_sdr_stat_win.sv): write {port[1:0], stat[2:0]} (stat 0 requests, 1 words, 2 busy cycles, 3 worst wait, 4 urgent over the bound, 5 bad requests; port 0 scan-out, 1 engine, 2 CPU) -- ignored while pending; read [31] built in, [8] a snapshot is pending, [4:0] the selection */
 #define R_SDA_VAL    0x800001D8u        /* read: the snapshot of the selected counter, stable until the next select; valid once R_SDA_SEL bit 8 is 0 */
 #define R_DBUF_CPU   0x80000118u        /* Helios H2: bit 0 = the buffer plain RECT/CHAR/COPY commands target (rows of the visible frame only; the off-screen stash rows are shared); read bit 31 = built in */
