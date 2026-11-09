@@ -17,9 +17,9 @@
 #define GP_KEY_START (1u << 15)
 
 /* ---- the menu ---- */
-enum { GM_CONTROLS = 0, GM_HELP, GM_INFO, GM_COUNT };
-static const char *const gm_names[GM_COUNT] = { "CONTROLS", "HELP", "INFO" };
-enum { GP_STAY = 0, GP_CLOSE, GP_OPEN_CONTROLS, GP_OPEN_HELP, GP_OPEN_INFO };      /* what a key edge asks of the caller */
+enum { GM_CONTROLS = 0, GM_HELP, GM_INFO, GM_SETTINGS, GM_COUNT };
+static const char *const gm_names[GM_COUNT] = { "CONTROLS", "HELP", "INFO", "SETTINGS" };
+enum { GP_STAY = 0, GP_CLOSE, GP_OPEN_CONTROLS, GP_OPEN_HELP, GP_OPEN_INFO, GP_OPEN_SETTINGS };      /* what a key edge asks of the caller */
 typedef struct { uint8_t sel; } gm_t;
 static inline void gm_open(gm_t *m) { m->sel = 0; }
 static inline int gm_input(gm_t *m, uint32_t edge)
@@ -34,9 +34,9 @@ static inline int gm_input(gm_t *m, uint32_t edge)
     }
     if (edge & GP_KEY_A) {
 #if BUG == 2
-        return m->sel == GM_CONTROLS ? GP_OPEN_HELP : m->sel == GM_HELP ? GP_OPEN_CONTROLS : GP_OPEN_INFO;      /* the first two entries swapped */
+        return m->sel == GM_CONTROLS ? GP_OPEN_HELP : m->sel == GM_HELP ? GP_OPEN_CONTROLS : m->sel == GM_INFO ? GP_OPEN_INFO : GP_OPEN_SETTINGS;      /* the first two entries swapped */
 #else
-        return m->sel == GM_CONTROLS ? GP_OPEN_CONTROLS : m->sel == GM_HELP ? GP_OPEN_HELP : GP_OPEN_INFO;
+        return m->sel == GM_CONTROLS ? GP_OPEN_CONTROLS : m->sel == GM_HELP ? GP_OPEN_HELP : m->sel == GM_INFO ? GP_OPEN_INFO : GP_OPEN_SETTINGS;
 #endif
     }
     return (edge & (GP_KEY_B | GP_KEY_START)) ? GP_CLOSE : GP_STAY;
@@ -125,13 +125,29 @@ static inline int gh_input(gh_t *h, uint32_t edge)
     return (edge & (GP_KEY_LEFT | GP_KEY_B)) != 0;
 }
 
+/* ---- Settings: one setting in this slice, RESUME (the grid opens on the last picture). Left, Right and A change the value; B goes back to the menu. ---- */
+/* One key edge: `resume` is the live flag (0 or 1); returns 1 when the page should close. */
+static inline int gsp_input(uint32_t *resume, uint32_t edge)
+{
+    if (edge & (GP_KEY_LEFT | GP_KEY_A | (1u << 3))) {                                           /* bit 3 is Right */
+#if BUG == 7
+        (void)resume;                                                                            /* nothing changes */
+#else
+        *resume = (*resume & 1u) ^ 1u;
+#endif
+        return 0;
+    }
+    return (edge & GP_KEY_B) != 0;
+}
+
 /* ---- Info: what the firmware knows about itself and the last picture it opened (M1.6 slice 2) ---- */
 #define GI_NONE 0xFFFFFFFFu                                          /* open_ms before any picture was opened */
-#define GI_ROWS 6u
-typedef struct { uint32_t core_version, count, view_caps, open_ms, words, lost; const char *err; } gi_t;      /* view_caps: R_VIEW_CAPS (bit 1 = the 800 x 720 viewer); err: the last status line, 0 = none */
+#define GI_ROWS 7u
+typedef struct { uint32_t core_version, count, view_caps, open_ms, words, lost; const char *err; uint32_t set_layout, set_loads, set_stores; } gi_t;      /* view_caps: R_VIEW_CAPS (bit 1 = the 800 x 720 viewer); err: the last status line, 0 = none */
 typedef struct { const char *label; char value[28]; } gi_row_t;
 static inline char *gi_s(char *q, const char *p) { while (*p) *q++ = *p++; return q; }
 static inline char *gi_u(char *q, uint32_t v) { char t[10]; uint32_t n = 0; do { t[n++] = (char)('0' + v % 10u); v /= 10u; } while (v); while (n) *q++ = t[--n]; return q; }
+static inline uint32_t gi_cap(uint32_t v, uint32_t m) { return v > m ? m : v; }
 static inline char *gi_hex8(char *q, uint32_t v) { for (int i = 28; i >= 0; i -= 4) *q++ = "0123456789ABCDEF"[(v >> i) & 15u]; return q; }
 static inline void gi_format(const gi_t *d, gi_row_t r[GI_ROWS])
 {
@@ -156,6 +172,7 @@ static inline void gi_format(const gi_t *d, gi_row_t r[GI_ROWS])
     if (d->open_ms == GI_NONE) { q = gi_s(r[4].value, "NONE YET"); *q = 0; }
     else { q = gi_u(r[4].value, d->words); q = gi_s(q, " WORDS, "); q = gi_u(q, d->lost); q = gi_s(q, " LOST"); *q = 0; }
     r[5].label = "LAST ERROR";   q = gi_s(r[5].value, d->err ? d->err : "NONE"); *q = 0;
+    r[6].label = "SETTINGS";     q = gi_s(r[6].value, "L"); q = gi_u(q, gi_cap(d->set_layout, 15u)); q = gi_s(q, " LOADED "); q = gi_u(q, gi_cap(d->set_loads, 9999u)); q = gi_s(q, " SAVED "); q = gi_u(q, gi_cap(d->set_stores, 9999u)); *q = 0;      /* the layout version in the file, how often it was read and written: the proof of a round trip */
 }
 /* One key edge: returns 1 when the page should close (back to the menu). */
 static inline int gi_input(uint32_t edge) { return (edge & (GP_KEY_LEFT | GP_KEY_B)) != 0; }

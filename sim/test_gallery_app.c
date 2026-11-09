@@ -14,6 +14,7 @@ static uint16_t mem[HW_N];                         /* SDRAM, halfwords: the plan
 static uint16_t fb[512u * 1024u];                  /* the UI framebuffer, halfwords, stride 512 */
 static uint32_t clk, irq_pend, vid_req, vid_bus, vid_sw, vid_due, vbase, vstride, land_base, land_words, land_ovf, input_n;
 static int force_ovf, force_short, viewer_dead;
+static uint32_t setw[16], setidx; static int set_writes;                  /* the settings register file (R_SET_IDX / R_SET_DAT) and how many words were written */
 static void tick(void) { if (!viewer_dead && vid_req != vid_bus && vid_due && clk >= vid_due) { vid_bus = vid_req; vid_sw++; vid_due = 0; } }
 static uint32_t next_input(void);
 static uint32_t rd(uint32_t a)
@@ -28,6 +29,7 @@ static uint32_t rd(uint32_t a)
     case 0x80000210u: return force_ovf ? 1u : land_ovf;
     case 0x80000040u: return 0x4D50331Bu;
     case 0x800001F8u: return 0x80000003u;
+    case 0x80000070u: return setw[setidx & 15u];
     case 0x8000003Cu: return next_input();
     default: return 0;
     }
@@ -36,6 +38,8 @@ static uint32_t cyc_rd(void) { clk += 50u; tick(); return clk; }
 static void wr(uint32_t a, uint32_t v)
 {
     switch (a) {
+    case 0x8000006Cu: setidx = v; break;
+    case 0x80000070u: setw[setidx & 15u] = v; set_writes++; break;
     case 0x800001ECu: vid_req = v & 1u; vid_due = clk + 2u * 1111111u; break;
     case 0x800001F0u: vbase = v & 0x1FFFFFFu; break;
     case 0x800001F4u: vstride = v & 0xFFFFu; break;
@@ -109,6 +113,7 @@ static uint32_t next_input(void)
 #include "../fw2/gallery/gallery_fmt.c"
 #include "../fw2/gallery/gallery_pattern.c"
 #include "../fw2/gallery/gallery_hw.c"
+#include "../fw2/gallery/gallery_settings.c"
 #include "../fw2/gallery/gallery_app.c"
 #undef main
 
@@ -157,9 +162,16 @@ static void checkpoint(int n)
     case 18: chk(26, said("CONTROLS") && said("HELP") && !said("OPEN THE PICTURE")); clear_texts(); break;                                                       /* B: back in the menu */
     case 19: chk(27, said("ADD PHOTOS") && said("1/3") && !said("MENU")); clear_texts(); break;                                                                  /* Down, A: Help page 1 of 3 */
     case 20: chk(28, said("WHERE THINGS ARE") && said("2/3") && !said("ADD PHOTOS")); clear_texts(); break;                                                      /* Down turns the page */
-    case 22: chk(30, said("INFO") && said("4D50331B") && said("800 X 720") && said("NONE YET") && said("LAST ERROR")); snprintf(want, sizeof want, "%u", count); chk(31, said(want)); clear_texts(); break;    /* Info before any picture was opened */
-    case 23: chk(32, said("4D50331B") && !said("NONE YET") && said(" MS") && said("432128 WORDS, 0 LOST")); chk(33, said("NONE") && !said("FAILED")); clear_texts(); break;   /* Info after viewing pictures: the last landing */
+    case 22: chk(30, said("INFO") && said("4D50331B") && said("800 X 720") && said("NONE YET") && said("LAST ERROR") && said("L1 LOADED 1 SAVED 0")); snprintf(want, sizeof want, "%u", count); chk(31, said(want)); clear_texts(); break;    /* Info before any picture was opened */
+    case 23: chk(32, said("4D50331B") && !said("NONE YET") && said(" MS") && said("432128 WORDS, 0 LOST")); chk(33, said("NONE") && !said("FAILED")); chk(44, said("L1 LOADED 1 SAVED 1")); clear_texts(); break;   /* Info after viewing pictures: the last landing */
     case 24: chk(34, said("OPEN FAILED") && said("0 WORDS, 0 LOST")); clear_texts(); break;                                                                          /* Info after a failed open: the error, and no landing counts carried over */
+    case 25: chk(35, said("RESUME LAST PICTURE") && said("ON") && !said("OFF")); clear_texts(); break;                                                                    /* Settings page, resume on (the default) */
+    case 26: chk(36, said("OFF") && (setw[2] & 1u) == 0u && set_writes == 0); clear_texts(); break;                                                                   /* toggled off: shown, but not yet written */
+    case 27: chk(37, (setw[2] & 1u) == 0u && set_writes == 0); clk += 2u * CLK_HZ; break;                                                                             /* back in the grid, a key a moment ago: nothing published yet; now a quiet 2 s */
+    case 28: chk(38, setw[2] == 0x4000005Fu && setw[0] == (1u << 27) && setw[1] == 0x40000001u && set_writes == 1); break;                                              /* published: only word 2 changed */
+    case 29: { const char *p = "Assets/tau_gallery/common/photos/p03.tgy"; chk(39, setw[6] == 3u && setw[5] == (gf_crc32((const uint8_t *)p, (uint32_t)strlen(p)) & 0x7FFFFFFFu)); chk(40, (setw[0] >> 27) == 1u && setw[2] == 0x4000005Fu); } break;   /* the last picture opened: picture 4 (index 3), the open at CP(14) whose viewer did not start; its landing succeeded */
+    case 30: clk += 2u * CLK_HZ; break;
+    case 31: force_ovf = 1; break;                                                                                                                                       /* the next open fails: the last picture must stay the one before */
     case 21: snprintf(want, sizeof want, "1/%u", count); chk(29, thumbs_on_screen(0, count < 16u ? count : 16u) && said(want) && said("TAU GALLERY")); break;   /* B, B: the grid again, thumbnails and footer redrawn */
     default: break;
     }
@@ -170,9 +182,24 @@ int main(int argc, char **argv)
     snprintf(dir, sizeof dir, "%s", argv[1]); char f[600]; snprintf(f, sizeof f, "%s/tau-library.tdb", dir);
     idx_data = slurp(f, &idx_len); if (!idx_data) return 2;
     count = (uint32_t)idx_data[8] | (uint32_t)idx_data[9] << 8;
-    const uint32_t S[] = { CP(1), KEY_START, 0, CP(16), KEY_A, 0, CP(17), KEY_B, 0, CP(18), KEY_DOWN, 0, KEY_A, 0, CP(19), KEY_DOWN, 0, CP(20), KEY_B, 0, KEY_DOWN, 0, KEY_A, 0, CP(22), KEY_B, 0, KEY_B, 0, CP(21), KEY_RIGHT, 0, KEY_RIGHT, 0, CP(2), KEY_A, 0, CP(3), KEY_RIGHT, 0, CP(4), KEY_LEFT, 0, KEY_LEFT, 0, CP(5), KEY_LEFT, 0, KEY_LEFT, 0, CP(6), KEY_B, 0, CP(7), KEY_START, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_A, 0, CP(23), KEY_B, 0, KEY_B, 0,
+    setw[0] = 1u << 27; setw[1] = 0x40000001u; setw[2] = 0x4000005Eu; setw[5] = 0x40000000u; setw[6] = 0x40000000u;      /* the package's defaults of the inherited variables: layout 1, appearance, word 2 with bit 0 clear (resume on), the player's marks in words 5 and 6 */
+    if (argc > 2) {                                                                                     /* a boot scenario: the saved state, then the grid must open on the right picture */
+        const char *sc = argv[2]; const uint32_t want = !strcmp(sc, "resume5") ? 5u : !strcmp(sc, "resume17") ? 17u : 0u;
+        char pth[200]; const uint32_t idx = !strcmp(sc, "resume5") || !strcmp(sc, "badcrc") ? 5u : !strcmp(sc, "resume17") ? 17u : !strcmp(sc, "toohigh") ? count : 5u;
+        snprintf(pth, sizeof pth, "Assets/tau_gallery/common/photos/p%02u.tgy", idx);
+        setw[6] = idx; setw[5] = gf_crc32((const uint8_t *)pth, (uint32_t)strlen(pth)) & 0x7FFFFFFFu;
+        if (!strcmp(sc, "badcrc")) setw[5] ^= 1u;
+        if (!strcmp(sc, "off")) setw[2] |= 1u;
+        if (!strcmp(sc, "layout0")) setw[0] = 0u;
+        const uint32_t S2[] = { CP(41), END }; nscript = 2; memcpy(script, S2, sizeof S2);
+        if (!setjmp(done)) gallery_app_main();
+        const uint32_t fp = want / 16u * 16u; char w[32]; snprintf(w, sizeof w, "%u/%u", want + 1u, count);
+        chk(41, !strcmp(last_text(), w)); chk(42, thumbs_on_screen(fp, count - fp < 16u ? count - fp : 16u)); chk(43, set_writes == 0);
+        printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
+    }
+    const uint32_t S[] = { CP(1), KEY_START, 0, CP(16), KEY_A, 0, CP(17), KEY_B, 0, CP(18), KEY_DOWN, 0, KEY_A, 0, CP(19), KEY_DOWN, 0, CP(20), KEY_B, 0, KEY_DOWN, 0, KEY_A, 0, CP(22), KEY_B, 0, KEY_DOWN, 0, KEY_A, 0, CP(25), KEY_A, 0, CP(26), KEY_B, 0, KEY_B, 0, CP(27), 0, 0, CP(28), CP(21), KEY_RIGHT, 0, KEY_RIGHT, 0, CP(2), KEY_A, 0, CP(3), KEY_RIGHT, 0, CP(4), KEY_LEFT, 0, KEY_LEFT, 0, CP(5), KEY_LEFT, 0, KEY_LEFT, 0, CP(6), KEY_B, 0, CP(7), KEY_START, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_A, 0, CP(23), KEY_B, 0, KEY_B, 0,
                           KEY_L1, 0, CP(8), KEY_R1, 0, CP(9), KEY_L1, 0, KEY_RIGHT, 0, KEY_R1, 0, CP(13), KEY_L1, 0, CP(10), KEY_A, 0, CP(11), KEY_START, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_A, 0, CP(24), KEY_B, 0, KEY_B, 0, KEY_RIGHT, 0, KEY_A, 0, CP(12),
-                          KEY_RIGHT, 0, KEY_A, 0, CP(14), KEY_A, 0, CP(15), END };
+                          KEY_RIGHT, 0, KEY_A, 0, CP(14), KEY_A, 0, CP(15), CP(31), KEY_RIGHT, 0, KEY_A, 0, CP(30), 0, 0, CP(29), END };
     nscript = (int)(sizeof S / sizeof S[0]); memcpy(script, S, sizeof S);
     if (!setjmp(done)) gallery_app_main();
     printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails);

@@ -17,7 +17,7 @@ SHA256SUMS.txt; the zips themselves are unchanged. Every field is derived, never
   assets_sections           every as_find(..., "XXXX") the firmware does
   assets_read_limit_bytes   AS_MAX_FILE in fw/assets_core.h
   report_tags_max           the last SR_T_* tag in fw/suite_core.h
-  persist_layout            SF_LAYOUT_VERSION in fw2/cores/settings_core.h: the version of the persisted-settings layout this release writes
+  persist_layout            GS_LAYOUT_VERSION in fw2/gallery/gallery_settings.h (the gallery table; the player's SF_LAYOUT_VERSION in fw2/cores/settings_core.h before M1.6): the version of the persisted-settings layout this release writes
                             (a file of the legacy layout has none, see tools/persist_layout.py); Omega must read it to decode or edit settings
   packs_abi                 MTR_PACK_ABI_MAJOR in fw2/cores/meter_pack_core.h: the ABI of the meter pack bundle (tau-packs.bin); a tool that
                             only leaves the file alone does not need it
@@ -217,10 +217,10 @@ def tree_facts(root=ROOT):
         n, _, val = item.partition("=")
         tag = int(val.strip(), 0) if val.strip() else tag + 1
         last = max(last, tag)
-    sv = re.search(r"#define\s+SF_LAYOUT_VERSION\s+(\d+)u", (root / "fw2/cores/settings_core.h").read_text())
+    sv = re.search(r"#define\s+GS_LAYOUT_VERSION\s+(\d+)u", (root / "fw2/gallery/gallery_settings.h").read_text())
     pa = re.search(r"#define\s+MTR_PACK_ABI_MAJOR\s+(\d+)u", (root / "fw2/cores/meter_pack_core.h").read_text())
     if not sv or not pa:
-        raise CompatError("cannot read SF_LAYOUT_VERSION (fw2/cores/settings_core.h) or MTR_PACK_ABI_MAJOR (fw2/cores/meter_pack_core.h)")
+        raise CompatError("cannot read GS_LAYOUT_VERSION (fw2/gallery/gallery_settings.h) or MTR_PACK_ABI_MAJOR (fw2/cores/meter_pack_core.h)")
     return {"library_index_version": int(lib.group(1)), "assets_sections": sorted(sections),
             "assets_read_limit_bytes": int(mx.group(1), 0), "report_tags_max": last,
             "persist_layout": int(sv.group(1)), "packs_abi": int(pa.group(1))}

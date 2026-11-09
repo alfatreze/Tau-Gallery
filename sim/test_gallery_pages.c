@@ -15,7 +15,9 @@ int main(void)
     chk("A on Help opens Help", m.sel == GM_HELP && gm_input(&m, GP_KEY_A) == GP_OPEN_HELP);
     gm_input(&m, GP_KEY_DOWN);
     chk("A on Info opens Info", m.sel == GM_INFO && gm_input(&m, GP_KEY_A) == GP_OPEN_INFO);
-    chk("down from Info wraps to Controls", gm_input(&m, GP_KEY_DOWN) == GP_STAY && m.sel == GM_CONTROLS);
+    gm_input(&m, GP_KEY_DOWN);
+    chk("A on Settings opens Settings", m.sel == GM_SETTINGS && gm_input(&m, GP_KEY_A) == GP_OPEN_SETTINGS);
+    chk("down from Settings wraps to Controls", gm_input(&m, GP_KEY_DOWN) == GP_STAY && m.sel == GM_CONTROLS);
     chk("B closes the menu", gm_input(&m, GP_KEY_B) == GP_CLOSE);
     chk("Start closes the menu", gm_input(&m, GP_KEY_START) == GP_CLOSE);
     chk("Left and X do nothing in the menu", gm_input(&m, GP_KEY_LEFT) == GP_STAY && gm_input(&m, 1u << 6) == GP_STAY);
@@ -54,7 +56,20 @@ int main(void)
         d.open_ms = 0u; gi_format(&d, r); chk("info: 0 ms is a time, not 'none yet'", !strcmp(r[3].value, "0 MS"));
         int fit = 1; for (uint32_t i = 0; i < GI_ROWS; i++) if (strlen(r[i].label) > 14u || strlen(r[i].value) > 27u) fit = 0;
         chk("info: labels (14) and values (27) fit", fit);
+        d.set_layout = 1u; d.set_loads = 3u; d.set_stores = 2u; gi_format(&d, r);
+        chk("info: the settings row shows layout, loads and saves", !strcmp(r[6].label, "SETTINGS") && !strcmp(r[6].value, "L1 LOADED 3 SAVED 2"));
+        d.set_layout = 99u; d.set_loads = 4000000000u; d.set_stores = 4000000000u; gi_format(&d, r);
+        chk("info: huge counters are capped, the row still fits", !strcmp(r[6].value, "L15 LOADED 9999 SAVED 9999") && strlen(r[6].value) <= 27u);
         chk("info: B and Left close, others do not", gi_input(GP_KEY_B) && gi_input(GP_KEY_LEFT) && !gi_input(GP_KEY_UP) && !gi_input(GP_KEY_A));
+    }
+    {
+        uint32_t rs = 1u;
+        chk("settings: A turns resume off", gsp_input(&rs, GP_KEY_A) == 0 && rs == 0u);
+        chk("settings: Left turns it on", gsp_input(&rs, GP_KEY_LEFT) == 0 && rs == 1u);
+        chk("settings: Right turns it off", gsp_input(&rs, 1u << 3) == 0 && rs == 0u);
+        rs = 5u; gsp_input(&rs, GP_KEY_A); chk("settings: the flag stays 0 or 1 whatever it held", rs == 0u);
+        chk("settings: B closes and changes nothing", gsp_input(&rs, GP_KEY_B) == 1 && rs == 0u);
+        chk("settings: Up, Down and Start neither change nor close", gsp_input(&rs, GP_KEY_UP) == 0 && gsp_input(&rs, GP_KEY_DOWN) == 0 && gsp_input(&rs, GP_KEY_START) == 0 && rs == 0u);
     }
     int ok = 1;
     for (uint32_t p = 0; p < GH_PAGES; p++) {
@@ -65,7 +80,7 @@ int main(void)
     ok = 1;
     for (uint32_t i = 0; i < GC_N; i++) if (strlen(gc_rows[i].key) > 21u || strlen(gc_rows[i].what) > 25u) { ok = 0; printf("  too long: %s / %s\n", gc_rows[i].key, gc_rows[i].what); }
     chk("every controls key (21) and meaning (25) fits its column", ok);
-    chk("the menu names fit", strlen(gm_names[0]) < 16 && strlen(gm_names[1]) < 16 && strlen(gm_names[2]) < 16);
+    chk("the menu names fit", strlen(gm_names[0]) < 16 && strlen(gm_names[1]) < 16 && strlen(gm_names[2]) < 16 && strlen(gm_names[3]) < 16);
     printf(fails ? "FAILED %d\n" : "PASSED\n", fails);
     return fails != 0;
 }

@@ -8,6 +8,7 @@
 #include "gallery_hw.h"
 #include "gallery_fmt.h"
 #include "gallery_pages.h"
+#include "gallery_settings_hw.h"
 
 #define BG   RGB565(0, 0, 0)
 #define FG   RGB565(255, 255, 255)
@@ -135,7 +136,10 @@ static int open_picture(uint32_t i, int show_progress)
 static const char *const open_msg[] = { "", "OPEN FAILED", "HEADER READ FAILED", "NOT A TGY PICTURE", "NO LANDING PATH", "PICTURE READ FAILED", "PICTURE DAMAGED IN TRANSFER" };
 
 /* open_picture with the Info page's numbers: how long it took (ms), the landing's word counts (only when a landing ran), the status line text. */
-static gi_t info = { 0u, 0u, 0u, GI_NONE, 0u, 0u, 0 };
+static gi_t info = { 0u, 0u, 0u, GI_NONE, 0u, 0u, 0, 0u, 0u, 0u };
+static gs_vals_t gset; static uint32_t last_act;                                              /* the persisted settings; the clock of the last key or card read (a save waits for a quiet second after it) */
+static uint32_t path_crc(uint32_t i) { const char *s = ent[i - page * PER_PAGE].path; uint32_t n = 0; while (s[n]) n++; return gf_crc32((const uint8_t *)s, n) & GS_M31; }
+static void settings_tick(void) { gs_hw_service(&gset, last_act); }
 static int open_timed(uint32_t i, int show_progress)
 {
     const uint32_t t0 = cycles();
@@ -143,6 +147,8 @@ static int open_timed(uint32_t i, int show_progress)
     info.open_ms = (uint32_t)(cycles() - t0) / (CLK_HZ / 1000u);
     if (r == 0 || r >= 5) { info.words = REG_RD(R_LAND_WORDS); info.lost = REG_RD(R_LAND_OVF); } else { info.words = 0u; info.lost = 0u; }
     info.err = r ? open_msg[r] : 0;
+    if (r == 0) { gset.last_idx = i; gset.last_crc = path_crc(i); }                           /* the picture the next start resumes on */
+    last_act = cycles();
     return r;
 }
 
@@ -151,6 +157,8 @@ static void viewer(void)
     uint32_t prev = REG_RD(R_INPUT) & 0xFFFFu;
     for (;;) {
         const uint32_t keys = REG_RD(R_INPUT) & 0xFFFFu, edge = keys & ~prev; prev = keys;
+        if (edge) last_act = cycles();
+        settings_tick();
         if (edge & KEY_B) { gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); return; }
         if (edge & (KEY_LEFT | KEY_RIGHT)) {
             const uint32_t n = (edge & KEY_RIGHT) ? (sel + 1u) % head.count : (sel + head.count - 1u) % head.count;
@@ -214,14 +222,22 @@ static void draw_info(void)
 {
     gi_row_t r[GI_ROWS];
     info.core_version = REG_RD(R_VERSION); info.count = head.count; info.view_caps = REG_RD(R_VIEW_CAPS);
+    info.set_layout = gs_stats.layout; info.set_loads = gs_stats.loads; info.set_stores = gs_stats.stores;
     gi_format(&info, r); page_clear("INFO");
     for (uint32_t i = 0; i < GI_ROWS; i++) { gfx_text(6, PAGE_Y0 + i * LINE_H, r[i].label, DIM, BG); gfx_text(150, PAGE_Y0 + i * LINE_H, r[i].value, i == 5u && info.err ? BAD : FG, BG); }
     page_foot("B BACK", 0, 0);
 }
+static void draw_settings(void)
+{
+    page_clear("SETTINGS");
+    gfx_text(6, PAGE_Y0, "RESUME LAST PICTURE", FG, BG); gfx_text(250, PAGE_Y0, gset.resume ? "ON" : "OFF", ACC, BG);
+    gfx_text(6, PAGE_Y0 + 2u * LINE_H, "ON: the grid opens on the last", DIM, BG); gfx_text(6, PAGE_Y0 + 3u * LINE_H - 2u, "picture you looked at.", DIM, BG);
+    page_foot("LEFT RIGHT CHANGE   B BACK", 0, 0);
+}
 /* Waits for the next key press (an edge) and returns it. */
 static uint32_t next_edge(uint32_t *prev)
 {
-    for (;;) { const uint32_t keys = REG_RD(R_INPUT) & 0xFFFFu, edge = keys & ~*prev; *prev = keys; if (edge) return edge; }
+    for (;;) { const uint32_t keys = REG_RD(R_INPUT) & 0xFFFFu, edge = keys & ~*prev; *prev = keys; if (edge) { last_act = cycles(); return edge; } settings_tick(); }
 }
 static void run_pages(void)
 {
@@ -231,7 +247,8 @@ static void run_pages(void)
         const uint32_t edge = next_edge(&prev); const int r = gm_input(&m, edge);
         if (r == GP_CLOSE) return;
         if (r == GP_STAY) { draw_menu(&m); continue; }
-        if (r == GP_OPEN_CONTROLS) { gc_t c; gc_open(&c); draw_controls(&c); while (!gc_input(&c, next_edge(&prev))) draw_controls(&c); }
+        if (r == GP_OPEN_SETTINGS) { draw_settings(); while (!gsp_input(&gset.resume, next_edge(&prev))) draw_settings(); }
+        else if (r == GP_OPEN_CONTROLS) { gc_t c; gc_open(&c); draw_controls(&c); while (!gc_input(&c, next_edge(&prev))) draw_controls(&c); }
         else if (r == GP_OPEN_HELP) { gh_t h; gh_open(&h); draw_help(&h); while (!gh_input(&h, next_edge(&prev))) draw_help(&h); }
         else { draw_info(); while (!gi_input(next_edge(&prev))) draw_info(); }
         draw_menu(&m);
@@ -249,10 +266,18 @@ int main(void)
       if (rc == 100) { say("NO INDEX: TAU-LIBRARY.TDB NOT READ", BAD); for (;;) { } }
       if (rc) { char b[40], *q = put_s(b, "INDEX NOT USABLE E"); q = put_u(q, (uint32_t)rc); *q = 0; say(b, BAD); for (;;) { } }
       if (head.count == 0u) { say("NO PICTURES IN THE INDEX", BAD); for (;;) { } } }
+    gs_hw_load(&gset); last_act = cycles();
+    if (gset.resume && gset.last_idx < head.count) {                                           /* resume: only when it is the same picture (index and path CRC) */
+        page = gset.last_idx / PER_PAGE;
+        if (load_page()) { const uint32_t i = gs_resume_index(&gset, head.count, path_crc(gset.last_idx)); sel = i; page = i / PER_PAGE; }
+        else page = 0u;
+    }
     draw_page();
     uint32_t prev = 0;
     for (;;) {
         const uint32_t keys = REG_RD(R_INPUT) & 0xFFFFu, edge = keys & ~prev; prev = keys;
+        if (edge) last_act = cycles();
+        settings_tick();
         if (edge & KEY_LEFT) { if (sel > 0u) select_to(sel - 1u); }
         else if (edge & KEY_RIGHT) { if (sel + 1u < head.count) select_to(sel + 1u); }
         else if (edge & KEY_UP) { if (sel >= COLS) select_to(sel - COLS); }
