@@ -16314,3 +16314,7 @@ DEV 009 on a Pocket: loader bar shows fine (owner: make it 2 px high and its bac
 ## B-1030: DEV 010 installed on the TauV card (owner: "Yes, install", 2026-11-09)
 
 `tools/install_dev_core.py work/diagnostics/tau-dev-010/pocket --card /Volumes/TauV --yes` after a clean dry run: `alfatreze.Tau Gallery DEV 010` (0.1.0-dev.10, tip dd5373b, same bitstream) with the 2 px loader bar, re-centre margin 128 and windows placed for the pan (B-1029); card checked, caches deleted, ejected. **Not run on a Pocket yet.**
+
+## B-1031: DEV 010 run on a Pocket: pan about the same, perhaps slightly smoother (owner, 2026-11-09)
+
+Owner: "seems very similar. maybe the hang-pan very slightly smoother." No screenshot. Reading: the margin and window placement fixes were not the main cause. What is left is the card rate (about 38 ms a 48 KB tile, 7 to 10 tiles a 128 px column, so about 450 to 500 px/s sustained against 960 px/s of key speed) shown in tile-column steps. Remaining levers: fewer bytes per view (M3 compression), loading only the visible part of a tile row first, or capping and easing the pan speed. **Evidence: hardware (owner's feel), no measurement.**
