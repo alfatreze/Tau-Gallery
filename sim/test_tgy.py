@@ -66,6 +66,7 @@ class T(unittest.TestCase):
         th = [bytes([i]) * tgy.THUMB_BYTES for i in (1, 2)]; data = tgy.pack_index(ents, th); self.assertEqual(data[:4], b"TGIX")
         back = tgy.parse_index(data); self.assertEqual([e["path"] for e in back], [e["path"] for e in ents]); self.assertEqual(back[1]["name"], "Bêta é")
         self.assertEqual((back[1]["size"], back[1]["width"], back[1]["height"]), (4096 * 5, 3000, 2000)); self.assertEqual([e["thumb"] for e in back], th)
+        self.assertEqual(len(data) % 4096, 0); self.assertGreaterEqual(len(data), struct.unpack_from("<I", data, 20)[0] + 2 * tgy.THUMB_BYTES)
         a = struct.unpack_from("<I", data, 20)[0]; self.assertEqual(a % 4096, 0)                    # the atlas starts on a 4 KB boundary
         with self.assertRaises(ValueError): tgy.parse_index(b"TGIY" + data[4:])
         with self.assertRaises(ValueError): tgy.pack_index([dict(path="p" * 96, name="n", size=1, width=1, height=1)], [th[0]])

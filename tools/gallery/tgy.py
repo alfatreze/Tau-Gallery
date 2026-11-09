@@ -90,7 +90,7 @@ def pack_index(entries, thumbs):
     n = len(entries); ent_off = IDX_HEADER; atlas_off = align(ent_off + n * IDX_ENTRY)
     head = struct.pack("<4sHHIIIIHHI", IDX_MAGIC, IDX_VERSION, IDX_HEADER, n, IDX_ENTRY, ent_off, atlas_off, THUMB_W, THUMB_H, 0)
     assert len(head) == IDX_HEADER
-    buf = bytearray(atlas_off + n * THUMB_BYTES); buf[:IDX_HEADER] = head
+    buf = bytearray(align(atlas_off + n * THUMB_BYTES)); buf[:IDX_HEADER] = head                  # padded: a 4 KB read of the last piece must not run past the end of the file
     for i, (e, t) in enumerate(zip(entries, thumbs)):
         p = e["path"].encode("utf-8"); nm = e["name"].encode("latin-1", "replace")
         if len(p) >= PATH_BYTES: raise ValueError("path too long for the index: " + e["path"])

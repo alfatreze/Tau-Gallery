@@ -5,12 +5,6 @@
 #include "../stream/slot.h"
 
 const uint32_t gal_land_len[GAL_LAND_KINDS] = { 4096u, 16384u, 65536u, 131072u };
-extern uint32_t _tag_start[];
-/* The tag zone as the CPU must read what the bridge wrote into it: through the UNCACHED alias (address + 0xC0000000). The ordinary address goes through the data cache (cacheability is address bit 31),
- * which keeps the lines of the previous read: DEV 003's first runs compared landed data with a stale reference and reported 991 bad words that were not there. */
-#ifndef GAL_TAGWIN
-#define GAL_TAGWIN ((const volatile uint32_t *)(uintptr_t)(0xC0000000u + (uint32_t)(uintptr_t)_tag_start))
-#endif
                                             /* the 4 KB landing zone in core RAM (fw2/platform/link.ld) */
 extern void irq_enable(uint32_t mask), irq_disable(void);              /* fw2/platform/start.S */
 

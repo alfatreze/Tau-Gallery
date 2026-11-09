@@ -1027,6 +1027,15 @@ test-gallery:
 	@echo "test-gallery: PASSED (patterns, hardware tests, 9 broken models caught)"
 gallery-firmware:
 	bash fw2/build_gallery.sh
+	APP=gallery bash fw2/build_gallery.sh
+
+.PHONY: test-gallery-fmt test-gallery-app
+test-gallery-app:
+	$(PYTHON) sim/test_gallery_app.py
+	$(PYTHON) sim/test_gallery_app.py --mutants
+test-gallery-fmt:
+	$(PYTHON) sim/test_gallery_fmt.py
+	$(PYTHON) sim/test_gallery_fmt.py --mutants
 
 # Tau Gallery M1 formats and converter (tools/gallery): tests and their mutants.
 .PHONY: test-tgy

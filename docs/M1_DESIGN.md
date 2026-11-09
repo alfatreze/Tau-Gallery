@@ -7,8 +7,8 @@ Plan: `../../docs/GALLERY_ANALYSIS_2026-11-07.md` (sections 6.5, 7, 8; M1 row of
 | # | Slice | Status |
 |---|---|---|
 | M1.1 | Formats and the host converter: TGY container v0 (one picture), TGIX folder index with a thumbnail atlas, `tools/gallery/tgy_convert.py`, tests with mutants | **done, host-tested** (`python3 sim/test_tgy.py`, 10 tests, `--mutants` 10 of 10 killed; the five test photos convert in 0.7 s) |
-| M1.2 | Firmware readers (C, host-tested against files the Python tool wrote): index, thumbnails of a page, header of a picture | not started |
-| M1.3 | Firmware gallery: browser grid in UI mode, open a picture, land the fit canvas in the plane, viewer mode, back | not started |
+| M1.2 | Firmware readers (C, `fw2/gallery/gallery_fmt.c`): index head and entries, picture header with the level checks, CRC-32; bounds-checked, refuse what they do not know | **done, host-tested** (`make test-gallery-fmt`: the C parse equals the Python parse on real files, 15 damaged files refused with the right code, 19 of 19 mutants killed) |
+| M1.3 | Firmware gallery (`fw2/gallery/gallery_app.c`, `APP=gallery bash fw2/build_gallery.sh`, 9 KB ROM): 4 x 4 thumbnail grid, selection and paging, open a picture (open by path, header check, the canvas lands in the plane in 128 KB commands, word count and overflow checked), viewer, Left/Right neighbours, B back | **done, host-tested end to end** (`make test-gallery-app`: the real firmware runs against a hardware model that serves 18 real converted files; thumbnails compared with the atlas pixel for pixel, the plane compared byte for byte with the canvas, navigation, wrap-around, paging, redraw after the viewer, open failure, damaged transfer, viewer that does not start; 19 of 19 mutants killed) |
 | M1.4 | Package with a few real photos, install, Pocket run, owner review (grid, picture quality, buttons, load times) | not started |
 | M1.5 | Delete the music player pieces and the audio source files (M0.8's second half) once M1.3 stands on its own | not started |
 

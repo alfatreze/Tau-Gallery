@@ -7,6 +7,12 @@
 #define GAL_LAND_BASE  0x400000u        /* SDRAM halfword address of the landing window (8 MiB) */
 #define GAL_SLOT       6u               /* the data slot read by the landing and interrupt tests: tau-cold.bin, a deferload file of at least 147 KB */
 #define GAL_LAND_KINDS 4u
+extern uint32_t _tag_start[];                                          /* the 4 KB landing zone in core RAM (fw2/platform/link.ld) */
+/* The tag zone as the CPU must read what the bridge wrote into it: through the UNCACHED alias (address + 0xC0000000). The ordinary address goes through the data cache (cacheability is address bit 31),
+ * which keeps the lines of the previous read: DEV 003's first runs compared landed data with a stale reference and reported 991 bad words that were not there. */
+#ifndef GAL_TAGWIN
+#define GAL_TAGWIN ((const volatile uint32_t *)(uintptr_t)(0xC0000000u + (uint32_t)(uintptr_t)_tag_start))
+#endif
 extern const uint32_t gal_land_len[GAL_LAND_KINDS];                   /* 4 KB, 16 KB, 64 KB, 128 KB */
 
 /* Writes the whole plane through the SDRAM mailbox; progress(y) is called every 30 lines (may be 0). Returns the number of mailbox writes that timed out (0 = all landed). */
