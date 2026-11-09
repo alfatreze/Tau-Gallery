@@ -66,6 +66,8 @@ int main(void)
         chk("info: before any zoom the three zoom rows say NONE YET", !strcmp(r[7].label, "ZOOM OPEN") && !strcmp(r[8].label, "ZOOM LAND") && !strcmp(r[9].label, "ZOOM COPY") && !strcmp(r[7].value, "NONE YET") && !strcmp(r[8].value, "NONE YET") && !strcmp(r[9].value, "NONE YET"));
         d.zoom_ms = 850u; d.land_ms = 31u; d.copy_ms = 6u; gi_format(&d, r);
         chk("info: the zoom timings, each in its own row", !strcmp(r[7].value, "850 MS") && !strcmp(r[8].value, "31 MS") && !strcmp(r[9].value, "6 MS"));
+        d.flip_ms = GI_NONE; gi_format(&d, r); chk("info: ZOOM FLIP says NONE YET before any re-centre", !strcmp(r[10].label, "ZOOM FLIP") && !strcmp(r[10].value, "NONE YET"));
+        d.flip_ms = 120u; gi_format(&d, r); chk("info: ZOOM FLIP shows the re-centre time", !strcmp(r[10].value, "120 MS"));
         d.zoom_ms = 0u; d.land_ms = 0u; d.copy_ms = 0u; gi_format(&d, r);
         chk("info: 0 ms is a time, not 'none yet'", !strcmp(r[7].value, "0 MS") && !strcmp(r[8].value, "0 MS") && !strcmp(r[9].value, "0 MS"));
         d.zoom_ms = 4000000000u; gi_format(&d, r); chk("info: a huge time still fits", strlen(r[7].value) <= 27u);

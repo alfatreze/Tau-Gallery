@@ -17,6 +17,7 @@ static uint16_t mem[HW_N];                         /* SDRAM, halfwords: the plan
 static uint16_t fb[512u * 1024u];                  /* the UI framebuffer, halfwords, stride 512 */
 static uint32_t clk, irq_pend, vid_req, vid_bus, vid_sw, vid_due, vbase, vstride, land_base, land_words, land_ovf, input_n;
 static int force_ovf, force_short, viewer_dead, fail_pic_reads, pass_pic_reads;
+static void pass_hook(void);                                                                  /* called once per pass of the firmware's loop (a read of the keys): defined after the firmware, which it looks into */
 static uint32_t blits_since_input, blit_max_pass; static uint32_t blit_cmds, blit_visible, blit_bad, blit_from_win, tile_reads, win_flips, last_win = 9u; static uint32_t clk_step = 50u, zoom_max_len, zoom_max_rs, reads_since_input; static int zoom_phase;      /* the zoom scenario: a frame a clock read, the longest card command and the most commands between two key polls */ static uint32_t text_mode;
 static uint32_t setw[16], setidx; static int set_writes;                  /* the settings register file (R_SET_IDX / R_SET_DAT) and how many words were written */
 static void tick(void) { if (!viewer_dead && vid_req != vid_bus && vid_due && clk >= vid_due) { vid_bus = vid_req; vid_sw++; vid_due = 0; } }
@@ -35,7 +36,7 @@ static uint32_t rd(uint32_t a)
     case 0x800001F8u: return 0x80000003u;
     case 0x80000070u: return setw[setidx & 15u];
     case 0x80000114u: return 0x80000000u | text_mode;
-    case 0x8000003Cu: reads_since_input = 0; blits_since_input = 0; return next_input();
+    case 0x8000003Cu: reads_since_input = 0; blits_since_input = 0; pass_hook(); return next_input();
     default: return 0;
     }
 }
@@ -168,6 +169,17 @@ static int plane_is_f(const char *fname)                                        
     for (uint32_t b = 0; b < 1728000u; b++) { const uint8_t got = (uint8_t)(mem[0x200000u + b / 2u] >> (8u * (b & 1u))); if (got != d[20480u + b]) bad++; }
     free(d); return bad == 0u;
 }
+static uint32_t ph_stall, ph_stall_max, ph_jump_max, ph_axx, ph_axy; static int32_t ph_px = -1, ph_py = -1;
+static void pass_hook(void)                                                                  /* a tile zoom: how far the shown view moved since the last pass, and for how many passes in a row it stood still while the wanted corner was elsewhere */
+{
+    if (!zoom_phase || zk < 0 || zl.layout != 1u || !z_shown) { ph_px = -1; ph_stall = 0u; return; }
+    if (ph_px >= 0) { const int32_t jx = abs(z_sx - ph_px), jy = abs(z_sy - ph_py), j = jx > jy ? jx : jy; if ((uint32_t)j > ph_jump_max) ph_jump_max = (uint32_t)j; }
+    if (ph_px >= 0 && z_sx != ph_px && z_sy == ph_py && z_wy != z_sy) ph_axx++;      /* a step along x alone while the wanted corner is off in y too: the one-axis fallback */
+    if (ph_px >= 0 && z_sy != ph_py && z_sx == ph_px && z_wx != z_sx) ph_axy++;
+    const int behind = z_sx != z_wx || z_sy != z_wy;
+    if (ph_px >= 0 && z_sx == ph_px && z_sy == ph_py && behind) { if (++ph_stall > ph_stall_max) ph_stall_max = ph_stall; } else ph_stall = 0u;
+    ph_px = z_sx; ph_py = z_sy;
+}
 static int count_text(const char *s) { int n = 0; for (int i = 0; i < 64; i++) if (!strcmp(texts[i], s)) n++; return n; }
 static int said(const char *s) { for (int i = 0; i < 64; i++) if (strstr(texts[i], s)) return 1; return 0; }
 static const char *last_text(void) { return texts[(ntext + 63) % 64]; }
@@ -238,7 +250,7 @@ static void checkpoint(int n)
     case 19: chk(27, said("ADD PHOTOS") && said("1/3") && !said("MENU")); clear_texts(); break;                                                                  /* Down, A: Help page 1 of 3 */
     case 20: chk(28, said("WHERE THINGS ARE") && said("2/3") && !said("ADD PHOTOS")); clear_texts(); break;                                                      /* Down turns the page */
     case 22: chk(30, said("INFO") && said("4D50331B") && said("800 X 720") && said("NONE YET") && said("LAST ERROR") && said("L1 LOADED 1 SAVED 0")); snprintf(want, sizeof want, "%u", count); chk(31, said(want)); clear_texts(); break;    /* Info before any picture was opened */
-    case 23: chk(32, said("4D50331B") && count_text("NONE YET") == 3 && said(" MS") && said("432128 WORDS, 0 LOST")); chk(33, said("NONE") && !said("FAILED")); chk(44, said("L1 LOADED 1 SAVED 1")); clear_texts(); break;   /* Info after viewing pictures: the last landing */
+    case 23: chk(32, said("4D50331B") && count_text("NONE YET") == 4 && said(" MS") && said("432128 WORDS, 0 LOST")); chk(33, said("NONE") && !said("FAILED")); chk(44, said("L1 LOADED 1 SAVED 1")); clear_texts(); break;   /* Info after viewing pictures: the last landing */
     case 24: chk(34, said("OPEN FAILED") && said("0 WORDS, 0 LOST")); clear_texts(); break;                                                                          /* Info after a failed open: the error, and no landing counts carried over */
     case 25: chk(35, said("RESUME LAST PICTURE") && said("ON") && !said("OFF")); clear_texts(); break;                                                                    /* Settings page, resume on (the default) */
     case 26: chk(36, said("OFF") && (setw[2] & 1u) == 0u && set_writes == 0); clear_texts(); break;                                                                   /* toggled off: shown, but not yet written */
@@ -299,13 +311,14 @@ static void checkpoint(int n)
     case 125: fail_pic_reads = 2; pass_pic_reads = 0; clear_texts(); break;
     case 126: chk(117, said("PICTURE READ FAILED") && vid_bus == 0u && fail_pic_reads == 0); break;                                                                          /* a raster chunk that cannot be read: back to the grid with the message */
     case 127: chk(118, t_recentre == 0u && t_front == 0u && win_flips == 0u && t_wx[0] == 512 && t_wy[0] == 256); break;                                                        /* a pan past the window margin and back: the re-centre that began was cancelled, the window stayed */
-    case 121: zoom_max_len = 0u; zoom_max_rs = 0u; tile_reads = 0u; blit_visible = 0u; blit_bad = 0u; blit_from_win = 0u; win_flips = 0u; blit_max_pass = 0u; break;                                          /* the picture has just been opened (its fit canvas landed in 128 KB commands): count the zoom's own commands from here */
+    case 121: zoom_max_len = 0u; zoom_max_rs = 0u; tile_reads = 0u; blit_visible = 0u; blit_bad = 0u; blit_from_win = 0u; win_flips = 0u; blit_max_pass = 0u; ph_stall_max = 0u; ph_jump_max = 0u; ph_axx = 0u; ph_axy = 0u; break;                                          /* the picture has just been opened (its fit canvas landed in 128 KB commands): count the zoom's own commands from here */
     case 113: { int32_t x = -1, y = -1; chk(107, tile_view_matches("z04.tgy", &x, &y) && x == 1200 && y == 1320); } break;                                                          /* R1 from the raster half: the tile 1:1 level, the screen centre kept (800, 840 becomes 1,600, 1,680) */
     case 114: { int32_t x = -1, y = -1; chk(108, view_matches("z04.tgy", &x, &y) && x == 400 && y == 480); } break;                                                                /* L1: back to the raster half, the centre kept */
     case 115: chk(109, zk == -1 && vbase == GAL_PLANE_BASE && plane_is_f("z04.tgy")); break;                                                                                  /* L1 again: the fit view */
-    case 117: { int32_t x = -1, y = -1; const uint32_t f0 = win_flips; (void)f0; chk(110, tile_view_matches("z05.tgy", &x, &y) && x == 1500 && t_recentre == 0u); chk(111, win_flips >= 1u && blit_from_win > 0u && blit_visible == 0u && blit_bad == 0u); } break;   /* panned to the right edge across window re-centres: exact, flipped windows, tiles reused by Talos copies, nothing written into the screen */
+    case 117: { int32_t x = -1, y = -1; const uint32_t f0 = win_flips; (void)f0; chk(110, tile_view_matches("z05.tgy", &x, &y) && x == 1500 && t_recentre == 0u); chk(111, win_flips >= 1u && blit_from_win > 0u && blit_visible == 0u && blit_bad == 0u); chk(122, ph_jump_max <= 16u && ph_stall_max <= 300u); chk(123, info.flip_ms != GI_NONE && info.flip_ms > 0u && info.flip_ms < 20000u); } break;      /* a long held pan: the shown view never moves more than 16 pixels in a pass and never stands still for more than a window's worth of tile copies (about 250 passes, bound 300) while the keys are ahead of it: it follows at the card's pace instead of freezing until the whole way is loaded */   /* panned to the right edge across window re-centres: exact, flipped windows, tiles reused by Talos copies, nothing written into the screen */
+    case 129: chk(124, ph_axx > 0u && ph_axy > 0u && ph_jump_max <= 16u); break;      /* a held diagonal pan: when the diagonal step's tiles are not whole the view still steps along one axis, each way */
     case 118: chk(112, fit_or_exact_tile("z05.tgy") && blit_visible == 0u); break;                                                                                           /* while loading under a held pan: the fit plane or an exact view, never an unloaded tile */
-    case 119: { int32_t x = -1, y = -1; chk(113, tile_view_matches("z05.tgy", &x, &y) && y == 780 && blit_visible == 0u); } break;                                          /* down to the bottom edge */
+    case 119: { int32_t x = -1, y = -1; chk(113, tile_view_matches("z05.tgy", &x, &y) && y == 780 && blit_visible == 0u && ph_jump_max <= 16u && ph_stall_max <= 300u); } break;                                          /* down to the bottom edge */
     case 120: { int32_t x = -1, y = -1; chk(114, tile_view_matches("z05.tgy", &x, &y) && x == 0 && y == 0 && blit_visible == 0u && blit_bad == 0u); } break;                   /* back to the top-left corner */
     case 101: fail_pic_reads = 2; pass_pic_reads = 0; clear_texts(); break;
     case 102: chk(101, said("PICTURE READ FAILED") && vid_bus == 0u && fail_pic_reads == 0); break;                                                                          /* the level cannot be read: back to the grid with the message */
@@ -347,6 +360,7 @@ int main(int argc, char **argv)
         S4[k++] = KEY_A; S4[k++] = 0; S4[k++] = KEY_A; S4[k++] = 0; HOLD(KEY_DOWN, 60); for (int i = 0; i < 40; i++) { HOLD(0, 10); S4[k++] = CP(118); }
         HOLD(KEY_DOWN, 200); HOLD(0, 900); S4[k++] = CP(119);
         HOLD(KEY_UP, 400); HOLD(KEY_LEFT, 500); HOLD(0, 1200); S4[k++] = CP(120);
+        HOLD(KEY_DOWN | KEY_RIGHT, 300); HOLD(0, 1500); S4[k++] = CP(129);
         S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 3); S4[k++] = CP(123); S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 450); S4[k++] = CP(124);
         S4[k++] = KEY_A; S4[k++] = 0; S4[k++] = CP(101); S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 12); S4[k++] = CP(102);
         S4[k++] = KEY_START; S4[k++] = 0; S4[k++] = KEY_DOWN; S4[k++] = 0; S4[k++] = KEY_DOWN; S4[k++] = 0; S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 3); S4[k++] = CP(128); S4[k++] = END;

@@ -147,7 +147,7 @@ static const char *const open_msg[] = { "", "OPEN FAILED", "HEADER READ FAILED",
 
 /* open_picture with the Info page's numbers: how long it took (ms), the landing's word counts (only when a landing ran), the status line text. */
 static void zoom_list(void);
-static gi_t info = { 0u, 0u, 0u, GI_NONE, 0u, 0u, 0, 0u, 0u, 0u, GI_NONE, GI_NONE, GI_NONE };
+static gi_t info = { 0u, 0u, 0u, GI_NONE, 0u, 0u, 0, 0u, 0u, 0u, GI_NONE, GI_NONE, GI_NONE, GI_NONE };
 static gs_vals_t gset; static uint32_t last_act;                                              /* the persisted settings; the clock of the last key or card read (a save waits for a quiet second after it) */
 static uint32_t path_crc(uint32_t i) { const char *s = ent[i - page * PER_PAGE].path; uint32_t n = 0; while (s[n]) n++; return gf_crc32((const uint8_t *)s, n) & GS_M31; }
 static void remember(uint32_t i) { gset.last_idx = i; gset.last_crc = path_crc(i); }       /* the picture the next start resumes on: only one the viewer has shown */
@@ -174,7 +174,7 @@ static int open_timed(uint32_t i, int show_progress)
 #define COPY_PER_PASS 64u                        /* Talos row-piece commands a pass */
 static gt_zoom_t zs[GV_MAX_STOPS], zl; static uint32_t zn; static int zk = -1;              /* the picture's zoom levels, the one in use, its index (-1: the fit view) */
 static gv_stop_t z_stop;
-static uint32_t z_t0, z_first, t_copy_cyc;                                                    /* the Info page's zoom timings: the clock at the key, 1 until the first view is on screen, the Talos cycles of the tile being copied */
+static uint32_t z_t0, z_first, t_copy_cyc, t_rc_t0;                                                    /* the Info page's zoom timings: the clock at the key, 1 until the first view is on screen, the Talos cycles of the tile being copied */
 static int32_t z_wx, z_wy, z_sx, z_sy; static uint32_t z_shown;                               /* the wanted and the shown corner (level pixels); 1 when a zoom view is on screen */
 static uint32_t z_stride_hw, z_nch, z_lo, z_hi;                                              /* option A: the level's row stride (halfwords), its chunks, the loaded chunk interval */
 static uint32_t t_front, t_job, t_k, t_src_hw, t_src_stride, t_dst_hw, t_job_col, t_job_row, t_job_win, t_recentre, t_shown_win;      /* option B: window on screen, the tile copy under way, a re-centre being composed */
@@ -201,7 +201,7 @@ static void zoom_leave(void)
 static void zoom_goto(int k)
 {
     int32_t x = 0, y = 0, fox, foy, tox = 0, toy = 0, nx = 0, ny = 0;
-    if (zk >= 0) { x = z_wx; y = z_wy; }
+    if (zk >= 0) { x = z_shown ? z_sx : z_wx; y = z_shown ? z_sy : z_wy; }                        /* the centre of what the screen shows, not of where the keys have taken the wanted corner */
     zoom_off(zk, &fox, &foy); const uint32_t sf = zoom_scale(zk);
     zoom_leave();
     if (k < 0) return;
@@ -226,8 +226,9 @@ static int zoom_land(uint32_t c)
     return 0;
 }
 /* One pass of the raster zoom loop: on a frame tick the held direction moves the wanted corner; one chunk lands; the screen follows inside the loaded rows. Returns 1 when a chunk could not be read. */
-static int raster_pass(int dirx, int diry, uint32_t held, int moving)
+static int raster_pass(int dirx, int diry, uint32_t held, int moving, int tick)
 {
+    (void)tick;
     if (moving) gv_move(&z_stop, &z_wx, &z_wy, dirx, diry, held);
     uint32_t c;
     if (gv_next_chunk(zl.stride, zl.len, z_nch, z_lo, z_hi, (uint32_t)z_wy, diry, &c)) {
@@ -272,36 +273,55 @@ static void tile_copy_step(void)                                                
     for (uint32_t n = 0; n < COPY_PER_PASS && t_k < GV_PIECES; n++, t_k++) { uint32_t so, dof; gv_piece(t_k, t_src_stride, &so, &dof); gfx_blit_raw(t_src_hw, t_dst_hw, so, dof, GV_PIECE_HW); }
     if (t_k >= GV_PIECES) { gfx_fence(); t_res[t_job_win][t_job_row * GV_WIN_TX + t_job_col] = 1u; t_job = 0u; t_copy_cyc += cycles() - tc; info.copy_ms = t_copy_cyc / (CLK_HZ / 1000u); } else t_copy_cyc += cycles() - tc;
 }
-/* One pass of the tile zoom loop. Returns 1 when a tile could not be read. */
-static int tile_pass(int dx, int dy, uint32_t held, int moving)
+#define FOLLOW_STEP 16                           /* pixels a frame the shown view moves toward the wanted corner when the tiles for the step are whole */
+#define SLACK 96                                 /* how far ahead of the shown view the windows are built, toward the wanted corner */
+static int32_t clampi(int32_t v, int32_t lo, int32_t hi) { return v < lo ? lo : v > hi ? hi : v; }
+static void tile_show(int32_t x, int32_t y)                                                  /* the viewport (x, y) from the front window */
+{
+    REG_WR(R_VIEW_STRIDE, GV_WIN_STRIDE_WORDS); REG_WR(R_VIEW_BASE, gv_win_base(win_base(t_front), x, y, t_wx[t_front], t_wy[t_front]));
+    z_sx = x; z_sy = y; z_shown = 1u; t_shown_win = t_front; zoom_shown_now();
+}
+/* One pass of the tile zoom loop. The keys move the WANTED corner (z_wx, z_wy) at once; the SHOWN view (z_sx, z_sy) follows it a step a frame, only where every tile of the step is whole, so a pan that outruns the card
+ * slows to the card's pace instead of freezing and jumping. The windows are built around the shown view pulled toward the wanted corner by at most SLACK, and the tiles are fetched in the order of that view.
+ * Returns 1 when a tile could not be read. */
+static int tile_pass(int dx, int dy, uint32_t held, int moving, int tick)
 {
     if (moving) gv_move(&z_stop, &z_wx, &z_wy, dx, dy, held);
+    int32_t px = z_wx, py = z_wy;
+    if (z_shown) { px = z_sx + clampi(z_wx - z_sx, -SLACK, SLACK); py = z_sy + clampi(z_wy - z_sy, -SLACK, SLACK); gv_clamp(&z_stop, &px, &py); }
     if (!t_job) {
         const uint32_t b = 1u - t_front;
         if (t_recentre) {
-            if (gv_window_ok(&z_stop, t_wx[t_front], t_wy[t_front], z_wx, z_wy)) t_recentre = 0u;                                  /* the view came back into the window on screen: nothing to compose */
-            else if (!gv_window_ok(&z_stop, t_wx[b], t_wy[b], z_wx, z_wy)) { gv_window_for(&z_stop, z_wx, z_wy, &t_wx[b], &t_wy[b]); res_clear(b); }      /* the view left the window being composed: aim it at the view now */
-        } else if (!gv_window_ok(&z_stop, t_wx[t_front], t_wy[t_front], z_wx, z_wy)) {                                         /* the wanted view is near the window's edge: compose a new window in the other buffer */
-            gv_window_for(&z_stop, z_wx, z_wy, &t_wx[b], &t_wy[b]); res_clear(b); t_recentre = 1u;
+            if (gv_window_ok(&z_stop, t_wx[t_front], t_wy[t_front], px, py)) t_recentre = 0u;                                  /* the view came back into the window on screen: nothing to compose */
+            else if (!gv_window_ok(&z_stop, t_wx[b], t_wy[b], px, py)) { gv_window_for(&z_stop, px, py, &t_wx[b], &t_wy[b]); res_clear(b); }      /* the view left the window being composed: aim it at the view now */
+        } else if (!gv_window_ok(&z_stop, t_wx[t_front], t_wy[t_front], px, py)) {                                             /* the view is near the window's edge: compose a new window in the other buffer */
+            gv_window_for(&z_stop, px, py, &t_wx[b], &t_wy[b]); res_clear(b); t_recentre = 1u; t_rc_t0 = cycles();
         }
     }
     const uint32_t tw = t_recentre ? 1u - t_front : t_front;
     if (t_job) tile_copy_step();
     else {
-        gv_tile_t need[GV_MAX_TILES]; const uint32_t n = gv_tiles_needed(&z_stop, z_wx, z_wy, t_wx[tw], t_wy[tw], dx, dy, need);
+        const int32_t cx = (t_recentre && z_shown) ? z_sx : px, cy = (t_recentre && z_shown) ? z_sy : py;                      /* while composing, the tiles of the view on screen first: they let the flip happen at once */
+        gv_tile_t need[GV_MAX_TILES]; const uint32_t n = gv_tiles_needed(&z_stop, cx, cy, t_wx[tw], t_wy[tw], dx, dy, need);
         for (uint32_t i = 0; i < n; i++) {
             int col, row; if (!gv_win_tile(t_wx[tw], t_wy[tw], need[i].tx, need[i].ty, &col, &row) || t_res[tw][row * GV_WIN_TX + col]) continue;
             if (tile_job_start(tw, col, row, need[i].tx, need[i].ty)) return 1;
             break;                                                                           /* one tile a pass: one card command */
         }
     }
-    if (t_recentre && !t_job && gv_screen_ready(&z_stop, z_wx, z_wy, t_wx[1u - t_front], t_wy[1u - t_front], t_res[1u - t_front])) { t_front = 1u - t_front; t_recentre = 0u; z_shown = 0u; }      /* the new window has the whole screen: flip */
-    if (gv_screen_ready(&z_stop, z_wx, z_wy, t_wx[t_front], t_wy[t_front], t_res[t_front]) && (!z_shown || z_wx != z_sx || z_wy != z_sy || t_front != t_shown_win)) {
-        REG_WR(R_VIEW_STRIDE, GV_WIN_STRIDE_WORDS); REG_WR(R_VIEW_BASE, gv_win_base(win_base(t_front), z_wx, z_wy, t_wx[t_front], t_wy[t_front])); z_sx = z_wx; z_sy = z_wy; z_shown = 1u; t_shown_win = t_front; zoom_shown_now();
+    const uint32_t b2 = 1u - t_front;
+    if (t_recentre && !t_job && (z_shown ? gv_screen_ready(&z_stop, z_sx, z_sy, t_wx[b2], t_wy[b2], t_res[b2]) : gv_screen_ready(&z_stop, px, py, t_wx[b2], t_wy[b2], t_res[b2]))) { t_front = b2; t_recentre = 0u; info.flip_ms = (cycles() - t_rc_t0) / (CLK_HZ / 1000u); }      /* the new window has the view on screen whole: flip */
+    if (!z_shown) { if (gv_screen_ready(&z_stop, z_wx, z_wy, t_wx[t_front], t_wy[t_front], t_res[t_front])) tile_show(z_wx, z_wy); return 0; }
+    if (t_front != t_shown_win) { tile_show(z_sx, z_sy); return 0; }                         /* the window flipped: the same view, from the new window */
+    if (tick && (z_sx != z_wx || z_sy != z_wy)) {                                            /* follow the wanted corner: diagonal if its tiles are whole, else along one axis */
+        const int32_t nx = z_sx + clampi(z_wx - z_sx, -FOLLOW_STEP, FOLLOW_STEP), ny = z_sy + clampi(z_wy - z_sy, -FOLLOW_STEP, FOLLOW_STEP);
+        if (gv_screen_ready(&z_stop, nx, ny, t_wx[t_front], t_wy[t_front], t_res[t_front])) tile_show(nx, ny);
+        else if (nx != z_sx && gv_screen_ready(&z_stop, nx, z_sy, t_wx[t_front], t_wy[t_front], t_res[t_front])) tile_show(nx, z_sy);
+        else if (ny != z_sy && gv_screen_ready(&z_stop, z_sx, ny, t_wx[t_front], t_wy[t_front], t_res[t_front])) tile_show(z_sx, ny);
     }
     return 0;
 }
-static int zoom_pass(int dx, int dy, uint32_t held, int moving) { return zl.layout == 0u ? raster_pass(dx, dy, held, moving) : tile_pass(dx, dy, held, moving); }
+static int zoom_pass(int dx, int dy, uint32_t held, int moving, int tick) { return zl.layout == 0u ? raster_pass(dx, dy, held, moving, tick) : tile_pass(dx, dy, held, moving, tick); }
 
 static void viewer(void)
 {
@@ -317,7 +337,7 @@ static void viewer(void)
             if (!((keys & KEY_SELECT) && (edge & (KEY_LEFT | KEY_RIGHT)))) {                          /* Select + Left/Right leave the zoom and go to the next picture below; anything else pans */
                 const int dx = (keys & KEY_RIGHT) ? 1 : (keys & KEY_LEFT) ? -1 : 0, dy = (keys & KEY_DOWN) ? 1 : (keys & KEY_UP) ? -1 : 0;
                 int tick = 0; if ((int32_t)(cycles() - next_tick) >= 0) { next_tick = cycles() + ZOOM_FRAME; tick = 1; held = (dx || dy) ? held + 1u : 0u; }
-                if (zoom_pass(dx, dy, held, tick && (dx || dy))) { zoom_goto(-1); gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); say("PICTURE READ FAILED", BAD); return; }
+                if (zoom_pass(dx, dy, held, tick && (dx || dy), tick)) { zoom_goto(-1); gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); say("PICTURE READ FAILED", BAD); return; }
                 continue;
             }
             zoom_goto(-1);

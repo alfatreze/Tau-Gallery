@@ -175,8 +175,8 @@ static inline int gt_input(gt_t *g, gt_look_t *l, uint32_t theme_n, uint32_t edg
 
 /* ---- Info: what the firmware knows about itself and the last picture it opened (M1.6 slice 2) ---- */
 #define GI_NONE 0xFFFFFFFFu                                          /* open_ms before any picture was opened */
-#define GI_ROWS 10u
-typedef struct { uint32_t core_version, count, view_caps, open_ms, words, lost; const char *err; uint32_t set_layout, set_loads, set_stores, zoom_ms, land_ms, copy_ms; } gi_t;      /* view_caps: R_VIEW_CAPS (bit 1 = the 800 x 720 viewer); err: the last status line, 0 = none */
+#define GI_ROWS 11u
+typedef struct { uint32_t core_version, count, view_caps, open_ms, words, lost; const char *err; uint32_t set_layout, set_loads, set_stores, zoom_ms, land_ms, copy_ms, flip_ms; } gi_t;      /* view_caps: R_VIEW_CAPS (bit 1 = the 800 x 720 viewer); err: the last status line, 0 = none */
 typedef struct { const char *label; char value[28]; } gi_row_t;
 static inline char *gi_s(char *q, const char *p) { while (*p) *q++ = *p++; return q; }
 static inline char *gi_u(char *q, uint32_t v) { char t[10]; uint32_t n = 0; do { t[n++] = (char)('0' + v % 10u); v /= 10u; } while (v); while (n) *q++ = t[--n]; return q; }
@@ -213,6 +213,7 @@ static inline void gi_format(const gi_t *d, gi_row_t r[GI_ROWS])
     r[8].label = "ZOOM LAND";    if (d->land_ms == GI_NONE) q = gi_s(r[8].value, "NONE YET"); else { q = gi_u(r[8].value, d->land_ms); q = gi_s(q, " MS"); } *q = 0;       /* the last tile or chunk of 48 KB, card to SDRAM */
 #endif
     r[9].label = "ZOOM COPY";    if (d->copy_ms == GI_NONE) q = gi_s(r[9].value, "NONE YET"); else { q = gi_u(r[9].value, d->copy_ms); q = gi_s(q, " MS"); } *q = 0;       /* the last tile through Talos, its 256 commands and the fence */
+    r[10].label = "ZOOM FLIP";   if (d->flip_ms == GI_NONE) q = gi_s(r[10].value, "NONE YET"); else { q = gi_u(r[10].value, d->flip_ms); q = gi_s(q, " MS"); } *q = 0;       /* the last window re-centre, from its start to the flip */
 }
 /* One key edge: returns 1 when the page should close (back to the menu). */
 static inline int gi_input(uint32_t edge) { return (edge & (GP_KEY_LEFT | GP_KEY_B)) != 0; }
