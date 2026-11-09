@@ -62,6 +62,13 @@ int main(void)
         chk("info: the settings row shows layout, loads and saves", !strcmp(r[6].label, "SETTINGS") && !strcmp(r[6].value, "L1 LOADED 3 SAVED 2"));
         d.set_layout = 99u; d.set_loads = 4000000000u; d.set_stores = 4000000000u; gi_format(&d, r);
         chk("info: huge counters are capped, the row still fits", !strcmp(r[6].value, "L15 LOADED 9999 SAVED 9999") && strlen(r[6].value) <= 27u);
+        d.zoom_ms = GI_NONE; d.land_ms = GI_NONE; d.copy_ms = GI_NONE; gi_format(&d, r);
+        chk("info: before any zoom the three zoom rows say NONE YET", !strcmp(r[7].label, "ZOOM OPEN") && !strcmp(r[8].label, "ZOOM LAND") && !strcmp(r[9].label, "ZOOM COPY") && !strcmp(r[7].value, "NONE YET") && !strcmp(r[8].value, "NONE YET") && !strcmp(r[9].value, "NONE YET"));
+        d.zoom_ms = 850u; d.land_ms = 31u; d.copy_ms = 6u; gi_format(&d, r);
+        chk("info: the zoom timings, each in its own row", !strcmp(r[7].value, "850 MS") && !strcmp(r[8].value, "31 MS") && !strcmp(r[9].value, "6 MS"));
+        d.zoom_ms = 0u; d.land_ms = 0u; d.copy_ms = 0u; gi_format(&d, r);
+        chk("info: 0 ms is a time, not 'none yet'", !strcmp(r[7].value, "0 MS") && !strcmp(r[8].value, "0 MS") && !strcmp(r[9].value, "0 MS"));
+        d.zoom_ms = 4000000000u; gi_format(&d, r); chk("info: a huge time still fits", strlen(r[7].value) <= 27u);
         chk("info: B and Left close, others do not", gi_input(GP_KEY_B) && gi_input(GP_KEY_LEFT) && !gi_input(GP_KEY_UP) && !gi_input(GP_KEY_A));
     }
     {

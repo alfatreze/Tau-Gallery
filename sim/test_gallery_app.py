@@ -133,7 +133,7 @@ def mutants(setdir):
             ("gallery_app.c", "    info.err = r ? open_msg[r] : 0;\n", "    info.err = r ? open_msg[r] : 0;\n    if (r == 0) remember(i);\n"),
             ("gallery_app.c", "if (gv_display_y(z_wy, rlo, rhi, &y) &&", "if ((y = z_wy, rhi >= rlo + GV_SCREEN_H) &&"),
             ("gallery_app.c", "REG_WR(R_LAND_BASE, GAL_ZOOM_BASE + c * (GV_CHUNK / 2u)); REG_WR(R_LAND_CTRL, 1u);", "REG_WR(R_LAND_BASE, GAL_ZOOM_BASE + c * (GV_CHUNK / 2u));"),
-            ("gallery_app.c", "len = rest < GV_CHUNK ? rest : GV_CHUNK;", "len = GV_CHUNK;"),
+            ("gallery_app.c", "len = rest < GV_CHUNK ? rest : GV_CHUNK,", "len = GV_CHUNK,"),
             ("gallery_app.c", "if (edge & (KEY_A | KEY_B)) { zoom_goto(-1); continue; }", "if (edge & KEY_A) { zoom_goto(-1); continue; }"),
             ("gallery_app.c", "REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16); REG_WR(R_VIEW_BASE, GAL_PLANE_BASE);              /* the fit plane", "REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16);              /* the fit plane"),
             ("gallery_app.c", "if (!((keys & KEY_SELECT) && (edge & (KEY_LEFT | KEY_RIGHT)))) {", "if (1) {"),
@@ -150,9 +150,12 @@ def mutants(setdir):
             ("gallery_app.c", "if (gv_window_ok(&z_stop, t_wx[t_front], t_wy[t_front], z_wx, z_wy)) t_recentre = 0u;", "if (0) t_recentre = 0u;"),
             ("gallery_app.c", "gv_map_corner(sf, fox, foy, zoom_scale(k), tox, toy, x, y, &nx, &ny);", "gv_map_corner(sf, fox, foy, zoom_scale(k), tox, toy, 0, 0, &nx, &ny);"),
             ("gallery_app.c", "if (zn > 0u) { zoom_goto((int)zn - 1);", "if (zn > 0u) { zoom_goto(0);"),
-            ("gallery_app.c", "const uint32_t off = gt_tile_off(&zl, (uint32_t)tx, (uint32_t)ty);\n    if (off == 0xFFFFFFFFu) return 0;\n    for (int attempt = 0; attempt < 2; attempt++) {", "const uint32_t off = gt_tile_off(&zl, (uint32_t)tx, (uint32_t)ty);\n    if (off == 0xFFFFFFFFu) return 0;\n    for (int attempt = 0; attempt < 1; attempt++) {"),
+            ("gallery_app.c", "    const uint32_t tc = cycles();\n    for (int attempt = 0; attempt < 2; attempt++) {\n        REG_WR(R_LAND_BASE, GAL_STAGE);", "    const uint32_t tc = cycles();\n    for (int attempt = 0; attempt < 1; attempt++) {\n        REG_WR(R_LAND_BASE, GAL_STAGE);"),
             ("gallery_app.c", "if (t_recentre && !t_job && gv_screen_ready(&z_stop, z_wx, z_wy, t_wx[1u - t_front], t_wy[1u - t_front], t_res[1u - t_front])) {", "if (t_recentre && !t_job && gv_window_ok(&z_stop, t_wx[1u - t_front], t_wy[1u - t_front], z_wx, z_wy)) {"),
             ("gallery_app.c", "if (edge & KEY_L1) { zoom_goto(zk > 0 ? zk - 1 : -1);", "if (edge & KEY_L1) { zoom_goto(zk > 0 ? zk - 1 : 0);"),
+            ("gallery_app.c", "info.land_ms = (cycles() - tc) / (CLK_HZ / 1000u); return 1; }\n    }\n    return 0;\n}\n/* One pass of the raster", "info.land_ms = (cycles() - tc) / (CLK_HZ / 100u); return 1; }\n    }\n    return 0;\n}\n/* One pass of the raster"),
+            ("gallery_app.c", "t_copy_cyc += cycles() - tc; info.copy_ms = t_copy_cyc / (CLK_HZ / 1000u); } else t_copy_cyc += cycles() - tc;", "info.copy_ms = (cycles() - tc) / (CLK_HZ / 1000u); } else t_copy_cyc += cycles() - tc;"),
+            ("gallery_app.c", "if (z_first) { z_first = 0u; info.zoom_ms = (cycles() - z_t0) / (CLK_HZ / 1000u); }", "if (z_first) { z_first = 0u; info.zoom_ms = 0u; }"),
             ("gallery_fmt.c", "return h->entries_off + i * GX_ENTRY_BYTES;" if False else "uint32_t gx_thumb_off(const gx_head_t *h, uint32_t thumb) { return h->atlas_off + thumb * GX_THUMB_BYTES; }", "uint32_t gx_thumb_off(const gx_head_t *h, uint32_t thumb) { return h->atlas_off + thumb * (GX_THUMB_BYTES - 2u); }")]
     bad = 0
     for i, (f, a, b) in enumerate(muts):

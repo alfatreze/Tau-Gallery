@@ -147,7 +147,7 @@ static const char *const open_msg[] = { "", "OPEN FAILED", "HEADER READ FAILED",
 
 /* open_picture with the Info page's numbers: how long it took (ms), the landing's word counts (only when a landing ran), the status line text. */
 static void zoom_list(void);
-static gi_t info = { 0u, 0u, 0u, GI_NONE, 0u, 0u, 0, 0u, 0u, 0u };
+static gi_t info = { 0u, 0u, 0u, GI_NONE, 0u, 0u, 0, 0u, 0u, 0u, GI_NONE, GI_NONE, GI_NONE };
 static gs_vals_t gset; static uint32_t last_act;                                              /* the persisted settings; the clock of the last key or card read (a save waits for a quiet second after it) */
 static uint32_t path_crc(uint32_t i) { const char *s = ent[i - page * PER_PAGE].path; uint32_t n = 0; while (s[n]) n++; return gf_crc32((const uint8_t *)s, n) & GS_M31; }
 static void remember(uint32_t i) { gset.last_idx = i; gset.last_crc = path_crc(i); }       /* the picture the next start resumes on: only one the viewer has shown */
@@ -174,6 +174,7 @@ static int open_timed(uint32_t i, int show_progress)
 #define COPY_PER_PASS 64u                        /* Talos row-piece commands a pass */
 static gt_zoom_t zs[GV_MAX_STOPS], zl; static uint32_t zn; static int zk = -1;              /* the picture's zoom levels, the one in use, its index (-1: the fit view) */
 static gv_stop_t z_stop;
+static uint32_t z_t0, z_first, t_copy_cyc;                                                    /* the Info page's zoom timings: the clock at the key, 1 until the first view is on screen, the Talos cycles of the tile being copied */
 static int32_t z_wx, z_wy, z_sx, z_sy; static uint32_t z_shown;                               /* the wanted and the shown corner (level pixels); 1 when a zoom view is on screen */
 static uint32_t z_stride_hw, z_nch, z_lo, z_hi;                                              /* option A: the level's row stride (halfwords), its chunks, the loaded chunk interval */
 static uint32_t t_front, t_job, t_k, t_src_hw, t_src_stride, t_dst_hw, t_job_col, t_job_row, t_job_win, t_recentre, t_shown_win;      /* option B: window on screen, the tile copy under way, a re-centre being composed */
@@ -189,6 +190,7 @@ static void zoom_off(int k, int32_t *ox, int32_t *oy)                           
     if (k < 0) { *ox = (int32_t)pic.rx; *oy = (int32_t)pic.ry; } else if (zs[k].layout == 0u) { *ox = (int32_t)zs[k].rx; *oy = (int32_t)zs[k].ry; } else { *ox = 0; *oy = 0; }
 }
 static uint32_t zoom_scale(int k) { return k < 0 ? (uint32_t)(((uint64_t)pic.rw * 65536u + pic.width / 2u) / pic.width) : zs[k].scale_q16; }
+static void zoom_shown_now(void) { if (z_first) { z_first = 0u; info.zoom_ms = (cycles() - z_t0) / (CLK_HZ / 1000u); } }       /* the first zoomed view is on screen */
 static void zoom_leave(void)
 {
     if (t_job) gfx_fence();                                                                  /* Talos commands of an abandoned copy retire before anything reuses their memory */
@@ -206,7 +208,7 @@ static void zoom_goto(int k)
     zoom_off(k, &tox, &toy);
     gv_map_corner(sf, fox, foy, zoom_scale(k), tox, toy, x, y, &nx, &ny);
     zl = zs[k]; zk = k; z_stop.w = zl.w; z_stop.h = zl.h; z_stop.scale_q16 = zl.scale_q16; gv_clamp(&z_stop, &nx, &ny);
-    z_wx = nx; z_wy = ny; z_sx = -1; z_sy = -1; z_shown = 0u;
+    z_wx = nx; z_wy = ny; z_sx = -1; z_sy = -1; z_shown = 0u; z_t0 = cycles(); z_first = 1u;
     if (zl.layout == 0u) { z_stride_hw = zl.stride / 2u; z_nch = gv_nchunks((zl.len + 4095u) & ~4095u); z_lo = 0u; z_hi = 0u; }
     else { t_front = 0u; gv_window_for(&z_stop, z_wx, z_wy, &t_wx[0], &t_wy[0]); res_clear(0u); }
 }
@@ -214,12 +216,12 @@ static void zoom_goto(int k)
 /* Lands chunk c of the level (a read of the file's own bytes, at the same offset of the zoom plane), once more on a failure. 1 when it landed with every word counted. */
 static int zoom_land(uint32_t c)
 {
-    const uint32_t padded = (zl.len + 4095u) & ~4095u, rest = padded - c * GV_CHUNK, len = rest < GV_CHUNK ? rest : GV_CHUNK;
+    const uint32_t padded = (zl.len + 4095u) & ~4095u, rest = padded - c * GV_CHUNK, len = rest < GV_CHUNK ? rest : GV_CHUNK, tc = cycles();
     for (int attempt = 0; attempt < 2; attempt++) {
         REG_WR(R_LAND_BASE, GAL_ZOOM_BASE + c * (GV_CHUNK / 2u)); REG_WR(R_LAND_CTRL, 1u);
         if (!slot_read_blocking(SLOT_PIC, zl.off + c * GV_CHUNK, 0x40000000u, len, CLK_HZ)) continue;
         const uint32_t t0 = cycles(); while (!(REG_RD(R_LAND_STATUS) & 1u) && (uint32_t)(cycles() - t0) < CLK_HZ / 10u) { }
-        if (REG_RD(R_LAND_OVF) == 0u && REG_RD(R_LAND_WORDS) == len / 4u) return 1;
+        if (REG_RD(R_LAND_OVF) == 0u && REG_RD(R_LAND_WORDS) == len / 4u) { info.land_ms = (cycles() - tc) / (CLK_HZ / 1000u); return 1; }
     }
     return 0;
 }
@@ -235,7 +237,7 @@ static int raster_pass(int dirx, int diry, uint32_t held, int moving)
     uint32_t rlo, rhi; int32_t y;
     gv_rows_loaded(zl.stride, zl.len, z_lo, z_hi, &rlo, &rhi);
     if (gv_display_y(z_wy, rlo, rhi, &y) && (!z_shown || y != z_sy || z_wx != z_sx)) {
-        REG_WR(R_VIEW_STRIDE, z_stride_hw); REG_WR(R_VIEW_BASE, gv_plane_base(GAL_ZOOM_BASE, z_stride_hw, z_wx, y)); z_sx = z_wx; z_sy = y; z_shown = 1u;
+        REG_WR(R_VIEW_STRIDE, z_stride_hw); REG_WR(R_VIEW_BASE, gv_plane_base(GAL_ZOOM_BASE, z_stride_hw, z_wx, y)); z_sx = z_wx; z_sy = y; z_shown = 1u; zoom_shown_now();
     }
     return 0;
 }
@@ -246,11 +248,12 @@ static int tile_land(int32_t tx, int32_t ty)
 {
     const uint32_t off = gt_tile_off(&zl, (uint32_t)tx, (uint32_t)ty);
     if (off == 0xFFFFFFFFu) return 0;
+    const uint32_t tc = cycles();
     for (int attempt = 0; attempt < 2; attempt++) {
         REG_WR(R_LAND_BASE, GAL_STAGE); REG_WR(R_LAND_CTRL, 1u);
         if (!slot_read_blocking(SLOT_PIC, off, 0x40000000u, GT_TILE_BYTES, CLK_HZ)) continue;
         const uint32_t t0 = cycles(); while (!(REG_RD(R_LAND_STATUS) & 1u) && (uint32_t)(cycles() - t0) < CLK_HZ / 10u) { }
-        if (REG_RD(R_LAND_OVF) == 0u && REG_RD(R_LAND_WORDS) == GT_TILE_BYTES / 4u) return 1;
+        if (REG_RD(R_LAND_OVF) == 0u && REG_RD(R_LAND_WORDS) == GT_TILE_BYTES / 4u) { info.land_ms = (cycles() - tc) / (CLK_HZ / 1000u); return 1; }
     }
     return 0;
 }
@@ -260,13 +263,14 @@ static int tile_job_start(uint32_t tw, int col, int row, int32_t tx, int32_t ty)
     int fc, fr;
     if (t_recentre && gv_win_tile(t_wx[t_front], t_wy[t_front], tx, ty, &fc, &fr) && t_res[t_front][fr * GV_WIN_TX + fc]) { t_src_hw = win_base(t_front) + gv_tile_hw(fc, fr); t_src_stride = GV_WIN_STRIDE_WORDS; }
     else { if (!tile_land(tx, ty)) return 1; t_src_hw = GAL_STAGE; t_src_stride = GV_TILE_HW; }
-    t_dst_hw = win_base(tw) + gv_tile_hw(col, row); t_job_win = tw; t_job_col = (uint32_t)col; t_job_row = (uint32_t)row; t_k = 0u; t_job = 1u;
+    t_dst_hw = win_base(tw) + gv_tile_hw(col, row); t_job_win = tw; t_job_col = (uint32_t)col; t_job_row = (uint32_t)row; t_k = 0u; t_job = 1u; t_copy_cyc = 0u;
     return 0;
 }
 static void tile_copy_step(void)                                                             /* up to COPY_PER_PASS row pieces; the tile counts as whole only after Talos has retired them all */
 {
+    const uint32_t tc = cycles();
     for (uint32_t n = 0; n < COPY_PER_PASS && t_k < GV_PIECES; n++, t_k++) { uint32_t so, dof; gv_piece(t_k, t_src_stride, &so, &dof); gfx_blit_raw(t_src_hw, t_dst_hw, so, dof, GV_PIECE_HW); }
-    if (t_k >= GV_PIECES) { gfx_fence(); t_res[t_job_win][t_job_row * GV_WIN_TX + t_job_col] = 1u; t_job = 0u; }
+    if (t_k >= GV_PIECES) { gfx_fence(); t_res[t_job_win][t_job_row * GV_WIN_TX + t_job_col] = 1u; t_job = 0u; t_copy_cyc += cycles() - tc; info.copy_ms = t_copy_cyc / (CLK_HZ / 1000u); } else t_copy_cyc += cycles() - tc;
 }
 /* One pass of the tile zoom loop. Returns 1 when a tile could not be read. */
 static int tile_pass(int dx, int dy, uint32_t held, int moving)
@@ -293,7 +297,7 @@ static int tile_pass(int dx, int dy, uint32_t held, int moving)
     }
     if (t_recentre && !t_job && gv_screen_ready(&z_stop, z_wx, z_wy, t_wx[1u - t_front], t_wy[1u - t_front], t_res[1u - t_front])) { t_front = 1u - t_front; t_recentre = 0u; z_shown = 0u; }      /* the new window has the whole screen: flip */
     if (gv_screen_ready(&z_stop, z_wx, z_wy, t_wx[t_front], t_wy[t_front], t_res[t_front]) && (!z_shown || z_wx != z_sx || z_wy != z_sy || t_front != t_shown_win)) {
-        REG_WR(R_VIEW_STRIDE, GV_WIN_STRIDE_WORDS); REG_WR(R_VIEW_BASE, gv_win_base(win_base(t_front), z_wx, z_wy, t_wx[t_front], t_wy[t_front])); z_sx = z_wx; z_sy = z_wy; z_shown = 1u; t_shown_win = t_front;
+        REG_WR(R_VIEW_STRIDE, GV_WIN_STRIDE_WORDS); REG_WR(R_VIEW_BASE, gv_win_base(win_base(t_front), z_wx, z_wy, t_wx[t_front], t_wy[t_front])); z_sx = z_wx; z_sy = z_wy; z_shown = 1u; t_shown_win = t_front; zoom_shown_now();
     }
     return 0;
 }

@@ -168,6 +168,7 @@ static int plane_is_f(const char *fname)                                        
     for (uint32_t b = 0; b < 1728000u; b++) { const uint8_t got = (uint8_t)(mem[0x200000u + b / 2u] >> (8u * (b & 1u))); if (got != d[20480u + b]) bad++; }
     free(d); return bad == 0u;
 }
+static int count_text(const char *s) { int n = 0; for (int i = 0; i < 64; i++) if (!strcmp(texts[i], s)) n++; return n; }
 static int said(const char *s) { for (int i = 0; i < 64; i++) if (strstr(texts[i], s)) return 1; return 0; }
 static const char *last_text(void) { return texts[(ntext + 63) % 64]; }
 static void clear_texts(void) { memset(texts, 0, sizeof texts); ntext = 0; }
@@ -237,7 +238,7 @@ static void checkpoint(int n)
     case 19: chk(27, said("ADD PHOTOS") && said("1/3") && !said("MENU")); clear_texts(); break;                                                                  /* Down, A: Help page 1 of 3 */
     case 20: chk(28, said("WHERE THINGS ARE") && said("2/3") && !said("ADD PHOTOS")); clear_texts(); break;                                                      /* Down turns the page */
     case 22: chk(30, said("INFO") && said("4D50331B") && said("800 X 720") && said("NONE YET") && said("LAST ERROR") && said("L1 LOADED 1 SAVED 0")); snprintf(want, sizeof want, "%u", count); chk(31, said(want)); clear_texts(); break;    /* Info before any picture was opened */
-    case 23: chk(32, said("4D50331B") && !said("NONE YET") && said(" MS") && said("432128 WORDS, 0 LOST")); chk(33, said("NONE") && !said("FAILED")); chk(44, said("L1 LOADED 1 SAVED 1")); clear_texts(); break;   /* Info after viewing pictures: the last landing */
+    case 23: chk(32, said("4D50331B") && count_text("NONE YET") == 3 && said(" MS") && said("432128 WORDS, 0 LOST")); chk(33, said("NONE") && !said("FAILED")); chk(44, said("L1 LOADED 1 SAVED 1")); clear_texts(); break;   /* Info after viewing pictures: the last landing */
     case 24: chk(34, said("OPEN FAILED") && said("0 WORDS, 0 LOST")); clear_texts(); break;                                                                          /* Info after a failed open: the error, and no landing counts carried over */
     case 25: chk(35, said("RESUME LAST PICTURE") && said("ON") && !said("OFF")); clear_texts(); break;                                                                    /* Settings page, resume on (the default) */
     case 26: chk(36, said("OFF") && (setw[2] & 1u) == 0u && set_writes == 0); clear_texts(); break;                                                                   /* toggled off: shown, but not yet written */
@@ -267,7 +268,7 @@ static void checkpoint(int n)
     case 74: chk(73, said("PICTURE READ FAILED") && vid_bus == 0u && fail_pic_reads == 0); clear_texts(); break;                                                                /* two failed reads: reported, the viewer stays off */
     case 81: chk(81, vid_bus == 1u && vbase == GAL_PLANE_BASE && plane_is_f("z00.tgy")); break;                                                                          /* A on picture 1: the fit canvas, as before */
     case 82: clk_step = 1000000u; zoom_max_len = 0u; zoom_max_rs = 0u; zoom_phase = 1; break;                                                                                 /* from here a clock read is a frame */
-    case 83: { int32_t x = -1, y = -1; chk(83, view_matches("z00.tgy", &x, &y) && x == 600 && y == 390); } break;                                                           /* A: the raster level of 2000 x 1500 lands; the screen opens on its middle, pixel exact */
+    case 83: { int32_t x = -1, y = -1; chk(83, view_matches("z00.tgy", &x, &y) && x == 600 && y == 390); chk(121, info.land_ms >= 50u && info.land_ms <= 100u && info.zoom_ms > 100u && info.copy_ms == GI_NONE); } break;      /* the raster path measured too: a 48 KB chunk, the first view, and no tile copy yet */                                                           /* A: the raster level of 2000 x 1500 lands; the screen opens on its middle, pixel exact */
     case 84: { int32_t x = -1, y = -1; chk(84, view_matches("z00.tgy", &x, &y) && x >= 724 && x <= 744 && (x & 3) == 0 && y == 390); } break;                                                /* about 20 frames held: 8 at 4 pixels, the rest at 8 (a held-count that never resets would give 900 or more) */                                 /* Right held: the view moved, aligned, exact */
     case 85: { int32_t x = -1, y = -1; chk(85, view_matches("z00.tgy", &x, &y) && x == 1200 && y == 390); } break;                                                           /* held on: it stops at the right edge */
     case 86: { int32_t x = -1, y = -1; chk(86, view_matches("z00.tgy", &x, &y) && x == 1200 && y >= 390 && y <= 780); } break;                                              /* Down held, loading behind: whatever is on screen is exactly the level */
@@ -293,6 +294,8 @@ static void checkpoint(int n)
     case 122: { int32_t x = -1, y = -1; chk(115, tile_view_matches("z04.tgy", &x, &y) && x == 1200 && y == 840); } break;                                                          /* A from the fit view takes the last stop: the tile 1:1 level, the centre kept (400, 300 of fit is 1,600, 1,200) */
     case 123: fail_pic_reads = 1; pass_pic_reads = 0; break;                                                                                                                 /* one tile read fails once */
     case 124: { int32_t x = -1, y = -1; chk(116, tile_view_matches("z05.tgy", &x, &y) && fail_pic_reads == 0); } break;                                                     /* the retry landed the tile: the view still comes up exact */
+    case 128: { char a[40], b[40], c[40]; snprintf(a, sizeof a, "%u MS", info.zoom_ms); snprintf(b, sizeof b, "%u MS", info.land_ms); snprintf(c, sizeof c, "%u MS", info.copy_ms);
+        chk(119, said("ZOOM OPEN") && said("ZOOM LAND") && said("ZOOM COPY") && said(a) && said(b) && said(c)); chk(120, info.zoom_ms != GI_NONE && info.zoom_ms > 100u && info.land_ms >= 50u && info.land_ms <= 100u && info.copy_ms >= 30u && info.copy_ms <= 150u); } break;      /* the Info page shows what the zoom measured: first view, a 48 KB land (57 ms of model card time plus clock reads), a tile copy */
     case 125: fail_pic_reads = 2; pass_pic_reads = 0; clear_texts(); break;
     case 126: chk(117, said("PICTURE READ FAILED") && vid_bus == 0u && fail_pic_reads == 0); break;                                                                          /* a raster chunk that cannot be read: back to the grid with the message */
     case 127: chk(118, t_recentre == 0u && t_front == 0u && win_flips == 0u && t_wx[0] == 512 && t_wy[0] == 256); break;                                                        /* a pan past the window margin and back: the re-centre that began was cancelled, the window stayed */
@@ -345,7 +348,8 @@ int main(int argc, char **argv)
         HOLD(KEY_DOWN, 200); HOLD(0, 900); S4[k++] = CP(119);
         HOLD(KEY_UP, 400); HOLD(KEY_LEFT, 500); HOLD(0, 1200); S4[k++] = CP(120);
         S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 3); S4[k++] = CP(123); S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 450); S4[k++] = CP(124);
-        S4[k++] = KEY_A; S4[k++] = 0; S4[k++] = CP(101); S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 12); S4[k++] = CP(102); S4[k++] = END;
+        S4[k++] = KEY_A; S4[k++] = 0; S4[k++] = CP(101); S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 12); S4[k++] = CP(102);
+        S4[k++] = KEY_START; S4[k++] = 0; S4[k++] = KEY_DOWN; S4[k++] = 0; S4[k++] = KEY_DOWN; S4[k++] = 0; S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 3); S4[k++] = CP(128); S4[k++] = END;
         nscript = k; memcpy(script, S4, (size_t)k * sizeof S4[0]);
         if (!setjmp(done)) gallery_app_main();
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
