@@ -48,7 +48,7 @@ int main(void)
     int okal = 1;
     for (int i = 0; i < 5000; i++) { x = (int32_t)(rnd() % 9000) - 2000; y = (int32_t)(rnd() % 9000) - 2000; gv_clamp(&s, &x, &y); if ((x & 3) || x < 0 || y < 0 || x > 3200 || y > 2280) okal = 0; }
     chk("clamp: 5,000 random positions are aligned and inside [0, size - screen]", okal);
-    chk("sizes: the window line (1,728 words) fits the 16-bit stride register, and the window is 3,538,944 bytes", GV_WIN_STRIDE_WORDS == 1728 && GV_WIN_STRIDE_WORDS < 65536 && (uint32_t)GV_WIN_W * GV_WIN_H * 3u == 3538944u);
+    chk("sizes: the window line (2,112 words) fits the 16-bit stride register, and the window is 5,406,720 bytes (11 x 10 tiles)", GV_WIN_STRIDE_WORDS == 2112 && GV_WIN_STRIDE_WORDS < 65536 && (uint32_t)GV_WIN_W * GV_WIN_H * 3u == 5406720u && GV_WIN_TX == 11 && GV_WIN_TY == 10);
 
     /* ---- the zoom mapping ---- */
     l = gv_ladder(4000, 3000); int32_t nx, ny;
@@ -200,21 +200,21 @@ int main(void)
     { int okw = 1; int col, row;
       for (int ty = 0; ty < 30; ty++) for (int tx = 0; tx < 40; tx++) { const int in = gv_win_tile(256, 384, tx, ty, &col, &row); const int want = tx >= 2 && tx < 2 + GV_WIN_TX && ty >= 3 && ty < 3 + GV_WIN_TY; if (in != want || (in && (col != tx - 2 || row != ty - 3))) okw = 0; }
       chk("window tile: a tile inside the window gets its column and row, any other is outside (window origin 256, 384)", okw); }
-    chk("tile offsets: (0,0) is 0, a column is 192 halfwords, a row is 128 window lines of 1,728", gv_tile_hw(0, 0) == 0u && gv_tile_hw(1, 0) == 192u && gv_tile_hw(0, 1) == 128u * 1728u && gv_tile_hw(8, 7) == 7u * 128u * 1728u + 8u * 192u);
-    chk("the last tile of the window ends inside it (1,769,472 halfwords)", gv_tile_hw(8, 7) + 127u * 1728u + 192u == GV_WIN_HW);
+    chk("tile offsets: (0,0) is 0, a column is 192 halfwords, a row is 128 window lines of 2,112", gv_tile_hw(0, 0) == 0u && gv_tile_hw(1, 0) == 192u && gv_tile_hw(0, 1) == 128u * 2112u && gv_tile_hw(10, 9) == 9u * 128u * 2112u + 10u * 192u);
+    chk("the last tile of the window ends inside it (2,703,360 halfwords)", gv_tile_hw(10, 9) + 127u * 2112u + 192u == GV_WIN_HW);
     { int okp = 1; static uint8_t hit[128][192]; memset(hit, 0, sizeof hit); uint32_t so, doff;
       for (uint32_t k = 0; k < GV_PIECES; k++) {
           gv_piece(k, 192u, &so, &doff);
-          const uint32_t row = doff / 1728u, c0 = doff % 1728u;
+          const uint32_t row = doff / 2112u, c0 = doff % 2112u;
           if (so != (k / 2u) * 192u + (k % 2u) * 96u || row != k / 2u || c0 != (k % 2u) * 96u || GV_PIECE_HW > 127u || so >= 524288u || doff >= 524288u) okp = 0;
           for (uint32_t i = 0; i < GV_PIECE_HW; i++) if (row < 128u && c0 + i < 192u) hit[row][c0 + i]++;
       }
       for (int r = 0; r < 128; r++) for (int c = 0; c < 192; c++) if (hit[r][c] != 1) okp = 0;
       chk("tile copy: 256 pieces of 96 halfwords cover every halfword of the tile once, each offset within the 19-bit command offset and the width within 127", okp && GV_PIECES == 256u); }
-    { uint32_t so, doff; gv_piece(255u, 1728u, &so, &doff); chk("a window-to-window piece reads rows 1,728 apart: piece 255 is row 127, second half", so == 127u * 1728u + 96u && doff == 127u * 1728u + 96u); }
+    { uint32_t so, doff; gv_piece(255u, 2112u, &so, &doff); chk("a window-to-window piece reads rows 2,112 apart: piece 255 is row 127, second half", so == 127u * 2112u + 96u && doff == 127u * 2112u + 96u); }
     { int okb = 1;
       for (int i = 0; i < 3000; i++) { const int32_t wx = (int32_t)(rnd() % 20u) * 128, wy = (int32_t)(rnd() % 20u) * 128, vx = wx + (int32_t)(rnd() % ((GV_WIN_W - 800) / 4u + 1u)) * 4, vy = wy + (int32_t)(rnd() % (GV_WIN_H - 720 + 1)); const uint32_t wb = 0x900000u;
-          const uint32_t base = gv_win_base(wb, vx, vy, wx, wy); if (base != wb + ((uint32_t)(vy - wy) * 1728u * 2u + (uint32_t)(vx - wx) * 3u) / 2u) okb = 0; }
+          const uint32_t base = gv_win_base(wb, vx, vy, wx, wy); if (base != wb + ((uint32_t)(vy - wy) * 2112u * 2u + (uint32_t)(vx - wx) * 3u) / 2u) okb = 0; }
       chk("window base: the halfword address of the viewport's first pixel, against the byte formula (3,000 cases)", okb); }
     { /* screen ready: every screen tile resident and the viewport inside the window */
       gv_stop_t s = gv_make_stop(4000, 3000, Q16); uint8_t res[GV_WIN_TX * GV_WIN_TY]; int32_t wx = 1024, wy = 768, vx = 1200, vy = 900;

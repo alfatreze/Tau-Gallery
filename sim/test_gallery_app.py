@@ -164,6 +164,12 @@ def mutants(setdir):
             ("gallery_app.c", "info.land_ms = (cycles() - tc) / (CLK_HZ / 1000u); return 1; }\n    }\n    return 0;\n}\n/* One pass of the raster", "info.land_ms = (cycles() - tc) / (CLK_HZ / 100u); return 1; }\n    }\n    return 0;\n}\n/* One pass of the raster"),
             ("gallery_app.c", "t_copy_cyc += cycles() - tc; info.copy_ms = t_copy_cyc / (CLK_HZ / 1000u); } else t_copy_cyc += cycles() - tc;", "info.copy_ms = (cycles() - tc) / (CLK_HZ / 1000u); } else t_copy_cyc += cycles() - tc;"),
             ("gallery_app.c", "if (z_first) { z_first = 0u; info.zoom_ms = (cycles() - z_t0) / (CLK_HZ / 1000u); }", "if (z_first) { z_first = 0u; info.zoom_ms = 0u; }"),
+            ("gallery_app.c", "if (w) gfx_rect(LDR_X, LDR_Y, w > LDR_W ? LDR_W : w, LDR_H, ACC);", "if (w) gfx_rect(LDR_X, LDR_Y, LDR_W, LDR_H, ACC);"),
+            ("gallery_app.c", "gfx_rect(LDR_X, LDR_Y, LDR_W, LDR_H, DIM);\n", "\n"),
+            ("gallery_app.c", "*q = 0; say(b, ACC); loader_bar(c + len, total); }", "*q = 0; say(b, ACC); }"),
+            ("gallery_app.c", 'if (show_progress) { say("OPENING", ACC); loader_bar(0u, 1u); }', 'if (show_progress) { say("OPENING", ACC); }'),
+            ("gallery_app.c", "loader_bar(c + len, total); }", "loader_bar(c, total); }"),
+            ("gallery_app.c", "#define LDR_Y 178u", "#define LDR_Y 200u"),
             ("gallery_app.c", "info.flip_ms = (cycles() - t_rc_t0) / (CLK_HZ / 1000u);", "info.flip_ms = 0u;"),
             ("gallery_fmt.c", "return h->entries_off + i * GX_ENTRY_BYTES;" if False else "uint32_t gx_thumb_off(const gx_head_t *h, uint32_t thumb) { return h->atlas_off + thumb * GX_THUMB_BYTES; }", "uint32_t gx_thumb_off(const gx_head_t *h, uint32_t thumb) { return h->atlas_off + thumb * (GX_THUMB_BYTES - 2u); }")]
     bad = 0

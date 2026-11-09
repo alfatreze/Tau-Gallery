@@ -116,6 +116,17 @@ static void select_to(uint32_t n)
 
 /* Lands the picture's fit canvas in the viewer plane. Returns 0 when it is there, else a code for the status line. */
 static uint8_t h4[4096]; static gt_info_t pic;                                    /* the first 4 KB of the open picture (its header and level table) and what gt_parse found in it */
+/* The loader: a slim bar (160 x 4) in the middle of the screen, a track in DIM and the done part in ACC, so a picture that takes a second or two to open shows it is moving. */
+#define LDR_X 120u
+#define LDR_Y 178u
+#define LDR_W 160u
+#define LDR_H 4u
+static void loader_bar(uint32_t done, uint32_t total)
+{
+    const uint32_t w = total ? (uint32_t)((uint64_t)done * LDR_W / total) : 0u;
+    gfx_rect(LDR_X, LDR_Y, LDR_W, LDR_H, DIM);
+    if (w) gfx_rect(LDR_X, LDR_Y, w > LDR_W ? LDR_W : w, LDR_H, ACC);
+}
 /* One landing of the canvas into the plane (restarts the landing counters). Returns 0, or 5 when a card read failed. */
 static int land_canvas(const gt_info_t *t, uint32_t total, int show_progress)
 {
@@ -123,7 +134,7 @@ static int land_canvas(const gt_info_t *t, uint32_t total, int show_progress)
     for (uint32_t c = 0; c < total; c += LAND_CHUNK) {
         const uint32_t len = total - c < LAND_CHUNK ? total - c : LAND_CHUNK;
         if (!slot_read_blocking(SLOT_PIC, t->canvas_off + c, 0x40000000u + c, len, CLK_HZ * 4u)) return 5;
-        if (show_progress) { char b[24], *q = put_s(b, "LOADING "); q = put_u(q, (c + len) * 100u / total); q = put_s(q, "%"); *q = 0; say(b, ACC); }
+        if (show_progress) { char b[24], *q = put_s(b, "LOADING "); q = put_u(q, (c + len) * 100u / total); q = put_s(q, "%"); *q = 0; say(b, ACC); loader_bar(c + len, total); }
     }
     return 0;
 }
@@ -131,7 +142,7 @@ static int open_picture(uint32_t i, int show_progress)
 {
     char path[GX_PATH_MAX + 2u]; path[0] = '/';
     { const char *s = ent[i - page * PER_PAGE].path; uint32_t n = 0; while (s[n] && n < GX_PATH_MAX) { path[1u + n] = s[n]; n++; } path[1u + n] = 0; }
-    if (show_progress) say("OPENING", ACC);
+    if (show_progress) { say("OPENING", ACC); loader_bar(0u, 1u); }
     if (!slot_open_path(SLOT_PIC, path)) return 1;
     if (!read_bytes(SLOT_PIC, 0u, 4096u, h4) && !read_bytes(SLOT_PIC, 0u, 4096u, h4)) return 2;      /* one retry of a failed read: a transient card error should not cost the picture */
     if (gt_parse(h4, 4096u, &pic)) return 3;
@@ -168,7 +179,7 @@ static int open_timed(uint32_t i, int show_progress)
  * (option B) is landed tile by tile (48 KB, one card command) into a staging area and copied by Talos, a row piece at a time, into a 9 x 8 tile resident window, with a second window composed for a re-centre and
  * flipped in. A takes the last stop and back to fit, L1 / R1 step the stops, the D-pad pans, B goes back to fit. The screen is shown only where every pixel has landed; one card command or a bounded number of
  * Talos commands a pass, so the keys are polled between. ---- */
-#define GAL_WIN0 0x900000u                       /* the resident windows (halfword addresses), 3.54 MB each, above the zoom plane (which ends at 0x400000 + 9 MiB / 2) */
+#define GAL_WIN0 0x900000u                       /* the resident windows (halfword addresses), 5.4 MB each, above the zoom plane (which ends at 0x400000 + 9 MiB / 2) */
 #define GAL_WIN1 (GAL_WIN0 + GV_WIN_HW)
 #define GAL_STAGE (GAL_WIN1 + GV_WIN_HW)         /* one landed tile (24,576 halfwords) before Talos copies it */
 #define COPY_PER_PASS 64u                        /* Talos row-piece commands a pass */

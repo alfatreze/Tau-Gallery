@@ -12,11 +12,11 @@
 #define GV_SCREEN_H 720
 #define GV_TILE 128
 #define GV_TILE_BYTES 49152u                 /* 128 x 128 x 3 */
-#define GV_WIN_TX 9                          /* the resident window, in tiles */
-#define GV_WIN_TY 8
-#define GV_WIN_W (GV_WIN_TX * GV_TILE)       /* 1,152 */
-#define GV_WIN_H (GV_WIN_TY * GV_TILE)       /* 1,024 */
-#define GV_WIN_STRIDE_WORDS (GV_WIN_W * 3 / 2)   /* 1,728 words a window line (R_VIEW_STRIDE takes 16 bits) */
+#define GV_WIN_TX 11                         /* the resident window, in tiles */
+#define GV_WIN_TY 10
+#define GV_WIN_W (GV_WIN_TX * GV_TILE)       /* 1,408 */
+#define GV_WIN_H (GV_WIN_TY * GV_TILE)       /* 1,280 */
+#define GV_WIN_STRIDE_WORDS (GV_WIN_W * 3 / 2)   /* 2,112 words a window line (R_VIEW_STRIDE takes 16 bits) */
 #define GV_MARGIN 64                         /* re-centre when the viewport is closer than this to a window edge that is not the level's edge */
 #define GV_CMD_MAX 49152u                    /* the most bytes of one card command while panning (about 30 ms): the keys are polled between commands */
 #define GV_MAX_STOPS 3

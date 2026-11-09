@@ -11,12 +11,14 @@
 #define P2_HOST 1
 #define HW_N (16u * 1024u * 1024u)
 #define T_WIN0 0x900000u                                       /* the resident windows and the staging area of the firmware (asserted equal to its own constants below) */
-#define T_WIN1 0xAB0000u
-#define T_STAGE 0xC60000u
+#define T_WIN1 0xB94000u
+#define T_STAGE 0xE28000u
 static uint16_t mem[HW_N];                         /* SDRAM, halfwords: the plane at 0x200000 */
 static uint16_t fb[512u * 1024u];                  /* the UI framebuffer, halfwords, stride 512 */
 static uint32_t clk, irq_pend, vid_req, vid_bus, vid_sw, vid_due, vbase, vstride, land_base, land_words, land_ovf, input_n;
 static int force_ovf, force_short, viewer_dead, fail_pic_reads, pass_pic_reads;
+static uint32_t rc_prev, rc_starts, rc_retarget; static int32_t rc_bx, rc_by;
+static void ldr_probe(uint32_t dst);
 static void pass_hook(void);                                                                  /* called once per pass of the firmware's loop (a read of the keys): defined after the firmware, which it looks into */
 static uint32_t blits_since_input, blit_max_pass; static uint32_t blit_cmds, blit_visible, blit_bad, blit_from_win, tile_reads, win_flips, last_win = 9u; static uint32_t clk_step = 50u, zoom_max_len, zoom_max_rs, reads_since_input; static int zoom_phase;      /* the zoom scenario: a frame a clock read, the longest card command and the most commands between two key polls */ static uint32_t text_mode;
 static uint32_t setw[16], setidx; static int set_writes;                  /* the settings register file (R_SET_IDX / R_SET_DAT) and how many words were written */
@@ -73,10 +75,13 @@ int slot_open_path(uint32_t slot, const char *path)
     free(pic_data); pic_data = slurp(f, &pic_len); return pic_data != 0;
 }
 uint32_t _tag_start[1024];
+static uint32_t rc_prev, rc_starts, rc_retarget; static int32_t rc_bx, rc_by;
+static uint32_t ldr_chunks, ldr_max, ldr_prev, ldr_first_ok = 1u, ldr_mono = 1u, ldr_skip, ldr_opens;
 int slot_read_blocking(uint32_t slot, uint32_t off, uint32_t dst, uint32_t len, uint32_t to)
 {
     (void)to; reads++;
     if (zoom_phase && slot == 2u && len == 49152u) tile_reads++;
+    if (!zoom_phase && slot == 2u && len == 131072u && dst >= 0x40000000u) ldr_probe(dst);
     if (zoom_phase && slot == 2u) { if (len > zoom_max_len) zoom_max_len = len; if (++reads_since_input > zoom_max_rs) zoom_max_rs = reads_since_input; }
     if (slot == 2u) { if (pass_pic_reads > 0) pass_pic_reads--; else if (fail_pic_reads > 0) { fail_pic_reads--; return 0; } }      /* a transient card error: after `pass` good reads the next `fail` reads of a picture fail */
     const uint8_t *src = slot == 5u ? idx_data : slot == 2u ? pic_data : 0; const uint32_t n = slot == 5u ? idx_len : pic_len;
@@ -103,7 +108,7 @@ void gfx_blit_raw(uint32_t sb, uint32_t db, uint32_t so, uint32_t dof, uint32_t 
     if (!w || w > 127u || so >= (1u << 19) || dof >= (1u << 19) || sb >= (1u << 25) || db >= (1u << 25)) { blit_bad++; return; }
     const uint32_t s = sb + so, d = db + dof; blit_cmds++; if (++blits_since_input > blit_max_pass) blit_max_pass = blits_since_input;
     if (s >= T_WIN0 && s < T_STAGE) blit_from_win++;
-    if (vstride == 1728u && vbase >= T_WIN0 && vbase < T_STAGE && d >= vbase) {                  /* the visible rows of the window being displayed: 720 lines of 1,200 halfwords */
+    if (vstride == 2112u && vbase >= T_WIN0 && vbase < T_STAGE && d >= vbase) {                  /* the visible rows of the window being displayed: 720 lines of 1,200 halfwords */
         const uint32_t rel = d - vbase, row = rel / vstride, col = rel % vstride;
         if ((row < 720u && col < 1200u) || (col + w > vstride && row + 1u < 720u)) blit_visible++;
     }
@@ -170,10 +175,23 @@ static int plane_is_f(const char *fname)                                        
     free(d); return bad == 0u;
 }
 static uint32_t ph_stall, ph_stall_max, ph_jump_max, ph_axx, ph_axy; static int32_t ph_px = -1, ph_py = -1;
+static void ldr_probe(uint32_t dst)      /* a chunk of a picture landing: what the loader bar shows before it (a track at the start, a fill that only grows). An open that shows no progress (a picture change in the viewer) leaves the last bar full under the viewer: its chunks are not judged */
+{
+    uint32_t fill = 0u; for (uint32_t i = 0; i < 160u; i++) if (fb[178u * 512u + 120u + i] == th_role[TR_ACCENT]) fill++;
+    if (dst == 0x40000000u) {
+        ldr_skip = fill == 160u; ldr_prev = 0u;
+        if (!ldr_skip) { const int track = fb[178u * 512u + 279u] == th_role[TR_TEXT_SECONDARY]; ldr_opens++; if (!(track && fill == 0u && fb[181u * 512u + 120u] != th_role[TR_BG_BOTTOM] && fb[177u * 512u + 120u] != th_role[TR_ACCENT] && fb[182u * 512u + 120u] != th_role[TR_ACCENT])) ldr_first_ok = 0u; }
+    }
+    if (ldr_skip) return;
+    if (fill < ldr_prev) ldr_mono = 0u;
+    ldr_prev = fill; if (fill > ldr_max) ldr_max = fill; ldr_chunks++;
+}
 static void pass_hook(void)                                                                  /* a tile zoom: how far the shown view moved since the last pass, and for how many passes in a row it stood still while the wanted corner was elsewhere */
 {
     if (!zoom_phase || zk < 0 || zl.layout != 1u || !z_shown) { ph_px = -1; ph_stall = 0u; return; }
     if (ph_px >= 0) { const int32_t jx = abs(z_sx - ph_px), jy = abs(z_sy - ph_py), j = jx > jy ? jx : jy; if ((uint32_t)j > ph_jump_max) ph_jump_max = (uint32_t)j; }
+    if (t_recentre && !rc_prev) rc_starts++; else if (t_recentre && rc_prev && (t_wx[1u - t_front] != rc_bx || t_wy[1u - t_front] != rc_by)) rc_retarget++;      /* a re-centre that started, and a window being composed that was aimed again */
+    rc_prev = t_recentre; rc_bx = t_wx[1u - t_front]; rc_by = t_wy[1u - t_front];
     if (ph_px >= 0 && z_sx != ph_px && z_sy == ph_py && z_wy != z_sy) ph_axx++;      /* a step along x alone while the wanted corner is off in y too: the one-axis fallback */
     if (ph_px >= 0 && z_sy != ph_py && z_sx == ph_px && z_wx != z_sx) ph_axy++;
     const int behind = z_sx != z_wx || z_sy != z_wy;
@@ -203,16 +221,16 @@ static int tile_view_matches(const char *fname, int32_t *ox, int32_t *oy)       
 {
     char f[600]; snprintf(f, sizeof f, "%s/%s", dir, fname); uint32_t n; uint8_t *d = slurp(f, &n); if (!d) return 0;
     gt_zoom_t z; int found = 0; for (uint32_t k = 0; k < 8u && !found; k++) { if (gt_zoom_level(d, n < 4096u ? n : 4096u, k, &z)) break; if (z.layout == 1u) found = 1; }
-    int ok = found && vstride == 1728u && vbase >= T_WIN0 && vbase < T_STAGE;
+    int ok = found && vstride == 2112u && vbase >= T_WIN0 && vbase < T_STAGE;
     if (ok) {
-        const uint32_t w = vbase >= T_WIN1 ? 1u : 0u, rel = vbase - (w ? T_WIN1 : T_WIN0), row = rel / 1728u, cx = rel % 1728u;
+        const uint32_t w = vbase >= T_WIN1 ? 1u : 0u, rel = vbase - (w ? T_WIN1 : T_WIN0), row = rel / 2112u, cx = rel % 2112u;
         const int32_t x = t_wx[w] + (int32_t)(cx / 6u * 4u), y = t_wy[w] + (int32_t)row;
         if (cx % 6u || x != z_sx || y != z_sy || w != t_shown_win || x + 800 > (int32_t)(z.ntx * 128u) || y + 720 > (int32_t)(z.nty * 128u)) ok = 0;
         else { *ox = x; *oy = y;
             for (uint32_t r = 0; r < 720u && ok; r++) for (uint32_t i = 0; i < 1200u; i++) {
                 const uint32_t bc = (uint32_t)x * 3u + 2u * i, tx = bc / 384u, within = bc % 384u, ra = (uint32_t)y + r, ty = ra / 128u;
                 const uint32_t o = z.off + ((ty * z.ntx + tx) * 128u + ra % 128u) * 384u + within;
-                if (mem[vbase + r * 1728u + i] != (uint16_t)(d[o] | d[o + 1u] << 8)) { ok = 0; break; } } }
+                if (mem[vbase + r * 2112u + i] != (uint16_t)(d[o] | d[o + 1u] << 8)) { ok = 0; break; } } }
     }
     free(d); return ok;
 }
@@ -250,7 +268,7 @@ static void checkpoint(int n)
     case 19: chk(27, said("ADD PHOTOS") && said("1/3") && !said("MENU")); clear_texts(); break;                                                                  /* Down, A: Help page 1 of 3 */
     case 20: chk(28, said("WHERE THINGS ARE") && said("2/3") && !said("ADD PHOTOS")); clear_texts(); break;                                                      /* Down turns the page */
     case 22: chk(30, said("INFO") && said("4D50331B") && said("800 X 720") && said("NONE YET") && said("LAST ERROR") && said("L1 LOADED 1 SAVED 0")); snprintf(want, sizeof want, "%u", count); chk(31, said(want)); clear_texts(); break;    /* Info before any picture was opened */
-    case 23: chk(32, said("4D50331B") && count_text("NONE YET") == 4 && said(" MS") && said("432128 WORDS, 0 LOST")); chk(33, said("NONE") && !said("FAILED")); chk(44, said("L1 LOADED 1 SAVED 1")); clear_texts(); break;   /* Info after viewing pictures: the last landing */
+    case 23: chk(32, said("4D50331B") && count_text("NONE YET") == 4 && said(" MS") && said("432128 WORDS, 0 LOST")); chk(33, said("NONE") && !said("FAILED")); chk(44, said("L1 LOADED 1 SAVED 1")); chk(125, ldr_opens > 0u && ldr_chunks > 0u && ldr_first_ok && ldr_mono && ldr_max >= 100u && ldr_max < 160u); clear_texts(); break;   /* Info after viewing pictures: the last landing */
     case 24: chk(34, said("OPEN FAILED") && said("0 WORDS, 0 LOST")); clear_texts(); break;                                                                          /* Info after a failed open: the error, and no landing counts carried over */
     case 25: chk(35, said("RESUME LAST PICTURE") && said("ON") && !said("OFF")); clear_texts(); break;                                                                    /* Settings page, resume on (the default) */
     case 26: chk(36, said("OFF") && (setw[2] & 1u) == 0u && set_writes == 0); clear_texts(); break;                                                                   /* toggled off: shown, but not yet written */
@@ -310,16 +328,17 @@ static void checkpoint(int n)
         chk(119, said("ZOOM OPEN") && said("ZOOM LAND") && said("ZOOM COPY") && said(a) && said(b) && said(c)); chk(120, info.zoom_ms != GI_NONE && info.zoom_ms > 100u && info.land_ms >= 50u && info.land_ms <= 100u && info.copy_ms >= 30u && info.copy_ms <= 150u); } break;      /* the Info page shows what the zoom measured: first view, a 48 KB land (57 ms of model card time plus clock reads), a tile copy */
     case 125: fail_pic_reads = 2; pass_pic_reads = 0; clear_texts(); break;
     case 126: chk(117, said("PICTURE READ FAILED") && vid_bus == 0u && fail_pic_reads == 0); break;                                                                          /* a raster chunk that cannot be read: back to the grid with the message */
-    case 127: chk(118, t_recentre == 0u && t_front == 0u && win_flips == 0u && t_wx[0] == 512 && t_wy[0] == 256); break;                                                        /* a pan past the window margin and back: the re-centre that began was cancelled, the window stayed */
-    case 121: zoom_max_len = 0u; zoom_max_rs = 0u; tile_reads = 0u; blit_visible = 0u; blit_bad = 0u; blit_from_win = 0u; win_flips = 0u; blit_max_pass = 0u; ph_stall_max = 0u; ph_jump_max = 0u; ph_axx = 0u; ph_axy = 0u; break;                                          /* the picture has just been opened (its fit canvas landed in 128 KB commands): count the zoom's own commands from here */
+    case 127: chk(118, t_recentre == 0u && t_front == 0u && win_flips == 0u && rc_starts >= 1u && t_wx[0] == 384 && t_wy[0] == 128); break;                                                        /* a pan past the window margin and back: the re-centre that began was cancelled, the window stayed */
+    case 121: zoom_max_len = 0u; zoom_max_rs = 0u; tile_reads = 0u; blit_visible = 0u; blit_bad = 0u; blit_from_win = 0u; win_flips = 0u; blit_max_pass = 0u; ph_stall_max = 0u; ph_jump_max = 0u; ph_axx = 0u; ph_axy = 0u; rc_starts = 0u; break;                                          /* the picture has just been opened (its fit canvas landed in 128 KB commands): count the zoom's own commands from here */
     case 113: { int32_t x = -1, y = -1; chk(107, tile_view_matches("z04.tgy", &x, &y) && x == 1200 && y == 1320); } break;                                                          /* R1 from the raster half: the tile 1:1 level, the screen centre kept (800, 840 becomes 1,600, 1,680) */
     case 114: { int32_t x = -1, y = -1; chk(108, view_matches("z04.tgy", &x, &y) && x == 400 && y == 480); } break;                                                                /* L1: back to the raster half, the centre kept */
     case 115: chk(109, zk == -1 && vbase == GAL_PLANE_BASE && plane_is_f("z04.tgy")); break;                                                                                  /* L1 again: the fit view */
     case 117: { int32_t x = -1, y = -1; const uint32_t f0 = win_flips; (void)f0; chk(110, tile_view_matches("z05.tgy", &x, &y) && x == 1500 && t_recentre == 0u); chk(111, win_flips >= 1u && blit_from_win > 0u && blit_visible == 0u && blit_bad == 0u); chk(122, ph_jump_max <= 16u && ph_stall_max <= 300u); chk(123, info.flip_ms != GI_NONE && info.flip_ms > 0u && info.flip_ms < 20000u); } break;      /* a long held pan: the shown view never moves more than 16 pixels in a pass and never stands still for more than a window's worth of tile copies (about 250 passes, bound 300) while the keys are ahead of it: it follows at the card's pace instead of freezing until the whole way is loaded */   /* panned to the right edge across window re-centres: exact, flipped windows, tiles reused by Talos copies, nothing written into the screen */
     case 129: chk(124, ph_axx > 0u && ph_axy > 0u && ph_jump_max <= 16u); break;      /* a held diagonal pan: when the diagonal step's tiles are not whole the view still steps along one axis, each way */
+    case 130: chk(126, rc_retarget >= 1u && ph_jump_max <= 16u); break;      /* right to a window edge, then down while the new window is composing: it is aimed again at where the view is now */
     case 118: chk(112, fit_or_exact_tile("z05.tgy") && blit_visible == 0u); break;                                                                                           /* while loading under a held pan: the fit plane or an exact view, never an unloaded tile */
     case 119: { int32_t x = -1, y = -1; chk(113, tile_view_matches("z05.tgy", &x, &y) && y == 780 && blit_visible == 0u && ph_jump_max <= 16u && ph_stall_max <= 300u); } break;                                          /* down to the bottom edge */
-    case 120: { int32_t x = -1, y = -1; chk(114, tile_view_matches("z05.tgy", &x, &y) && x == 0 && y == 0 && blit_visible == 0u && blit_bad == 0u); } break;                   /* back to the top-left corner */
+    case 120: { int32_t x = -1, y = -1; chk(114, tile_view_matches("z05.tgy", &x, &y) && x == 0 && y == 0 && blit_visible == 0u && blit_bad == 0u); rc_retarget = 0u; } break;                   /* back to the top-left corner */
     case 101: fail_pic_reads = 2; pass_pic_reads = 0; clear_texts(); break;
     case 102: chk(101, said("PICTURE READ FAILED") && vid_bus == 0u && fail_pic_reads == 0); break;                                                                          /* the level cannot be read: back to the grid with the message */
     case 21: snprintf(want, sizeof want, "1/%u", count); chk(29, thumbs_on_screen(0, count < 16u ? count : 16u) && said(want) && said("TAU GALLERY")); break;   /* B, B: the grid again, thumbnails and footer redrawn */
@@ -355,11 +374,12 @@ int main(int argc, char **argv)
         S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 600); S4[k++] = CP(122); S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 3);
         S4[k++] = CP(125); S4[k++] = KEY_R1; S4[k++] = 0; HOLD(0, 12); S4[k++] = CP(126);                          /* the raster half of z04 cannot be read: the grid */
         S4[k++] = KEY_RIGHT; S4[k++] = 0; S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 3); S4[k++] = CP(121); S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 450); S4[k++] = CP(103);   /* z05: open it from the grid; A takes its only stop, a tile level */
-        HOLD(KEY_RIGHT, 14); HOLD(KEY_LEFT, 20); HOLD(0, 30); S4[k++] = CP(127);
+        HOLD(KEY_RIGHT, 40); HOLD(KEY_LEFT, 30); HOLD(0, 30); S4[k++] = CP(127);
         HOLD(KEY_RIGHT, 300); HOLD(0, 800); S4[k++] = CP(117);
         S4[k++] = KEY_A; S4[k++] = 0; S4[k++] = KEY_A; S4[k++] = 0; HOLD(KEY_DOWN, 60); for (int i = 0; i < 40; i++) { HOLD(0, 10); S4[k++] = CP(118); }
         HOLD(KEY_DOWN, 200); HOLD(0, 900); S4[k++] = CP(119);
         HOLD(KEY_UP, 400); HOLD(KEY_LEFT, 500); HOLD(0, 1200); S4[k++] = CP(120);
+        HOLD(KEY_RIGHT, 200); HOLD(KEY_DOWN, 200); HOLD(KEY_RIGHT, 200); HOLD(0, 1500); S4[k++] = CP(130);
         HOLD(KEY_DOWN | KEY_RIGHT, 300); HOLD(0, 1500); S4[k++] = CP(129);
         S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 3); S4[k++] = CP(123); S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 450); S4[k++] = CP(124);
         S4[k++] = KEY_A; S4[k++] = 0; S4[k++] = CP(101); S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 12); S4[k++] = CP(102);
