@@ -57,3 +57,27 @@ int gt_parse(const uint8_t *b, uint32_t n, gt_info_t *t)
     }
     return GF_NOLEVEL;
 }
+
+int gt_zoom_level(const uint8_t *b, uint32_t n, uint32_t k, gt_zoom_t *z)
+{
+    if (n < 128u) return GF_SHORT;
+    if (b[0] != 'T' || b[1] != 'G' || b[2] != 'Y' || b[3] != 0) return GF_MAGIC;
+    if (rd16(b + 4) != 0u || rd16(b + 6) != 64u) return GF_VERSION;
+    if (gf_crc32(b, 52u) != rd32(b + 52)) return GF_CRC;
+    const uint32_t nlev = rd32(b + 20), lt = rd32(b + 24), fsize = rd32(b + 48), width = rd32(b + 8);
+    if (lt < 64u || nlev == 0u || nlev > 16u || lt + nlev * 48u > n || width == 0u) return GF_RANGE;
+    uint32_t seen = 0;
+    for (uint32_t i = 0; i < nlev; i++) {
+        const uint8_t *e = b + lt + i * 48u;
+        if (e[16] != 1u || e[17] != 0u || e[18] != 0u || e[19] != 1u) continue;                          /* layout tile128, mode RAW, RGB888, kind zoom: anything else is not ours */
+        if (seen++ != k) continue;
+        const uint32_t w = rd32(e), h = rd32(e + 4), off = rd32(e + 24), len = rd32(e + 28);
+        if (w == 0u || h == 0u || w > 16384u || h > 16384u || rd32(e + 20) != GT_TILE * 3u) return GF_RANGE;
+        const uint32_t ntx = (w + GT_TILE - 1u) / GT_TILE, nty = (h + GT_TILE - 1u) / GT_TILE;
+        if (len != ntx * nty * GT_TILE_BYTES || off < 128u || (off & 4095u) || off > fsize || len > fsize - off) return GF_RANGE;
+        z->w = w; z->h = h; z->off = off; z->len = len; z->ntx = ntx; z->nty = nty; z->scale_q16 = (uint32_t)(((uint64_t)w * 65536u + width / 2u) / width);
+        return GF_OK;
+    }
+    return GF_NOLEVEL;
+}
+uint32_t gt_tile_off(const gt_zoom_t *z, uint32_t tx, uint32_t ty) { return (tx < z->ntx && ty < z->nty) ? z->off + (ty * z->ntx + tx) * GT_TILE_BYTES : 0xFFFFFFFFu; }

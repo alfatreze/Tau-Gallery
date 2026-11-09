@@ -1,0 +1,202 @@
+/* fw2/gallery/gallery_view.h -- Tau Gallery M2.1 (docs/M2_DESIGN.md section 4): the rules of the zoomed viewer, as pure functions. No registers, no drawing. Host-tested (sim/test_gallery_view.py).
+ * A picture has a ladder of at most three stops (fit, 1/2, 1:1). A viewport is the top-left corner of the 800 x 720 screen inside one stop's pixels. The tiles of a stop are 128 x 128; a resident window of
+ * 9 x 8 tiles (1,152 x 1,024 pixels) holds the viewport plus a ring; a pan inside it only changes the base register, the window re-centres when the viewport nears its edge. Positions are int32 pixels; a
+ * negative x or y is an axis shorter than the screen, centred (nothing to pan). */
+#ifndef GALLERY_VIEW_H
+#define GALLERY_VIEW_H
+#include <stdint.h>
+#ifndef BUG
+#define BUG 0
+#endif
+#define GV_SCREEN_W 800
+#define GV_SCREEN_H 720
+#define GV_TILE 128
+#define GV_TILE_BYTES 49152u                 /* 128 x 128 x 3 */
+#define GV_WIN_TX 9                          /* the resident window, in tiles */
+#define GV_WIN_TY 8
+#define GV_WIN_W (GV_WIN_TX * GV_TILE)       /* 1,152 */
+#define GV_WIN_H (GV_WIN_TY * GV_TILE)       /* 1,024 */
+#define GV_WIN_STRIDE_WORDS (GV_WIN_W * 3 / 2)   /* 1,728 words a window line (R_VIEW_STRIDE takes 16 bits) */
+#define GV_MARGIN 64                         /* re-centre when the viewport is closer than this to a window edge that is not the level's edge */
+#define GV_CMD_MAX 49152u                    /* the most bytes of one card command while panning (about 30 ms): the keys are polled between commands */
+#define GV_MAX_STOPS 3
+#define GV_MAX_TILES (GV_WIN_TX * GV_WIN_TY)
+#define Q16 65536
+
+/* ---- the ladder ---- */
+typedef struct { uint32_t w, h, scale_q16; } gv_stop_t;      /* the stop's size in its own pixels, and its scale against the source (Q16) */
+typedef struct { gv_stop_t stop[GV_MAX_STOPS]; uint32_t n; } gv_ladder_t;
+static inline uint32_t gv_round_div(uint64_t a, uint64_t b) { return (uint32_t)((a + b / 2u) / b); }
+static inline gv_stop_t gv_make_stop(uint32_t sw, uint32_t sh, uint32_t scale_q16)
+{
+    gv_stop_t s; s.scale_q16 = scale_q16;
+    s.w = gv_round_div((uint64_t)sw * scale_q16, Q16); s.h = gv_round_div((uint64_t)sh * scale_q16, Q16);
+    if (s.w == 0u) s.w = 1u;
+    if (s.h == 0u) s.h = 1u;
+    return s;
+}
+/* The stops for a source of sw x sh pixels. Fit is the M1 canvas (never enlarged). 1/2 only for a big source (1,600 pixels wide or 1,440 tall) and only when it is at least 1.5x past the previous stop;
+ * 1:1 only when the source is larger than the screen. A source no larger than the screen has the one stop. */
+static inline gv_ladder_t gv_ladder(uint32_t sw, uint32_t sh)
+{
+    gv_ladder_t l; uint32_t fq = Q16;
+    l.n = 0;
+    { uint64_t a = (uint64_t)GV_SCREEN_W * Q16 / sw, b = (uint64_t)GV_SCREEN_H * Q16 / sh; fq = (uint32_t)(a < b ? a : b); if (fq > (uint32_t)Q16) fq = Q16; }
+    l.stop[l.n++] = gv_make_stop(sw, sh, fq);
+    const int big = sw > (uint32_t)GV_SCREEN_W || sh > (uint32_t)GV_SCREEN_H;
+    if (!big) return l;
+#if BUG == 8
+    if (sw >= 1600u || sh >= 1440u) {                                                            /* no 1.5x rule: a half stop right next to fit */
+#else
+    if ((sw >= 1600u || sh >= 1440u) && (uint64_t)(Q16 / 2) * 2u >= (uint64_t)fq * 3u) {           /* 0.5 >= 1.5 * fit */
+#endif
+        l.stop[l.n++] = gv_make_stop(sw, sh, Q16 / 2);
+    }
+    l.stop[l.n++] = gv_make_stop(sw, sh, Q16);
+    return l;
+}
+/* A (the fit/1:1 key): from fit to the last stop, from any other stop back to fit. */
+static inline uint32_t gv_toggle(const gv_ladder_t *l, uint32_t cur) { return cur == 0u ? l->n - 1u : 0u; }
+/* L1 / R1: one stop out or in, no wrap. */
+static inline uint32_t gv_zoom_step(const gv_ladder_t *l, uint32_t cur, int dir) { return dir > 0 ? (cur + 1u < l->n ? cur + 1u : cur) : (cur ? cur - 1u : 0u); }
+
+/* ---- clamp and alignment ---- */
+static inline int32_t gv_floor4(int32_t v) { return v & ~3; }
+static inline int32_t gv_clamp_axis(int32_t v, int32_t size, int32_t screen, int align)
+{
+    if (size <= screen) { int32_t o = (screen - size) / 2; return -(o & ~1); }              /* centred: an even offset, as the M1 canvas */
+    int32_t hi = size - screen;
+    if (align) hi = (hi + 3) & ~3;                                                           /* the last true column is reachable; the 0 to 3 columns past the edge are the tile padding (black) */
+    if (v < 0) v = 0;
+    if (align) v = gv_floor4(v);
+    if (v > hi) v = hi;
+    return v;
+}
+static inline void gv_clamp(const gv_stop_t *s, int32_t *x, int32_t *y)
+{
+#if BUG == 2
+    *x = gv_clamp_axis(*x, (int32_t)s->w, GV_SCREEN_W, 0);                                   /* the 4-pixel alignment is dropped */
+#else
+    *x = gv_clamp_axis(*x, (int32_t)s->w, GV_SCREEN_W, 1);
+#endif
+#if BUG == 1
+    *y = gv_clamp_axis(*y, (int32_t)s->h, GV_SCREEN_H + 1, 0);                               /* the bottom limit is one row too low */
+#else
+    *y = gv_clamp_axis(*y, (int32_t)s->h, GV_SCREEN_H, 0);
+#endif
+}
+/* The stored size of a stop: the tiles are whole, the padding is black. */
+static inline uint32_t gv_storage(uint32_t v) { return (v + GV_TILE - 1u) / GV_TILE * GV_TILE; }
+
+/* ---- the zoom mapping: the centre of the screen stays on the same point of the picture ---- */
+static inline void gv_zoom_map(const gv_stop_t *from, const gv_stop_t *to, int32_t x, int32_t y, int32_t *nx, int32_t *ny)
+{
+    const int64_t cx = (int64_t)x + GV_SCREEN_W / 2, cy = (int64_t)y + GV_SCREEN_H / 2;      /* the screen centre in the old stop (for a centred axis this is size / 2) */
+#if BUG == 4
+    int64_t tx = (int64_t)x * to->scale_q16 / from->scale_q16, ty = (int64_t)y * to->scale_q16 / from->scale_q16;      /* the corner is scaled, not the centre */
+    *nx = (int32_t)tx; *ny = (int32_t)ty;
+#else
+    const int64_t tcx = cx * to->scale_q16 / from->scale_q16, tcy = cy * to->scale_q16 / from->scale_q16;
+    *nx = (int32_t)(tcx - GV_SCREEN_W / 2); *ny = (int32_t)(tcy - GV_SCREEN_H / 2);
+#endif
+    gv_clamp(to, nx, ny);
+}
+
+/* ---- pan speed and movement ---- */
+static inline int32_t gv_speed(uint32_t held_frames)
+{
+#if BUG == 5
+    return held_frames < 8u ? 4 : held_frames < 24u ? 8 : 18;                                /* a final speed that is not a multiple of 4 pixels */
+#else
+    return held_frames < 8u ? 4 : held_frames < 24u ? 8 : 16;
+#endif
+}
+/* One frame of a held direction (dirx, diry in -1, 0, 1). */
+static inline void gv_move(const gv_stop_t *s, int32_t *x, int32_t *y, int dirx, int diry, uint32_t held)
+{
+    const int32_t st = gv_speed(held);
+    *x += dirx * st; *y += diry * st;
+    gv_clamp(s, x, y);
+}
+
+/* ---- the tiles a viewport needs ---- */
+typedef struct { int16_t tx, ty; uint8_t ring; } gv_tile_t;      /* ring = 0 for a tile the screen touches, 1 for one of the one-tile ring */
+static inline int32_t gv_floordiv(int32_t a, int32_t b) { int32_t q = a / b; if ((a % b != 0) && ((a < 0) != (b < 0))) q--; return q; }
+/* The window origin (tile aligned, in stop pixels) that puts the viewport near the middle of the window, clamped to the stored stop. */
+static inline void gv_window_for(const gv_stop_t *s, int32_t vx, int32_t vy, int32_t *wx, int32_t *wy)
+{
+    const int32_t sw = (int32_t)gv_storage(s->w), sh = (int32_t)gv_storage(s->h);
+    int32_t ox = gv_floordiv(vx + GV_SCREEN_W / 2 - GV_WIN_W / 2 + GV_TILE / 2, GV_TILE) * GV_TILE, oy = gv_floordiv(vy + GV_SCREEN_H / 2 - GV_WIN_H / 2 + GV_TILE / 2, GV_TILE) * GV_TILE;
+#if BUG == 7
+    (void)sh;
+#else
+    if (oy > sh - GV_WIN_H) oy = sh - GV_WIN_H;
+    if (ox > sw - GV_WIN_W) ox = sw - GV_WIN_W;
+#endif
+    if (ox < 0) ox = 0;
+    if (oy < 0) oy = 0;
+    *wx = ox; *wy = oy;
+}
+/* 1 when the viewport still has GV_MARGIN pixels to every window edge, except an edge that is the edge of the stored stop (nothing lies beyond it). */
+static inline int gv_window_ok(const gv_stop_t *s, int32_t wx, int32_t wy, int32_t vx, int32_t vy)
+{
+    const int32_t sw = (int32_t)gv_storage(s->w), sh = (int32_t)gv_storage(s->h);
+    if (vx < wx || vy < wy || vx + GV_SCREEN_W > wx + GV_WIN_W || vy + GV_SCREEN_H > wy + GV_WIN_H) return s->w <= GV_SCREEN_W && s->h <= GV_SCREEN_H;      /* a stop no bigger than the screen has no window to leave */
+    if (wx > 0 && vx - wx < GV_MARGIN) return 0;
+    if (wy > 0 && vy - wy < GV_MARGIN) return 0;
+    if (wx + GV_WIN_W < sw && (wx + GV_WIN_W) - (vx + GV_SCREEN_W) < GV_MARGIN) return 0;
+    if (wy + GV_WIN_H < sh && (wy + GV_WIN_H) - (vy + GV_SCREEN_H) < GV_MARGIN) return 0;
+    return 1;
+}
+/* The tiles of the window for a viewport, screen tiles first (nearest the screen centre first), then the ring (the ones ahead in the direction of travel first). dx, dy: the direction of travel. Returns the count (at most GV_MAX_TILES). */
+static inline uint32_t gv_tiles_needed(const gv_stop_t *s, int32_t vx, int32_t vy, int32_t wx, int32_t wy, int dx, int dy, gv_tile_t *out)
+{
+    const int32_t ntx = (int32_t)gv_storage(s->w) / GV_TILE, nty = (int32_t)gv_storage(s->h) / GV_TILE;
+    const int32_t cx = vx + GV_SCREEN_W / 2, cy = vy + GV_SCREEN_H / 2;
+    int32_t key[GV_MAX_TILES]; uint32_t n = 0;
+    for (int32_t ty = wy / GV_TILE; ty < wy / GV_TILE + GV_WIN_TY && ty < nty; ty++) {
+        for (int32_t tx = wx / GV_TILE; tx < wx / GV_TILE + GV_WIN_TX && tx < ntx; tx++) {
+            const int32_t x0 = tx * GV_TILE, y0 = ty * GV_TILE;
+#if BUG == 3
+            const int on = x0 < vx + GV_SCREEN_W - GV_TILE && x0 + GV_TILE > vx && y0 < vy + GV_SCREEN_H && y0 + GV_TILE > vy;      /* the last column of tiles is missed */
+#else
+            const int on = x0 < vx + GV_SCREEN_W && x0 + GV_TILE > vx && y0 < vy + GV_SCREEN_H && y0 + GV_TILE > vy;
+#endif
+            const int32_t mx = x0 + GV_TILE / 2 - cx, my = y0 + GV_TILE / 2 - cy;
+            /* screen tiles: by distance to the screen centre; ring tiles: by how far ahead they lie (the larger the dot product with the direction, the earlier) */
+            int32_t k = on ? (mx * mx + my * my) / 16 : 0x40000000 - (mx * dx + my * dy) / 16 + (mx * mx + my * my) / 4096;
+            uint32_t i = n++;
+            while (i > 0u && key[i - 1u] > k) { key[i] = key[i - 1u]; out[i] = out[i - 1u]; i--; }
+            key[i] = k; out[i].tx = (int16_t)tx; out[i].ty = (int16_t)ty; out[i].ring = on ? 0u : 1u;
+        }
+    }
+    return n;
+}
+
+/* ---- the tile job queue and the command size ---- */
+/* The next card command of a read of `remaining` bytes: at most GV_CMD_MAX, a whole number of 4 KB pieces. */
+static inline uint32_t gv_next_cmd_len(uint32_t remaining)
+{
+#if BUG == 6
+    return remaining < GV_CMD_MAX + 4096u ? remaining : GV_CMD_MAX + 4096u;                  /* one piece over the limit */
+#else
+    return remaining < GV_CMD_MAX ? remaining : GV_CMD_MAX;
+#endif
+}
+typedef struct { gv_tile_t job[GV_MAX_TILES]; uint32_t head, n; } gv_queue_t;
+static inline void gv_q_clear(gv_queue_t *q) { q->head = 0; q->n = 0; }
+static inline int gv_q_has(const gv_queue_t *q, int tx, int ty) { for (uint32_t i = 0; i < q->n; i++) { const gv_tile_t *t = &q->job[(q->head + i) % GV_MAX_TILES]; if (t->tx == tx && t->ty == ty) return 1; } return 0; }
+static inline void gv_q_push(gv_queue_t *q, gv_tile_t t) { if (q->n < GV_MAX_TILES && !gv_q_has(q, t.tx, t.ty)) { q->job[(q->head + q->n) % GV_MAX_TILES] = t; q->n++; } }
+static inline int gv_q_pop(gv_queue_t *q, gv_tile_t *t) { if (!q->n) return 0; *t = q->job[q->head]; q->head = (q->head + 1u) % GV_MAX_TILES; q->n--; return 1; }
+/* A direction reversal or a jump: keep only the queued tiles that the new needed list still contains (the command in flight finishes), in the new priority order. */
+static inline void gv_q_retarget(gv_queue_t *q, const gv_tile_t *need, uint32_t nneed, const uint8_t *landed)
+{
+    gv_queue_t k; gv_q_clear(&k);
+    for (uint32_t i = 0; i < nneed; i++) if (!landed[i]) gv_q_push(&k, need[i]);
+#if BUG == 9
+    (void)q;                                                                                 /* the old queue is kept as it was */
+#else
+    *q = k;
+#endif
+}
+#endif

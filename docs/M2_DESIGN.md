@@ -1,4 +1,4 @@
-# Tau Gallery M2 design: pan and zoom (2026-11-09, revision 2: the review applied; design only, nothing built)
+# Tau Gallery M2 design: pan and zoom (2026-11-09, revision 3: M2.0 and M2.1 done; the firmware, the Pocket and the Talos copy time are not)
 
 Plan: `../../docs/GALLERY_ANALYSIS_2026-11-07.md` (sections 6.5, 7, 11, 12.1; M2 and M4 rows). Inputs: `docs/M0_DESIGN.md` (the viewer plane, the landing path, what a Pocket measured) and `docs/M1_DESIGN.md` (the TGY container, the fit canvas, the viewer). Review: `docs/M2_DESIGN_REVIEW.md` (codec and Pocket view); every point of it is applied below and marked (B1, M3 ...). M1 shows one picture fitted into 800 x 720. M2 lets you look at it closer: a 1:1 view you pan across, and whole-step zoom levels. A smooth fractional zoom is M4 (a hardware sampler) and stays out of scope.
 
@@ -14,6 +14,8 @@ Plan: `../../docs/GALLERY_ANALYSIS_2026-11-07.md` (sections 6.5, 7, 11, 12.1; M2
 | Mode switch worst 33 ms (KB-239); CPU mailbox fill of the plane 1.9 s | B-1006 |
 | TGY has a level table with `layout`, `mode`, `pixfmt`, `kind`, `stride`, `index_off`, `index_len`; M1 writes one raw raster fit level; the firmware picks the first raw 800 x 720 raster level (`gt_parse`) | `tgy.py`, `gallery_fmt.c` |
 | The Pocket caches the open file and up to 16 fragments per slot and **drops the cache when the slot changes** (docs) | `host-target-commands.md` |
+| **Talos BLIT (M2.0, read from `tau_talos.sv` and `tau_soc.v`, simulated in `sim/tb_talos_tilecopy.v`):** the sticky source and destination bases are 25-bit word addresses, so they reach the whole 64 MB (A1 holds); a command's offsets are 19 bits (524,288 words, 437 plane lines); a row is at most **127 words** (the width is used modulo 128: a 192-word tile row is silently cut to 64); the stride registers are **10 bits** (at most 1,023 words), so a multi-row BLIT cannot step a 1,200-word plane line or a 1,728-word window line | M2.0, B-1019 |
+| `TAU_BLIT` is in both gallery macro bundles, so the installed bitstream has BLIT | `tools/gallery_m0b_qsf_append.txt` |
 
 **What is not known (the review's M1, B1, B2):** how a read at a *random offset* of a 36 MB file performs (the 1.57 MB/s figure is one sequential command from the start of a file, KB-238; not tested: fragmented files, other offsets, a slot switch), the cost of a Talos copy (A1 and A2 are unverified), and whether the scan-out is ever late while a copy runs.
 
@@ -39,7 +41,7 @@ Plan: `../../docs/GALLERY_ANALYSIS_2026-11-07.md` (sections 6.5, 7, 11, 12.1; M2
 | Option | How a pan or zoom reaches the screen | Needs | Cost and risk |
 |---|---|---|---|
 | **A. Strip levels** | A level is stored as full-width row strips; the plane stride equals the level width; a pan is a register change; new rows are one linear landing | the converter writes raster levels | A horizontal pan reads rows as wide as the picture (2.5x the data it shows at the 1/2 level of a 4,000-pixel photo, 5x at 1:1). No Talos, no RTL, nothing new to prove. **Used first, for the 1/2 level, to prove the pan state machine and the card read model** |
-| **B. Tile levels + Talos copy into an oversized, double-buffered resident window** | Tiles land linearly in a staging area; Talos BLITs each tile row (192 words, so two commands with the 128-word row buffer) into the **back** window; a base-and-stride write at the vertical blank flips it in; a pan inside the resident window is a base write only | A1 (copy reach over 64 MB), A2 (row buffer), the measurements of M2.2 | The plan's choice, now with explicit geometry (section 4). The copy rate and the re-centre stall are unmeasured |
+| **B. Tile levels + Talos copy into an oversized, double-buffered resident window** | Tiles land linearly in a staging area; Talos BLITs each tile row, in two pieces of 96 words, into the **back** window (one command per row piece: 256 commands for a 128-pixel tile, about 10.7 thousand for a whole screen, each with its own destination offset); a base-and-stride write at the vertical blank flips it in; a pan inside the resident window is a base write only | A1 and A2 are settled by M2.0 (the copy works, as row pieces). The engine time per command, the command-issue cost and the late scan-out counter are the measurements of M2.2 | The plan's choice, now with explicit geometry (section 4). The copy rate and the re-centre stall are unmeasured |
 | **C. Tile-major scan-out (RTL)** or a **toroidal scan-out** (address wrap in X and Y) | No copies, or a pan costs only the new strip | a scan-out mode, a tile table or a wrap, one fit | Cleanest at run time; the largest RTL and timing risk (M10K is at 264 of 308); the fallback if B's stall or copy is too slow |
 | **D. Fractional sampler (M4)** | A hardware affine sampler | a large RTL block | Out of scope |
 
@@ -49,9 +51,9 @@ Plan: `../../docs/GALLERY_ANALYSIS_2026-11-07.md` (sections 6.5, 7, 11, 12.1; M2
 
 ## 4. The geometry and the viewport rules (frozen early so a later sampler fits without firmware changes)
 
-**The resident window (B1).** For a tiled level the plane that is scanned out is an **oversized resident window** of 1,056 x 976 pixels (the screen plus one 128-pixel tile on every side), stride 1,584 words (`R_VIEW_STRIDE` only has to be at least 1,200), 3.1 MB. A pan inside it is a base-register write. Only the tiles the move reveals are copied. When the viewport comes within one tile of the window edge the window **re-centres**: the back window is composed again around the new viewport (a copy of about 3 MB read and write, about 70 ms at the spare 86 MB/s, derived; the real figure is an M2.2 measurement) and flipped in. A toroidal scan-out would remove the re-centre and is the reason C stays on the list. For a level read by option A the window is the level itself (stride = its width).
+**The resident window (B1).** For a tiled level the plane that is scanned out is an **oversized resident window** of 9 x 8 tiles = 1,152 x 1,024 pixels (tile aligned; the screen has 176 to 352 pixels of slack across and 304 down; the first draft's 1,056 x 976 could not be tile aligned, found in M2.1), stride 1,728 words (`R_VIEW_STRIDE` is 16 bits and only has to be at least 1,200), 3.54 MB. A pan inside it is a base-register write. Only the tiles the move reveals are copied. When the viewport comes within one tile of the window edge the window **re-centres**: the back window is composed again around the new viewport (3.54 MB read and written as about 14.3 thousand row-piece commands, about 82 ms at the spare 86 MB/s, derived; the real figure is an M2.2 measurement, and re-centres are rare because the window is 1,152 wide and a re-centre only comes when the viewport is within 64 pixels of an edge) and flipped in. A toroidal scan-out would remove the re-centre and is the reason C stays on the list. For a level read by option A the window is the level itself (stride = its width).
 
-**Two windows, one flip (B2).** SDRAM holds a front and a back window (6.2 MB of 64 MB). Landing and copying write only the back window. The flip is a base-and-stride write that applies at the next vertical blank. Nothing alternates frame to frame: a still view holds one window. (KB-075: output that alternates between two images every frame leaves retention on the panel.) An axis shorter than the screen (a 4,000 x 600 panorama) is centred; the rest of the window is black, cleared when the picture opens.
+**Two windows, one flip (B2).** SDRAM holds a front and a back window (7.1 MB of 64 MB). Landing and copying write only the back window. The flip is a base-and-stride write that applies at the next vertical blank. Nothing alternates frame to frame: a still view holds one window. (KB-075: output that alternates between two images every frame leaves retention on the panel.) An axis shorter than the screen (a 4,000 x 600 panorama) is centred; the rest of the window is black, cleared when the picture opens.
 
 **Pure rules, host-testable now, in `fw2/gallery/gallery_view.h` (to write, M2.1):**
 1. **Clamp:** x in [0, level_width - 800], y in [0, level_height - 720]; an axis shorter than the screen is centred and cannot pan.
@@ -79,8 +81,8 @@ At the fit level Left and Right keep their M1 meaning (previous and next picture
 
 | # | Slice | Needs a card write |
 |---|---|---|
-| M2.0 | Read `tau_talos.sv` and `MMIO_ALLOCATION.md` for A1 (copy reach) and A2 (row buffer width), run the host simulation the plan asks for, decide B or C | no |
-| M2.1 | Host work: `gallery_view.h` (section 4) with tests (below); the tile level in `tgy.py` and the reader in `gallery_fmt.c`; `tgy_convert.py --levels` and the sRGB conversion | no |
+| M2.0 | Read `tau_talos.sv` and `MMIO_ALLOCATION.md` for A1 (copy reach) and A2 (row buffer width), run the host simulation the plan asks for, decide B or C | no. **Done 2026-11-09 (B-1019): B stays, as row-piece commands; section 9** |
+| M2.1 | Host work: `gallery_view.h` (section 4) with tests (below); the tile level in `tgy.py` and the reader in `gallery_fmt.c`; `tgy_convert.py --levels` and the sRGB conversion | no. **Done 2026-11-09 (B-1019): section 9** |
 | M2.2 | Measurement page in the M0 test firmware: **a read matrix on a real 36 MB file** (sequential against random offsets from 0 to 30 MB; commands of 16, 48 and 128 KB; a deliberately fragmented copy; a slot switch between reads), tile landing, Talos BLIT of 128 rows, the re-centre copy, the late-fill counter; one Pocket run | **yes** (DEV package, install) |
 | M2.3 | The pan state machine on **option A, the half level**: queue, flip, the 48 KB command limit, 4-pixel steps; proven on a Pocket | yes |
 | M2.4 | Tile levels with the Talos copy into the resident window (B) if M2.2 allows it; otherwise the fallback decision (C) | yes |
@@ -99,3 +101,23 @@ At the fit level Left and Right keep their M1 meaning (previous and next picture
 4. Raw levels as an off-by-default converter option, for sources of at least about 1,600 pixels, no 1/4 level: **adopted**.
 
 **Candidate after M2.3, not a commitment (untested):** a second scaler slot (400 x 360) with a scan-out window of the plane would magnify the pixels already in memory 2x while the next level lands, so a zoom step is never a 1 s wait; the slot switch itself runs in about 33 ms (KB-239). It needs scan-out window registers and a glitch check.
+
+## 9. Results of M2.0 and M2.1 (2026-11-09)
+
+**M2.0, the plan's Talos assumptions (read from the RTL, simulated, not run on a Pocket):**
+
+| | Assumption | Result |
+|---|---|---|
+| A1 | The sticky bases reach the whole 64 MB, so BLIT can copy from a tile cache into an image plane | **True.** `blt_src_base` and `blt_dst_base` are 25-bit word addresses (`tau_talos.sv`, `tau_soc.v` `R_BLT_DATA` fields 0 and 2); a command adds a 19-bit offset. `sim/tb_talos_tilecopy.v` copies with bases at 37.7 MB and 56 MB: every address and word is right |
+| A2 | The copy row buffer is wide enough for a tile row (192 words) | **False, with a way round.** A row is at most 127 words (a 7-bit field; 192 becomes 64, silently). The stride registers are 10 bits: a destination stride of 1,200 words becomes 176. A multi-row BLIT cannot step the plane, so a tile goes in as **row pieces**: one command per piece of 96 words with its own destination offset, 256 commands per 128-pixel tile. The simulation lands a whole tile this way, every address and source right. Cost is the number of commands, not a hardware limit |
+| A3 | A CPU write window is fast enough | Not needed: tiles arrive by the landing path (linear, card-limited) and move by BLIT. The bridged CPU window costs about 50 cycles a word (KB-030) and is not used |
+| A4 | A scan-out mode bit exists | Built in M0 (`R_VIEW_BASE`, `R_VIEW_STRIDE`, `R_VIEW_CAPS`, the mode sequencer) |
+
+Decision: **B stays**. Its cost is command issue and engine time per row piece, which only a Pocket run can measure (M2.2): about five register writes per command from the CPU (address, size, the source offset in the two colour fields, the go write, and the base registers every 437 rows) and an engine run of a 96-word read and write. The estimates in section 3 are lower bounds (KB-100).
+
+**M2.1, built and host-tested (no hardware):**
+- `fw2/gallery/gallery_view.h` (pure): the ladder, the fit and 1:1 toggle, zoom steps, clamp with 4-pixel alignment, the centre-keeping zoom mapping, pan speed (4, 8, 16 pixels a frame), the 9 x 8 tile resident window and its re-centre rule (margin 64), the tiles a viewport needs (screen tiles nearest the centre first, then the ring ahead in the direction of travel), the tile job queue with its retarget on a reversal, and the 48 KB command limit. `make test-gallery-view`: 19 mutants killed, none survive.
+- `tools/gallery/tgy.py`: `ladder()` (equals `gv_ladder` on 313 sizes), `tile_data()`, `zoom_levels()`, `pack_tgy(..., levels)` (raw 128 x 128 tile levels, layout 1, no index, 4 KB aligned; without levels the file is byte for byte the M1 file), `to_srgb()` (ICC to sRGB, Display P3 tested with a hand-built profile), `tile_of()`. `fw2/gallery/gallery_fmt.c`: `gt_zoom_level()` and `gt_tile_off()` with bounds checks (the M1 reader `gt_parse` still finds the fit canvas). `tgy_convert.py --levels` (off by default; the `converted` event lists the levels written). `make test-tgy-levels`: 12 mutants killed, none survive.
+- A refinement found while modelling: the resident window had to be tile aligned, so it is 1,152 x 1,024 (3.54 MB, stride 1,728 words), not 1,056 x 976. Zooming out near an edge moves the view toward the middle (the centre-keeping map meets the smaller stop's edge); tested.
+
+**Next:** M2.2 is the first slice that needs a build on the card (the read matrix, the row-piece copy rate, the re-centre copy, the late-fill counter) and the owner's yes. Until then the host work that remains is the firmware state machine on top of `gallery_view.h` (the half level on option A), which can be built and tested against the hardware model without a card.

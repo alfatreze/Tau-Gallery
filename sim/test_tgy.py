@@ -105,7 +105,7 @@ def mutants():
             ("no level crc", 'if crc(b) != lv["crc"]: raise ValueError("level checksum")', "pass"),
             ("align", "def align(n, a=ALIGN): return (n + a - 1) // a * a", "def align(n, a=ALIGN): return n"),
             ("atlas order", "buf[atlas_off + i * THUMB_BYTES:atlas_off + (i + 1) * THUMB_BYTES] = t", "buf[atlas_off + (n - 1 - i) * THUMB_BYTES:atlas_off + (n - i) * THUMB_BYTES] = t"),
-            ("no orientation", "img = ImageOps.exif_transpose(img).convert", "img = img.convert")]
+            ("no orientation", "return to_srgb(ImageOps.exif_transpose(img)).convert", "return to_srgb(img).convert")]
     import importlib, types
     bad = 0
     for name, a, b in muts:

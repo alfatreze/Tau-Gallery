@@ -35,6 +35,7 @@ def main(argv=None):
     ap.add_argument("--card-dir", default="Assets/tau_gallery/common/photos")
     ap.add_argument("--index-name", default="tau-library.tdb")
     ap.add_argument("--upscale", action="store_true", help="enlarge pictures smaller than the screen to fit (default: show them at 1:1)")
+    ap.add_argument("--levels", action="store_true", help="also write the zoom levels (raw tiles, the half and the 1:1 stops of tgy.ladder) for pictures larger than the screen (docs/M2_DESIGN.md): about 45 MB for a 12-megapixel photo, off by default")
     a = ap.parse_args(argv)
     from PIL import Image
     a.out.mkdir(parents=True, exist_ok=True)
@@ -48,14 +49,15 @@ def main(argv=None):
         if len(path.encode("utf-8")) >= tgy.PATH_BYTES:              # never cut a name (M1 decision 7): the file is skipped, said so, and the rest of the folder still converts
             print(json.dumps({"event": "skip", "file": p.name, "error": f"the card path is {len(path.encode('utf-8'))} bytes, the limit is {tgy.PATH_BYTES - 1}: shorten the file name or the card folder"})); skipped += 1; continue
         try:
-            canvas, rect, thumb, size = tgy.render(Image.open(p), upscale=a.upscale)
+            prep = tgy.prepare(Image.open(p)); canvas, rect, thumb, size = tgy.render_prepared(prep, upscale=a.upscale)
+            levels = tgy.zoom_levels(prep) if a.levels else []
         except Exception as e:                                       # a file that is not a readable picture is skipped, and said so
             print(json.dumps({"event": "skip", "file": p.name, "error": str(e)})); skipped += 1; continue
         used.add(stem.lower())
-        data = tgy.pack_tgy(canvas, rect, thumb, size)
+        data = tgy.pack_tgy(canvas, rect, thumb, size, levels)
         write_atomic(a.out / (stem + ".tgy"), data)
         entries.append(dict(path=path, name=name_of(shown), size=len(data), width=size[0], height=size[1])); thumbs.append(thumb)
-        print(json.dumps({"event": "converted", "file": p.name, "tgy": stem + ".tgy", "size": len(data), "width": size[0], "height": size[1], "rect": rect}))
+        print(json.dumps({"event": "converted", "file": p.name, "tgy": stem + ".tgy", "size": len(data), "width": size[0], "height": size[1], "rect": rect, "levels": [[lw, lh] for (lw, lh, _d) in levels]}))
     write_atomic(a.out / a.index_name, tgy.pack_index(entries, thumbs))
     print(json.dumps({"event": "done", "pictures": len(entries), "skipped": skipped}))
     return 0

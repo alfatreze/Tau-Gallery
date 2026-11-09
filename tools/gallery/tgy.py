@@ -4,7 +4,7 @@ A .tgy file holds ONE picture: a header, one thumbnail (96 x 72 RGB565) and a "f
 stored as the viewer plane wants it (rows of 800 pixels of R, G, B bytes, 2,400 bytes a row), so the whole fit view is ONE contiguous read that lands in the plane (docs/M0_DESIGN.md 3). The level table has room for
 the later levels (tiles, TGY payloads: layout and mode fields); a reader must reject a level whose layout or mode it does not know and may skip levels it does not need.
 Everything is little-endian. Sections start on 4 KB boundaries (APF reads are fastest 4 KB aligned)."""
-import struct, zlib
+import io, struct, zlib
 from pathlib import Path
 
 CANVAS_W, CANVAS_H = 800, 720
@@ -15,6 +15,8 @@ TGY_MAGIC, TGY_VERSION, TGY_HEADER = b"TGY\0", 0, 64
 LEVEL_ENTRY = 48
 IDX_MAGIC, IDX_VERSION, IDX_HEADER, IDX_ENTRY = b"TGIX", 0, 32, 160
 LAYOUT_RASTER, MODE_RAW, PIX_RGB888, KIND_FIT = 0, 0, 0, 0
+LAYOUT_TILE128, KIND_ZOOM = 1, 1                       # M2 (docs/M2_DESIGN.md section 6): a zoom level of raw 128 x 128 tiles, row-major, 49,152 bytes each; ids 2 (compressed, band-major) and 3 (macro-tiles) are reserved
+TILE, TILE_BYTES, Q16 = 128, 128 * 128 * 3, 65536
 PATH_BYTES, NAME_BYTES = 96, 40
 
 def align(n, a=ALIGN): return (n + a - 1) // a * a
@@ -37,10 +39,18 @@ def rgb565_le(rgb_bytes):
         out[j] = v & 255; out[j + 1] = v >> 8; j += 2
     return bytes(out)
 
+def prepare(img):
+    """A source picture ready for every level: the EXIF orientation applied, converted to sRGB when it carries another ICC profile, plain RGB."""
+    from PIL import ImageOps
+    return to_srgb(ImageOps.exif_transpose(img)).convert("RGB")
+
 def render(img, upscale=False):
     """(canvas RGB888 bytes of 800 x 720, content rect, thumbnail RGB565 bytes) from a PIL image; the orientation is applied here."""
-    from PIL import Image, ImageOps
-    img = ImageOps.exif_transpose(img).convert("RGB")
+    return render_prepared(prepare(img), upscale)
+
+def render_prepared(img, upscale=False):
+    """render() for an image that prepare() has already seen."""
+    from PIL import Image
     x, y, rw, rh = fit_rect(img.width, img.height, upscale=upscale)
     small = img.resize((rw, rh), Image.LANCZOS) if (rw, rh) != img.size else img
     canvas = Image.new("RGB", (CANVAS_W, CANVAS_H), (0, 0, 0)); canvas.paste(small, (x, y))
@@ -49,20 +59,76 @@ def render(img, upscale=False):
     tc = Image.new("RGB", (THUMB_W, THUMB_H), (0, 0, 0)); tc.paste(tsmall, ((THUMB_W - tw) // 2, (THUMB_H - th) // 2))
     return canvas.tobytes(), (x, y, rw, rh), rgb565_le(tc.tobytes()), img.size
 
-def pack_tgy(canvas, rect, thumb, size):
+def ladder(sw, sh):
+    """The zoom ladder of a source of sw x sh pixels (orientation applied), the same integer arithmetic as fw2/gallery/gallery_view.h gv_ladder: a list of (width, height, scale_q16), the fit canvas first.
+    Fit is never enlarged. 1/2 only for a big source (1,600 wide or 1,440 tall) and only if it is at least 1.5x past fit; 1:1 only when the source is larger than the screen (800 x 720)."""
+    fq = min(CANVAS_W * Q16 // sw, CANVAS_H * Q16 // sh, Q16)
+    def stop(sc): return (max(1, (sw * sc + Q16 // 2) // Q16), max(1, (sh * sc + Q16 // 2) // Q16), sc)
+    out = [stop(fq)]
+    if sw > CANVAS_W or sh > CANVAS_H:
+        if (sw >= 1600 or sh >= 1440) and (Q16 // 2) * 2 >= fq * 3: out.append(stop(Q16 // 2))
+        out.append(stop(Q16))
+    return out
+
+def tile_data(img):
+    """The raw tile level of a PIL RGB image: 128 x 128 tiles, row-major, each 49,152 bytes (R, G, B, rows of 128 pixels), the edge tiles padded with black. Returns (bytes, tiles across, tiles down)."""
+    from PIL import Image
+    ntx, nty = (img.width + TILE - 1) // TILE, (img.height + TILE - 1) // TILE
+    out = bytearray()
+    for ty in range(nty):
+        for tx in range(ntx):
+            out += img.crop((tx * TILE, ty * TILE, tx * TILE + TILE, ty * TILE + TILE)).tobytes()          # a crop past the image is black
+    assert len(out) == ntx * nty * TILE_BYTES
+    return bytes(out), ntx, nty
+
+def to_srgb(img):
+    """An image with an ICC profile other than sRGB (Display P3 is common from phones) converted to sRGB; the Pocket's panel and every viewer assume sRGB. A missing, unreadable or sRGB profile leaves the pixels alone."""
+    icc = img.info.get("icc_profile")
+    if not icc or img.mode not in ("RGB", "RGBA"): return img
+    try:
+        from PIL import ImageCms
+        prof = ImageCms.ImageCmsProfile(io.BytesIO(icc))
+        if "srgb" in ImageCms.getProfileDescription(prof).lower(): return img
+        out = ImageCms.profileToProfile(img.convert("RGB"), prof, ImageCms.createProfile("sRGB"), outputMode="RGB")
+        return out if out is not None else img
+    except Exception:
+        return img
+
+def zoom_levels(img):
+    """The tile levels of a prepared image for the ladder stops past fit: a list of (width, height, tile bytes). Each stop is resampled from the full-size picture (never from the fit canvas); the 1:1 stop is the picture itself."""
+    from PIL import Image
+    out = []
+    for (lw, lh, sc) in ladder(img.width, img.height)[1:]:
+        lv = img if (lw, lh) == img.size else img.resize((lw, lh), Image.LANCZOS)
+        data, ntx, nty = tile_data(lv); out.append((lw, lh, data))
+    return out
+
+def pack_tgy(canvas, rect, thumb, size, levels=()):
+    """One .tgy file. `levels` (M2, optional) are zoom levels after the fit canvas: each (width, height, tile bytes from tile_data), written as raw 128 x 128 tiles, row-major, 4 KB aligned, one level table entry each
+    (layout 1, kind 1, stride 384 = a tile row, no index: a tile's offset is the level's offset plus (row * tiles across + column) * 49,152). Without levels the file is byte for byte the M1 file."""
     w, h = size
     assert len(canvas) == CANVAS_W * CANVAS_H * 3 and len(thumb) == THUMB_BYTES
+    nlev = 1 + len(levels); assert TGY_HEADER + nlev * LEVEL_ENTRY <= ALIGN
     thumb_off = ALIGN; data_off = thumb_off + align(THUMB_BYTES)
-    data_len = len(canvas); file_size = data_off + align(data_len)
-    level = struct.pack("<IIHHHHBBBBIIIIIII", CANVAS_W, CANVAS_H, *rect, LAYOUT_RASTER, MODE_RAW, PIX_RGB888, KIND_FIT,
-                        CANVAS_W * 3, data_off, data_len, 0, 0, crc(canvas), 0)
-    assert len(level) == LEVEL_ENTRY
-    head = struct.pack("<4sHHIIBBBBIIIIHHIII", TGY_MAGIC, TGY_VERSION, TGY_HEADER, w, h, 3, 7, 0, 0, 1, TGY_HEADER, thumb_off, THUMB_BYTES, THUMB_W, THUMB_H, 0, 0, file_size)
+    data_len = len(canvas); end = data_off + align(data_len)
+    entries = [struct.pack("<IIHHHHBBBBIIIIIII", CANVAS_W, CANVAS_H, *rect, LAYOUT_RASTER, MODE_RAW, PIX_RGB888, KIND_FIT,
+                           CANVAS_W * 3, data_off, data_len, 0, 0, crc(canvas), 0)]
+    placed = []
+    for (lw, lh, data) in levels:
+        ntx, nty = (lw + TILE - 1) // TILE, (lh + TILE - 1) // TILE
+        assert len(data) == ntx * nty * TILE_BYTES
+        entries.append(struct.pack("<IIHHHHBBBBIIIIIII", lw, lh, 0, 0, lw, lh, LAYOUT_TILE128, MODE_RAW, PIX_RGB888, KIND_ZOOM, TILE * 3, end, len(data), 0, 0, crc(data), 0))
+        placed.append((end, data)); end += align(len(data))
+    file_size = end
+    for e in entries: assert len(e) == LEVEL_ENTRY
+    head = struct.pack("<4sHHIIBBBBIIIIHHIII", TGY_MAGIC, TGY_VERSION, TGY_HEADER, w, h, 3, 7, 0, 0, nlev, TGY_HEADER, thumb_off, THUMB_BYTES, THUMB_W, THUMB_H, 0, 0, file_size)
     head += struct.pack("<I", crc(head)) + bytes(TGY_HEADER - len(head) - 4)
     assert len(head) == TGY_HEADER
     buf = bytearray(file_size)
-    buf[0:TGY_HEADER] = head; buf[TGY_HEADER:TGY_HEADER + LEVEL_ENTRY] = level
+    buf[0:TGY_HEADER] = head
+    for i, e in enumerate(entries): buf[TGY_HEADER + i * LEVEL_ENTRY:TGY_HEADER + (i + 1) * LEVEL_ENTRY] = e
     buf[thumb_off:thumb_off + THUMB_BYTES] = thumb; buf[data_off:data_off + data_len] = canvas
+    for off, data in placed: buf[off:off + len(data)] = data
     return bytes(buf)
 
 def parse_tgy(data):
@@ -80,10 +146,19 @@ def parse_tgy(data):
     return dict(width=w, height=h, channels=ch, orientation=orient, levels=levels, thumb=(th_off, th_len, th_w, th_h), size=fsize)
 
 def level_bytes(data, lv):
-    if lv["layout"] != LAYOUT_RASTER or lv["mode"] != MODE_RAW or lv["pixfmt"] != PIX_RGB888: raise ValueError("level layout or mode not known")
+    """The bytes of a raster fit canvas or of a raw tile level, checked against the level's CRC."""
+    known = (lv["layout"] == LAYOUT_RASTER or lv["layout"] == LAYOUT_TILE128) and lv["mode"] == MODE_RAW and lv["pixfmt"] == PIX_RGB888
+    if not known: raise ValueError("level layout or mode not known")
     b = data[lv["off"]:lv["off"] + lv["len"]]
     if crc(b) != lv["crc"]: raise ValueError("level checksum")
     return b
+
+def tile_of(data, lv, tx, ty):
+    """The 49,152 bytes of tile (tx, ty) of a raw tile level."""
+    ntx = (lv["w"] + TILE - 1) // TILE
+    if lv["layout"] != LAYOUT_TILE128: raise ValueError("not a tile level")
+    o = lv["off"] + (ty * ntx + tx) * TILE_BYTES
+    return data[o:o + TILE_BYTES]
 
 def pack_index(entries, thumbs):
     """entries: list of dict(path, name, size, width, height); thumbs: list of THUMB_BYTES. The atlas follows the entries, one thumbnail per entry, in entry order."""

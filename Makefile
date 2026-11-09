@@ -147,6 +147,13 @@ $(RTL_BUILD_DIR)/tb_mp3_fb.vvp: sim/tb_mp3_fb.v src/fpga/core/tau_gfx.sv src/fpg
 test-rtl-fb: $(RTL_BUILD_DIR)/tb_mp3_fb.vvp
 	$(VVP) $<
 
+# Tau Gallery M2.0 (docs/M2_DESIGN.md): what Talos's BLIT can do for a tile copy into the viewer plane (reach over 64 MB, row width, stride width), read from the real RTL.
+.PHONY: test-rtl-talos-tilecopy
+$(RTL_BUILD_DIR)/tb_talos_tilecopy.vvp: sim/tb_talos_tilecopy.v src/fpga/core/tau_gfx.sv src/fpga/core/tau_talos.sv src/fpga/core/tau_scanout.sv src/fpga/core/tau_cdc_gray_ctr.sv src/fpga/core/tau_cdc_gray_bus.sv src/fpga/core/font_rom.v src/fpga/core/font_ram.v | $(RTL_BUILD_DIR)
+	$(IVERILOG) -g2012 -o $@ $^
+test-rtl-talos-tilecopy: $(RTL_BUILD_DIR)/tb_talos_tilecopy.vvp
+	$(VVP) $< | tee /dev/stderr | grep -q "^PASSED"
+
 # Helios H2 (B-340): the buffer-select mux and the vblank-gated flip, both with DBUF_ENABLE=1 (the real
 # behaviour) and =0 (must reproduce today's addressing exactly, no matter what the flip-request/cpu_buf
 # ports are driven with -- DBUF_ENABLE gates the RTL itself, not just what a well-behaved caller wires up).
@@ -946,7 +953,13 @@ test-gallery-fmt:
 	$(PYTHON) sim/test_gallery_fmt.py --mutants
 
 # Tau Gallery M1 formats and converter (tools/gallery): tests and their mutants.
-.PHONY: test-tgy
+.PHONY: test-tgy test-tgy-levels test-gallery-view
+test-gallery-view:
+	$(PYTHON) sim/test_gallery_view.py
+	$(PYTHON) sim/test_gallery_view.py --mutants
+test-tgy-levels:
+	$(PYTHON) sim/test_tgy_levels.py
+	$(PYTHON) sim/test_tgy_levels.py --mutants
 test-tgy:
 	$(PYTHON) sim/test_tgy.py
 	$(PYTHON) sim/test_tgy.py --mutants
