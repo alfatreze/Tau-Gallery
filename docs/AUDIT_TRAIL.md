@@ -16294,3 +16294,7 @@ Cause (read from the code, matches the Pocket description): a long hold outruns 
 ## B-1025: DEV 008 installed on the TauV card (owner: "Yes, install", 2026-11-09)
 
 `tools/install_dev_core.py work/diagnostics/tau-dev-008/pocket --card /Volumes/TauV --yes` after a clean dry run: `alfatreze.Tau Gallery DEV 008` (0.1.0-dev.8+1f23bb4, same bitstream as DEV 007) with the follow-pan fix (B-1024); card checked (0 errors), caches deleted, ejected. Backup `work/card-backups/20261109-034645`. **Not run on a Pocket yet.**
+
+## B-1026: DEV 008 run on a Pocket: the follow pan works (owner, 2026-11-09)
+
+Owner: "zoom smoother, slightly hangs for only a little bit and resumes almost instantly. It's already quite useable like this." Info page screenshot (20261109_044743): ZOOM OPEN 2168 ms, ZOOM LAND 36 ms (48 KB tile), ZOOM COPY 1 ms, ZOOM FLIP 302 ms (a window re-centre, start to flip), LAST OPEN 1299 ms, 432128 words 0 lost. **Evidence: hardware-validated for the follow logic (owner's feel plus the numbers).** The short hang is the card-limited stretch; remaining ideas (bigger window, show tiles as they arrive, speed cap, M3, option C) are optional.
