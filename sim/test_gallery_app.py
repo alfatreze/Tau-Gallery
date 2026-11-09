@@ -21,10 +21,10 @@ def make_big_set(d, n=300):
 
 def make_zoom_set(d):
     """Five pictures with zoom levels, for the zoom scenario: z00 2000 x 1500 (a raster 1:1 level), z01 1000 x 800 (raster 1:1), z02 600 x 400 (no zoom level), z03 700 x 1500 (a raster level padded to 800 wide), z04 3200 x 2400 (a
-    raster half level 1600 x 1200 and a tile 1:1 level), z05 2300 x 1500 (a tile 1:1 level only: no half stop, wider than a raster level). Random pixels, so a wrong address cannot match by accident."""
+    raster half level 1600 x 1200 and a tile 1:1 level), z05 2300 x 1500 (a tile 1:1 level only: no half stop, wider than a raster level), z06 3600 x 2400 (a window placed for a pan is not clamped by the level's edges). Random pixels, so a wrong address cannot match by accident."""
     import random
     rnd = random.Random(5); ents, ths = [], []
-    for i, (w, h) in enumerate([(2000, 1500), (1000, 800), (600, 400), (700, 1500), (3200, 2400), (2300, 1500)]):
+    for i, (w, h) in enumerate([(2000, 1500), (1000, 800), (600, 400), (700, 1500), (3200, 2400), (2300, 1500), (3600, 2400)]):
         prep = tgy.prepare(Image.frombytes("RGB", (w, h), rnd.randbytes(w * h * 3)))
         canvas, rect, thumb, size = tgy.render_prepared(prep); data = tgy.pack_tgy(canvas, rect, thumb, size, tgy.zoom_levels(prep))
         (d / f"z{i:02d}.tgy").write_bytes(data)
@@ -146,7 +146,7 @@ def mutants(setdir):
             ('gallery_app.c', 'if (!z_shown) { if (gv_screen_ready(&z_stop, z_wx, z_wy, t_wx[t_front], t_wy[t_front], t_res[t_front])) tile_show(z_wx, z_wy); return 0; }', 'if (!z_shown) { tile_show(z_wx, z_wy); return 0; }'),
             ("gallery_app.c", "t_dst_hw = win_base(tw) + gv_tile_hw(col, row);", "t_dst_hw = win_base(t_front) + gv_tile_hw(col, row);"),
             ("gallery_app.c", "#define COPY_PER_PASS 64u", "#define COPY_PER_PASS 1000u"),
-            ('gallery_app.c', 'else if (!gv_window_ok(&z_stop, t_wx[b], t_wy[b], px, py)) { gv_window_for(&z_stop, px, py, &t_wx[b], &t_wy[b]); res_clear(b); }', 'else if (0) { }'),
+            ('gallery_app.c', 'else if (!gv_window_ok(&z_stop, t_wx[b], t_wy[b], px, py)) { gv_window_lead(&z_stop, px, py, lx, ly, &t_wx[b], &t_wy[b]); res_clear(b); }', 'else if (0) { }'),
             ('gallery_app.c', 'if (gv_window_ok(&z_stop, t_wx[t_front], t_wy[t_front], px, py)) t_recentre = 0u;', 'if (0) t_recentre = 0u;'),
             ("gallery_app.c", "gv_map_corner(sf, fox, foy, zoom_scale(k), tox, toy, x, y, &nx, &ny);", "gv_map_corner(sf, fox, foy, zoom_scale(k), tox, toy, 0, 0, &nx, &ny);"),
             ("gallery_app.c", "if (zn > 0u) { zoom_goto((int)zn - 1);", "if (zn > 0u) { zoom_goto(0);"),
@@ -169,6 +169,10 @@ def mutants(setdir):
             ("gallery_app.c", 'if (show_progress) { say("OPENING", ACC); loader_bar(0u, 1u); }', 'if (show_progress) { say("OPENING", ACC); }'),
             ("gallery_app.c", "loader_bar(c + len, total); }", "loader_bar(c, total); }"),
             ("gallery_app.c", "#define LDR_Y 178u", "#define LDR_Y 200u"),
+            ("gallery_app.c", "gv_window_lead(&z_stop, px, py, lx, ly, &t_wx[b], &t_wy[b]); res_clear(b); t_recentre = 1u;", "gv_window_lead(&z_stop, px, py, 0, 0, &t_wx[b], &t_wy[b]); res_clear(b); t_recentre = 1u;"),
+            ("gallery_app.c", "gv_window_lead(&z_stop, px, py, lx, ly, &t_wx[b], &t_wy[b]); res_clear(b); }", "gv_window_lead(&z_stop, px, py, 0, 0, &t_wx[b], &t_wy[b]); res_clear(b); }"),
+            ("gallery_app.c", "const int lx = dx ? dx : (z_wx > px ? 1 : z_wx < px ? -1 : 0), ly = dy ? dy : (z_wy > py ? 1 : z_wy < py ? -1 : 0);", "const int lx = -dx, ly = -dy;"),
+            ("gallery_app.c", "const int lx = dx ? dx : (z_wx > px ? 1 : z_wx < px ? -1 : 0), ly = dy ? dy : (z_wy > py ? 1 : z_wy < py ? -1 : 0);", "const int lx = dx, ly = dy;"),
             ("gallery_app.c", "info.flip_ms = (cycles() - t_rc_t0) / (CLK_HZ / 1000u);", "info.flip_ms = 0u;"),
             ("gallery_fmt.c", "return h->entries_off + i * GX_ENTRY_BYTES;" if False else "uint32_t gx_thumb_off(const gx_head_t *h, uint32_t thumb) { return h->atlas_off + thumb * GX_THUMB_BYTES; }", "uint32_t gx_thumb_off(const gx_head_t *h, uint32_t thumb) { return h->atlas_off + thumb * (GX_THUMB_BYTES - 2u); }")]
     bad = 0

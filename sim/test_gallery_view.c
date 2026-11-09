@@ -93,9 +93,26 @@ int main(void)
     gv_window_for(&s, px, 800, &wx, &wy);
     chk("window: re-centring puts the viewport back in the safe zone", gv_window_ok(&s, wx, wy, px, 800));
     s = gv_make_stop(4000, 3000, Q16);
-    chk("window margins: 30 pixels from the left edge is too close, 64 is enough", !gv_window_ok(&s, 1024, 1024, 1024 + 30, 1100) && gv_window_ok(&s, 1024, 1024, 1024 + 64, 1100));
-    chk("window margins: 30 pixels from the bottom edge is too close, 64 is enough", !gv_window_ok(&s, 1024, 1024, 1100, 1024 + GV_WIN_H - GV_SCREEN_H - 30) && gv_window_ok(&s, 1024, 1024, 1100, 1024 + GV_WIN_H - GV_SCREEN_H - 64));
-    chk("window margins: 30 pixels from the top and right edges is too close", !gv_window_ok(&s, 1024, 1024, 1100, 1024 + 30) && !gv_window_ok(&s, 1024, 1024, 1024 + GV_WIN_W - GV_SCREEN_W - 30, 1100));
+    chk("window margins: 100 pixels from the left edge is too close, 128 is enough", !gv_window_ok(&s, 1024, 1024, 1024 + 100, 1324) && gv_window_ok(&s, 1024, 1024, 1024 + 128, 1324));
+    chk("window margins: 100 pixels from the bottom edge is too close, 128 is enough", !gv_window_ok(&s, 1024, 1024, 1324, 1024 + GV_WIN_H - GV_SCREEN_H - 100) && gv_window_ok(&s, 1024, 1024, 1324, 1024 + GV_WIN_H - GV_SCREEN_H - 128));
+    chk("window margins: 100 pixels from the top and right edges is too close", !gv_window_ok(&s, 1024, 1024, 1100, 1024 + 100) && !gv_window_ok(&s, 1024, 1024, 1024 + GV_WIN_W - GV_SCREEN_W - 100, 1100));
+    { s = gv_make_stop(4000, 3000, Q16); int okl = 1;
+      for (int i = 0; i < 3000; i++) {
+          const int ddx = (int)(rnd() % 3) - 1, ddy = (int)(rnd() % 3) - 1; x = 700 + (int32_t)(rnd() % 2000u); y = 600 + (int32_t)(rnd() % 1200u);
+          gv_window_lead(&s, x, y, ddx, ddy, &wx, &wy);
+          if (wx % GV_TILE || wy % GV_TILE || wx < 0 || wy < 0 || wx + GV_WIN_W > (int32_t)gv_storage(s.w) || wy + GV_WIN_H > (int32_t)gv_storage(s.h)) okl = 0;
+          if (!gv_window_ok(&s, wx, wy, x, y)) okl = 0;                                                    /* a fresh window never asks for a re-centre at once */
+          if (ddx > 0 && !(x - wx >= GV_BEHIND && x - wx < GV_BEHIND + GV_TILE)) okl = 0;
+          if (ddx < 0 && !((wx + GV_WIN_W) - (x + GV_SCREEN_W) >= GV_BEHIND && (wx + GV_WIN_W) - (x + GV_SCREEN_W) < GV_BEHIND + GV_TILE)) okl = 0;
+          if (ddy > 0 && !(y - wy >= GV_BEHIND && y - wy < GV_BEHIND + GV_TILE)) okl = 0;
+          if (ddy < 0 && !((wy + GV_WIN_H) - (y + GV_SCREEN_H) >= GV_BEHIND && (wy + GV_WIN_H) - (y + GV_SCREEN_H) < GV_BEHIND + GV_TILE)) okl = 0;
+          if (ddx == 0 || ddy == 0) { int32_t cx, cy; gv_window_for(&s, x, y, &cx, &cy); if ((ddx == 0 && cx != wx) || (ddy == 0 && cy != wy)) okl = 0; }      /* an axis with no travel is placed in the middle, as before */
+      }
+      chk("lead window: a pan keeps 128 to 255 pixels behind it and the rest of the slack ahead, on each axis; no travel means the middle; always inside the stop and safe (3,000 cases)", okl);
+      gv_window_lead(&s, 700, 600, 1, 0, &wx, &wy); int32_t lx0 = wx; gv_window_lead(&s, 700, 600, -1, 0, &wx, &wy);
+      chk("lead window: a pan right puts the window's trailing edge near the viewport, so the window lies further right than for a pan left", lx0 > wx);
+      gv_window_lead(&s, 0, 0, -1, -1, &wx, &wy); chk("lead window: at the top left of the stop it stays inside it", wx == 0 && wy == 0);
+      gv_window_lead(&s, 3200, 2280, 1, 1, &wx, &wy); chk("lead window: at the bottom right of the stop it is clamped to it", wx == 4096 - GV_WIN_W && wy == 3072 - GV_WIN_H); }
     s = gv_make_stop(4000, 3000, Q16 / 2); gv_window_for(&s, 0, 0, &wx, &wy);
     chk("window: at the edge of the stop no re-centre is asked for (nothing lies beyond)", wx == 0 && wy == 0 && gv_window_ok(&s, wx, wy, 0, 0));
     s = gv_make_stop(800, 600, Q16 / 2 > 0 ? Q16 : Q16); gv_window_for(&s, 0, -60, &wx, &wy);

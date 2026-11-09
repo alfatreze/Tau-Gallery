@@ -301,13 +301,14 @@ static int tile_pass(int dx, int dy, uint32_t held, int moving, int tick)
     if (moving) gv_move(&z_stop, &z_wx, &z_wy, dx, dy, held);
     int32_t px = z_wx, py = z_wy;
     if (z_shown) { px = z_sx + clampi(z_wx - z_sx, -SLACK, SLACK); py = z_sy + clampi(z_wy - z_sy, -SLACK, SLACK); gv_clamp(&z_stop, &px, &py); }
+    const int lx = dx ? dx : (z_wx > px ? 1 : z_wx < px ? -1 : 0), ly = dy ? dy : (z_wy > py ? 1 : z_wy < py ? -1 : 0);      /* the direction of the pan: the keys, else where the wanted corner lies */
     if (!t_job) {
         const uint32_t b = 1u - t_front;
         if (t_recentre) {
             if (gv_window_ok(&z_stop, t_wx[t_front], t_wy[t_front], px, py)) t_recentre = 0u;                                  /* the view came back into the window on screen: nothing to compose */
-            else if (!gv_window_ok(&z_stop, t_wx[b], t_wy[b], px, py)) { gv_window_for(&z_stop, px, py, &t_wx[b], &t_wy[b]); res_clear(b); }      /* the view left the window being composed: aim it at the view now */
+            else if (!gv_window_ok(&z_stop, t_wx[b], t_wy[b], px, py)) { gv_window_lead(&z_stop, px, py, lx, ly, &t_wx[b], &t_wy[b]); res_clear(b); }      /* the view left the window being composed: aim it at the view now */
         } else if (!gv_window_ok(&z_stop, t_wx[t_front], t_wy[t_front], px, py)) {                                             /* the view is near the window's edge: compose a new window in the other buffer */
-            gv_window_for(&z_stop, px, py, &t_wx[b], &t_wy[b]); res_clear(b); t_recentre = 1u; t_rc_t0 = cycles();
+            gv_window_lead(&z_stop, px, py, lx, ly, &t_wx[b], &t_wy[b]); res_clear(b); t_recentre = 1u; t_rc_t0 = cycles();
         }
     }
     const uint32_t tw = t_recentre ? 1u - t_front : t_front;

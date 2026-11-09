@@ -17,7 +17,8 @@ static uint16_t mem[HW_N];                         /* SDRAM, halfwords: the plan
 static uint16_t fb[512u * 1024u];                  /* the UI framebuffer, halfwords, stride 512 */
 static uint32_t clk, irq_pend, vid_req, vid_bus, vid_sw, vid_due, vbase, vstride, land_base, land_words, land_ovf, input_n;
 static int force_ovf, force_short, viewer_dead, fail_pic_reads, pass_pic_reads;
-static uint32_t rc_prev, rc_starts, rc_retarget; static int32_t rc_bx, rc_by;
+static uint32_t rc_lead_n, rc_lead_bad; static uint32_t rc_prev, rc_starts, rc_retarget; static int32_t rc_bx, rc_by;
+static void ldr_lead_probe(void);
 static void ldr_probe(uint32_t dst);
 static void pass_hook(void);                                                                  /* called once per pass of the firmware's loop (a read of the keys): defined after the firmware, which it looks into */
 static uint32_t blits_since_input, blit_max_pass; static uint32_t blit_cmds, blit_visible, blit_bad, blit_from_win, tile_reads, win_flips, last_win = 9u; static uint32_t clk_step = 50u, zoom_max_len, zoom_max_rs, reads_since_input; static int zoom_phase;      /* the zoom scenario: a frame a clock read, the longest card command and the most commands between two key polls */ static uint32_t text_mode;
@@ -123,7 +124,7 @@ void platform_probe(void) { }
 /* ---- the key script ---- */
 #define CP(n) (0x10000u | (n))
 #define END 0x20000u
-static uint32_t script[16384]; static int nscript;
+static uint32_t script[32768]; static int nscript;
 static jmp_buf done;
 static int fails;
 static void chk(int n, int ok) { printf("GALLERY APP %s %d\n", ok ? "ok" : "FAIL", n); if (!ok) fails++; }
@@ -187,11 +188,17 @@ static void ldr_probe(uint32_t dst)      /* a chunk of a picture landing: what t
     if (fill > 0u && (fb[180u * 512u + 120u] == th_role[TR_ACCENT] || fb[177u * 512u + 120u] == th_role[TR_ACCENT] || fb[179u * 512u + 120u] != th_role[TR_ACCENT])) ldr_mono = 0u;      /* the bar is two rows: 178 and 179, no more */
     ldr_prev = fill; if (fill > ldr_max) ldr_max = fill; ldr_chunks++;
 }
+static void ldr_lead_probe(void)      /* a re-centre has just started: the window being composed leaves the pan's slack ahead, GV_BEHIND to GV_BEHIND + 127 behind the view (a little more for the pixels moved since), unless it sits at an edge of the level */
+{
+    const uint32_t b = 1u - t_front; const int32_t sw = (int32_t)zl.ntx * 128, sh = (int32_t)zl.nty * 128;
+    if (z_wx != z_sx) { const int32_t ahead = z_wx > z_sx ? 1 : -1, behind = ahead > 0 ? z_sx - t_wx[b] : (t_wx[b] + GV_WIN_W) - (z_sx + 800); if (t_wx[b] > 0 && t_wx[b] + GV_WIN_W < sw) { rc_lead_n++; if (behind < GV_BEHIND - 112 || behind > GV_BEHIND + 127 + 16) rc_lead_bad++; } }
+    if (z_wy != z_sy) { const int32_t ahead = z_wy > z_sy ? 1 : -1, behind = ahead > 0 ? z_sy - t_wy[b] : (t_wy[b] + GV_WIN_H) - (z_sy + 720); if (t_wy[b] > 0 && t_wy[b] + GV_WIN_H < sh) { rc_lead_n++; if (behind < GV_BEHIND - 112 || behind > GV_BEHIND + 127 + 16) rc_lead_bad++; } }
+}
 static void pass_hook(void)                                                                  /* a tile zoom: how far the shown view moved since the last pass, and for how many passes in a row it stood still while the wanted corner was elsewhere */
 {
     if (!zoom_phase || zk < 0 || zl.layout != 1u || !z_shown) { ph_px = -1; ph_stall = 0u; return; }
     if (ph_px >= 0) { const int32_t jx = abs(z_sx - ph_px), jy = abs(z_sy - ph_py), j = jx > jy ? jx : jy; if ((uint32_t)j > ph_jump_max) ph_jump_max = (uint32_t)j; }
-    if (t_recentre && !rc_prev) rc_starts++; else if (t_recentre && rc_prev && (t_wx[1u - t_front] != rc_bx || t_wy[1u - t_front] != rc_by)) rc_retarget++;      /* a re-centre that started, and a window being composed that was aimed again */
+    if (t_recentre && !rc_prev) { rc_starts++; ldr_lead_probe(); } else if (t_recentre && rc_prev && (t_wx[1u - t_front] != rc_bx || t_wy[1u - t_front] != rc_by)) { rc_retarget++; ldr_lead_probe(); }      /* a re-centre that started, and a window being composed that was aimed again */
     rc_prev = t_recentre; rc_bx = t_wx[1u - t_front]; rc_by = t_wy[1u - t_front];
     if (ph_px >= 0 && z_sx != ph_px && z_sy == ph_py && z_wy != z_sy) ph_axx++;      /* a step along x alone while the wanted corner is off in y too: the one-axis fallback */
     if (ph_px >= 0 && z_sy != ph_py && z_sx == ph_px && z_wx != z_sx) ph_axy++;
@@ -336,7 +343,9 @@ static void checkpoint(int n)
     case 115: chk(109, zk == -1 && vbase == GAL_PLANE_BASE && plane_is_f("z04.tgy")); break;                                                                                  /* L1 again: the fit view */
     case 117: { int32_t x = -1, y = -1; const uint32_t f0 = win_flips; (void)f0; chk(110, tile_view_matches("z05.tgy", &x, &y) && x == 1500 && t_recentre == 0u); chk(111, win_flips >= 1u && blit_from_win > 0u && blit_visible == 0u && blit_bad == 0u); chk(122, ph_jump_max <= 16u && ph_stall_max <= 300u); chk(123, info.flip_ms != GI_NONE && info.flip_ms > 0u && info.flip_ms < 20000u); } break;      /* a long held pan: the shown view never moves more than 16 pixels in a pass and never stands still for more than a window's worth of tile copies (about 250 passes, bound 300) while the keys are ahead of it: it follows at the card's pace instead of freezing until the whole way is loaded */   /* panned to the right edge across window re-centres: exact, flipped windows, tiles reused by Talos copies, nothing written into the screen */
     case 129: chk(124, ph_axx > 0u && ph_axy > 0u && ph_jump_max <= 16u); break;      /* a held diagonal pan: when the diagonal step's tiles are not whole the view still steps along one axis, each way */
-    case 130: chk(126, rc_retarget >= 1u && ph_jump_max <= 16u); break;      /* right to a window edge, then down while the new window is composing: it is aimed again at where the view is now */
+    case 130: chk(126, rc_retarget >= 1u && ph_jump_max <= 16u); chk(127, rc_lead_bad == 0u); break;      /* right to a window edge, then down while the new window is composing: it is aimed again at where the view is now */
+    case 131: rc_lead_n = rc_lead_bad = 0u; break;
+    case 132: chk(128, rc_lead_n >= 2u && rc_lead_bad == 0u && blit_visible == 0u); break;      /* z06: the windows composed for a pan lie where the pan needs them */
     case 118: chk(112, fit_or_exact_tile("z05.tgy") && blit_visible == 0u); break;                                                                                           /* while loading under a held pan: the fit plane or an exact view, never an unloaded tile */
     case 119: { int32_t x = -1, y = -1; chk(113, tile_view_matches("z05.tgy", &x, &y) && y == 780 && blit_visible == 0u && ph_jump_max <= 16u && ph_stall_max <= 300u); } break;                                          /* down to the bottom edge */
     case 120: { int32_t x = -1, y = -1; chk(114, tile_view_matches("z05.tgy", &x, &y) && x == 0 && y == 0 && blit_visible == 0u && blit_bad == 0u); rc_retarget = 0u; } break;                   /* back to the top-left corner */
@@ -354,7 +363,7 @@ int main(int argc, char **argv)
     count = (uint32_t)idx_data[8] | (uint32_t)idx_data[9] << 8;
     setw[0] = 1u << 27; setw[1] = 0x40000001u; setw[2] = 0x4000005Eu; setw[5] = 0x40000000u; setw[6] = 0x40000000u;      /* the package's defaults of the inherited variables: layout 1, appearance, word 2 with bit 0 clear (resume on), the player's marks in words 5 and 6 */
     if (argc > 2 && !strcmp(argv[2], "zoom")) {                                                      /* the zoom (option A): pan, clamp, loading behind, the loop rules */
-        static uint32_t S4[16384]; int k = 0;
+        static uint32_t S4[32768]; int k = 0;
 #define HOLD(key, n) do { for (int _i = 0; _i < (n); _i++) S4[k++] = (key); } while (0)
         S4[k++] = CP(80); S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 3); S4[k++] = CP(81); S4[k++] = CP(82);
         S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 130); S4[k++] = CP(83);
@@ -384,6 +393,9 @@ int main(int argc, char **argv)
         HOLD(KEY_DOWN | KEY_RIGHT, 300); HOLD(0, 1500); S4[k++] = CP(129);
         S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 3); S4[k++] = CP(123); S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 450); S4[k++] = CP(124);
         S4[k++] = KEY_A; S4[k++] = 0; S4[k++] = CP(101); S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 12); S4[k++] = CP(102);
+        S4[k++] = KEY_RIGHT; S4[k++] = 0; S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 3); S4[k++] = CP(131); S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 450);
+        HOLD(KEY_RIGHT, 150); HOLD(0, 800); HOLD(KEY_DOWN, 150); HOLD(0, 800); HOLD(KEY_LEFT, 200); HOLD(0, 800); HOLD(KEY_RIGHT, 70); HOLD(0, 900); HOLD(KEY_DOWN, 70); HOLD(0, 900); S4[k++] = CP(132);      /* z06 3,600 x 2,400: windows that the level's edges do not clamp */
+        S4[k++] = KEY_B; S4[k++] = 0; S4[k++] = KEY_B; S4[k++] = 0; HOLD(0, 12);
         S4[k++] = KEY_START; S4[k++] = 0; S4[k++] = KEY_DOWN; S4[k++] = 0; S4[k++] = KEY_DOWN; S4[k++] = 0; S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 3); S4[k++] = CP(128); S4[k++] = END;
         nscript = k; memcpy(script, S4, (size_t)k * sizeof S4[0]);
         if (!setjmp(done)) gallery_app_main();

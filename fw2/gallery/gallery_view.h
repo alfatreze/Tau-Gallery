@@ -17,7 +17,8 @@
 #define GV_WIN_W (GV_WIN_TX * GV_TILE)       /* 1,408 */
 #define GV_WIN_H (GV_WIN_TY * GV_TILE)       /* 1,280 */
 #define GV_WIN_STRIDE_WORDS (GV_WIN_W * 3 / 2)   /* 2,112 words a window line (R_VIEW_STRIDE takes 16 bits) */
-#define GV_MARGIN 64                         /* re-centre when the viewport is closer than this to a window edge that is not the level's edge */
+#define GV_MARGIN 128                        /* re-centre when the viewport is closer than this to a window edge that is not the level's edge: the ring left ahead then lasts about as long as composing the next window takes */
+#define GV_BEHIND 128                        /* a window placed for a pan keeps this much (to the next tile) behind the viewport, the rest of its slack ahead of it */
 #define GV_CMD_MAX 49152u                    /* the most bytes of one card command while panning (about 30 ms): the keys are polled between commands */
 #define GV_MAX_STOPS 3
 #define GV_MAX_TILES (GV_WIN_TX * GV_WIN_TY)
@@ -136,6 +137,25 @@ static inline void gv_window_for(const gv_stop_t *s, int32_t vx, int32_t vy, int
     if (ox < 0) ox = 0;
     if (oy < 0) oy = 0;
     *wx = ox; *wy = oy;
+}
+/* One axis of a window placed for a pan. d > 0: the viewport sits GV_BEHIND to GV_BEHIND + 127 pixels from the trailing edge; d < 0: the same from the other edge; d == 0: the middle. Clamped to the stored stop. */
+static inline int32_t gv_lead_axis(int32_t v, int32_t span, int32_t win, int32_t store, int d)
+{
+    int32_t o = gv_floordiv(v + span / 2 - win / 2 + GV_TILE / 2, GV_TILE) * GV_TILE;
+#if BUG == 19
+    if (d < 0) o = gv_floordiv(v - GV_BEHIND, GV_TILE) * GV_TILE; else if (d > 0) o = -gv_floordiv(-(v + span + GV_BEHIND - win), GV_TILE) * GV_TILE;
+#else
+    if (d > 0) o = gv_floordiv(v - GV_BEHIND, GV_TILE) * GV_TILE; else if (d < 0) o = -gv_floordiv(-(v + span + GV_BEHIND - win), GV_TILE) * GV_TILE;
+#endif
+    if (o > store - win) o = store - win;
+    if (o < 0) o = 0;
+    return o;
+}
+/* The window for a viewport that is panning in direction (dx, dy): placed so the pan has most of the window's slack ahead of it. (0, 0) is the same as gv_window_for. */
+static inline void gv_window_lead(const gv_stop_t *s, int32_t vx, int32_t vy, int dx, int dy, int32_t *wx, int32_t *wy)
+{
+    *wx = gv_lead_axis(vx, GV_SCREEN_W, GV_WIN_W, (int32_t)gv_storage(s->w), dx);
+    *wy = gv_lead_axis(vy, GV_SCREEN_H, GV_WIN_H, (int32_t)gv_storage(s->h), dy);
 }
 /* 1 when the viewport still has GV_MARGIN pixels to every window edge, except an edge that is the edge of the stored stop (nothing lies beyond it). */
 static inline int gv_window_ok(const gv_stop_t *s, int32_t wx, int32_t wy, int32_t vx, int32_t vy)
