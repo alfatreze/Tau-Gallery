@@ -5,6 +5,7 @@
 #define GALLERY_PAGES_H
 #include <stdint.h>
 #include "../cores/helios_core.h"
+#include "../cores/theme_core.h"
 #ifndef BUG
 #define BUG 0
 #endif
@@ -17,9 +18,9 @@
 #define GP_KEY_START (1u << 15)
 
 /* ---- the menu ---- */
-enum { GM_CONTROLS = 0, GM_HELP, GM_INFO, GM_SETTINGS, GM_COUNT };
-static const char *const gm_names[GM_COUNT] = { "CONTROLS", "HELP", "INFO", "SETTINGS" };
-enum { GP_STAY = 0, GP_CLOSE, GP_OPEN_CONTROLS, GP_OPEN_HELP, GP_OPEN_INFO, GP_OPEN_SETTINGS };      /* what a key edge asks of the caller */
+enum { GM_CONTROLS = 0, GM_HELP, GM_INFO, GM_SETTINGS, GM_THEME, GM_COUNT };
+static const char *const gm_names[GM_COUNT] = { "CONTROLS", "HELP", "INFO", "SETTINGS", "THEME" };
+enum { GP_STAY = 0, GP_CLOSE, GP_OPEN_CONTROLS, GP_OPEN_HELP, GP_OPEN_INFO, GP_OPEN_SETTINGS, GP_OPEN_THEME };      /* what a key edge asks of the caller */
 typedef struct { uint8_t sel; } gm_t;
 static inline void gm_open(gm_t *m) { m->sel = 0; }
 static inline int gm_input(gm_t *m, uint32_t edge)
@@ -34,9 +35,9 @@ static inline int gm_input(gm_t *m, uint32_t edge)
     }
     if (edge & GP_KEY_A) {
 #if BUG == 2
-        return m->sel == GM_CONTROLS ? GP_OPEN_HELP : m->sel == GM_HELP ? GP_OPEN_CONTROLS : m->sel == GM_INFO ? GP_OPEN_INFO : GP_OPEN_SETTINGS;      /* the first two entries swapped */
+        return m->sel == GM_CONTROLS ? GP_OPEN_HELP : m->sel == GM_HELP ? GP_OPEN_CONTROLS : m->sel == GM_INFO ? GP_OPEN_INFO : m->sel == GM_SETTINGS ? GP_OPEN_SETTINGS : GP_OPEN_THEME;      /* the first two entries swapped */
 #else
-        return m->sel == GM_CONTROLS ? GP_OPEN_CONTROLS : m->sel == GM_HELP ? GP_OPEN_HELP : m->sel == GM_INFO ? GP_OPEN_INFO : GP_OPEN_SETTINGS;
+        return m->sel == GM_CONTROLS ? GP_OPEN_CONTROLS : m->sel == GM_HELP ? GP_OPEN_HELP : m->sel == GM_INFO ? GP_OPEN_INFO : m->sel == GM_SETTINGS ? GP_OPEN_SETTINGS : GP_OPEN_THEME;
 #endif
     }
     return (edge & (GP_KEY_B | GP_KEY_START)) ? GP_CLOSE : GP_STAY;
@@ -138,6 +139,31 @@ static inline int gsp_input(uint32_t *resume, uint32_t edge)
         return 0;
     }
     return (edge & GP_KEY_B) != 0;
+}
+
+/* ---- Theme: three rows, THEME, MODE (dark or light) and ACCENT (the 19 Pocket colours). Up/Down choose the row, Left/Right change its value (wrapping), B goes back. ---- */
+enum { GT_THEME = 0, GT_MODE, GT_ACCENT, GT_ROWS };
+static const char *const gt_labels[GT_ROWS] = { "THEME", "MODE", "ACCENT" };
+enum { GT_STAY = 0, GT_CHANGED, GT_CLOSE };
+typedef struct { uint8_t sel; } gt_t;
+typedef struct { uint32_t theme, pol, pal; } gt_look_t;
+static inline void gt_open(gt_t *g) { g->sel = 0; }
+/* One key edge: `l` is the live look, `theme_n` how many themes this build has. */
+static inline int gt_input(gt_t *g, gt_look_t *l, uint32_t theme_n, uint32_t edge)
+{
+    if (edge & (GP_KEY_UP | GP_KEY_DOWN)) { g->sel = (uint8_t)hl_wrap(g->sel, GT_ROWS, (edge & GP_KEY_UP) != 0); return GT_STAY; }
+    if (edge & (GP_KEY_LEFT | (1u << 3))) {                                                      /* bit 3 is Right */
+        const int dec = (edge & GP_KEY_LEFT) != 0;
+#if BUG == 8
+        if (g->sel == GT_THEME) l->theme = dec ? (l->theme ? l->theme - 1u : theme_n - 1u) : (l->theme + 1u < theme_n ? l->theme + 1u : theme_n - 1u);      /* Right clamps */
+#else
+        if (g->sel == GT_THEME) l->theme = hl_wrap(l->theme, theme_n, dec);
+#endif
+        else if (g->sel == GT_MODE) l->pol = hl_wrap(l->pol, 2u, dec);
+        else l->pal = hl_wrap(l->pal, TC_PALETTE_N, dec);
+        return GT_CHANGED;
+    }
+    return (edge & GP_KEY_B) ? GT_CLOSE : GT_STAY;
 }
 
 /* ---- Info: what the firmware knows about itself and the last picture it opened (M1.6 slice 2) ---- */

@@ -26,6 +26,9 @@ def build(workdir, fw=None):
         (workdir / "fw2" / sub).mkdir(parents=True, exist_ok=True)
         for f in (ROOT / "fw2" / sub).glob("*.h"): (workdir / "fw2" / sub / f.name).write_text(f.read_text())
     for f in (ROOT / "fw2/cores").glob("*.h"): (workdir / "fw2/cores").mkdir(exist_ok=True); (workdir / "fw2/cores" / f.name).write_text(f.read_text())
+    (workdir / "fw2/ui").mkdir(exist_ok=True); (workdir / "fw").mkdir(exist_ok=True)               # the theme module (the colour roles) and its generated data
+    for n in ("theme.c", "theme.h"): (workdir / "fw2/ui" / n).write_text((ROOT / "fw2/ui" / n).read_text())
+    (workdir / "fw/theme_data.h").write_text((ROOT / "fw/theme_data.h").read_text())
     for f in (ROOT / "fw2/gallery").iterdir():
         if f.suffix in (".c", ".h"): (inc / f.name).write_text((fw or {}).get(f.name, f.read_text()))
     (workdir / "sim").mkdir(exist_ok=True); (workdir / "sim/t.c").write_text(text)
@@ -35,7 +38,7 @@ def build(workdir, fw=None):
     if r.returncode: print(r.stderr[:3000]); return False
     return True
 
-SCENARIOS = ("resume5", "resume17", "badcrc", "toohigh", "off", "layout0")     # boot scenarios: the saved state, the grid must open on picture 6 or 18, or on picture 1 when it is not the same picture / resume is off / the file is not ours
+SCENARIOS = ("resume5", "resume17", "badcrc", "toohigh", "off", "layout0", "ocean_light", "badlook")     # boot scenarios: the saved state, the grid must open on picture 6 or 18, or on picture 1 when it is not the same picture / resume is off / the file is not ours
 def run(workdir, setdir):
     r = subprocess.run([str(workdir / "t"), str(setdir)], capture_output=True, text=True, timeout=600)
     rc, out = r.returncode, r.stdout
@@ -82,6 +85,13 @@ def mutants(setdir):
             ("gallery_settings.c", "if (gs_publish_due(cycles(), last_activity, CLK_HZ, 1)) publish(v);", "publish(v);"),
             ("gallery_settings.c", "if (m & (1u << k)) set_wr(k, w[k]); }", "set_wr(k, w[k]); }"),
             ("gallery_settings.c", "gs_stats.layout = (w[GS_W_LAYOUT] >> 27) & 15u; gs_stats.loads++;", "gs_stats.layout = 0u; gs_stats.loads++;"),
+            ("gallery_app.c", "theme_set(gset.theme, gset.pol, gset.pal); gset.theme = th_theme;", "gset.theme = th_theme;"),
+            ("gallery_app.c", "gset.pol = th_pol; gset.pal = th_pal; }      /* applied at once", "gset.pol = th_pol; }      /* applied at once"),
+            ("gallery_app.c", "#define BG   th_role[TR_BG_BOTTOM]", "#define BG   RGB565(0, 0, 0)"),
+            ("gallery_app.c", "#define ACC  th_role[TR_ACCENT]", "#define ACC  RGB565(255, 170, 40)"),
+            ("gallery_app.c", "    theme_init();\n", ""),
+            ("gallery_app.c", "if (k == GT_CHANGED) { theme_set(l.theme, l.pol, l.pal);", "if (k == GT_CHANGED) { "),
+            ("gallery_app.c", "if (r == GP_OPEN_THEME) {", "if (r == GP_OPEN_HELP) {"),
             ("gallery_fmt.c", "return h->entries_off + i * GX_ENTRY_BYTES;" if False else "uint32_t gx_thumb_off(const gx_head_t *h, uint32_t thumb) { return h->atlas_off + thumb * GX_THUMB_BYTES; }", "uint32_t gx_thumb_off(const gx_head_t *h, uint32_t thumb) { return h->atlas_off + thumb * (GX_THUMB_BYTES - 2u); }")]
     bad = 0
     for i, (f, a, b) in enumerate(muts):

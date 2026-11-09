@@ -31,13 +31,13 @@ static void publish(const gs_vals_t *v)
 
 int gs_hw_service(gs_vals_t *v, uint32_t last_activity)
 {
-    const int changed = v->resume != pub.resume || v->last_idx != pub.last_idx || v->last_crc != pub.last_crc;
+    const int changed = !gs_same(v, &pub);
     if (changed) { if (gs_publish_due(cycles(), last_activity, CLK_HZ, 1)) publish(v); return 0; }
     if ((int32_t)(cycles() - next_poll) < 0) return 0;
     next_poll = cycles() + CLK_HZ / 2u;
     uint32_t w[GS_WORDS]; read_words(w);                                  /* has the Pocket's Core Settings moved one of our words? */
     const gs_vals_t now = gs_unpack(w);
-    if (now.resume == pub.resume && now.last_idx == pub.last_idx && now.last_crc == pub.last_crc) return 0;
+    if (gs_same(&now, &pub)) return 0;
     pub = now; *v = now; gs_stats.menu_changes++;
     return 1;
 }

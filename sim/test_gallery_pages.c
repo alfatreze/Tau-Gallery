@@ -17,7 +17,9 @@ int main(void)
     chk("A on Info opens Info", m.sel == GM_INFO && gm_input(&m, GP_KEY_A) == GP_OPEN_INFO);
     gm_input(&m, GP_KEY_DOWN);
     chk("A on Settings opens Settings", m.sel == GM_SETTINGS && gm_input(&m, GP_KEY_A) == GP_OPEN_SETTINGS);
-    chk("down from Settings wraps to Controls", gm_input(&m, GP_KEY_DOWN) == GP_STAY && m.sel == GM_CONTROLS);
+    gm_input(&m, GP_KEY_DOWN);
+    chk("A on Theme opens Theme", m.sel == GM_THEME && gm_input(&m, GP_KEY_A) == GP_OPEN_THEME);
+    chk("down from Theme wraps to Controls", gm_input(&m, GP_KEY_DOWN) == GP_STAY && m.sel == GM_CONTROLS);
     chk("B closes the menu", gm_input(&m, GP_KEY_B) == GP_CLOSE);
     chk("Start closes the menu", gm_input(&m, GP_KEY_START) == GP_CLOSE);
     chk("Left and X do nothing in the menu", gm_input(&m, GP_KEY_LEFT) == GP_STAY && gm_input(&m, 1u << 6) == GP_STAY);
@@ -71,6 +73,23 @@ int main(void)
         chk("settings: B closes and changes nothing", gsp_input(&rs, GP_KEY_B) == 1 && rs == 0u);
         chk("settings: Up, Down and Start neither change nor close", gsp_input(&rs, GP_KEY_UP) == 0 && gsp_input(&rs, GP_KEY_DOWN) == 0 && gsp_input(&rs, GP_KEY_START) == 0 && rs == 0u);
     }
+    {
+        gt_t g; gt_open(&g); gt_look_t l = { 0u, 0u, 1u };
+        chk("theme page opens on the THEME row", g.sel == GT_THEME);
+        chk("theme: Right goes to the next theme", gt_input(&g, &l, 2u, 1u << 3) == GT_CHANGED && l.theme == 1u);
+        chk("theme: Right wraps after the last theme", gt_input(&g, &l, 2u, 1u << 3) == GT_CHANGED && l.theme == 0u);
+        chk("theme: Left wraps before the first theme", gt_input(&g, &l, 2u, GP_KEY_LEFT) == GT_CHANGED && l.theme == 1u);
+        chk("theme: Down chooses MODE", gt_input(&g, &l, 2u, GP_KEY_DOWN) == GT_STAY && g.sel == GT_MODE);
+        chk("theme: the mode toggles with Right and Left", gt_input(&g, &l, 2u, 1u << 3) == GT_CHANGED && l.pol == 1u && gt_input(&g, &l, 2u, GP_KEY_LEFT) == GT_CHANGED && l.pol == 0u);
+        gt_input(&g, &l, 2u, GP_KEY_DOWN);
+        chk("theme: the accent row changes only the accent", g.sel == GT_ACCENT && gt_input(&g, &l, 2u, 1u << 3) == GT_CHANGED && l.pal == 2u && l.theme == 1u && l.pol == 0u);
+        l.pal = TC_PALETTE_N - 1u; gt_input(&g, &l, 2u, 1u << 3); chk("theme: the accent wraps over the 19 colours", l.pal == 0u);
+        gt_input(&g, &l, 2u, GP_KEY_LEFT); chk("theme: the accent wraps backwards", l.pal == TC_PALETTE_N - 1u);
+        gt_input(&g, &l, 2u, GP_KEY_DOWN); chk("theme: Down from the last row wraps to THEME", g.sel == GT_THEME);
+        gt_input(&g, &l, 2u, GP_KEY_UP); chk("theme: Up from the first row wraps to ACCENT", g.sel == GT_ACCENT);
+        chk("theme: B closes, A and Start do nothing", gt_input(&g, &l, 2u, GP_KEY_B) == GT_CLOSE && gt_input(&g, &l, 2u, GP_KEY_A) == GT_STAY && gt_input(&g, &l, 2u, GP_KEY_START) == GT_STAY);
+        chk("theme: a build with one theme stays on theme 0", (l.theme = 0u, g.sel = GT_THEME, gt_input(&g, &l, 1u, 1u << 3) == GT_CHANGED && l.theme == 0u));
+    }
     int ok = 1;
     for (uint32_t p = 0; p < GH_PAGES; p++) {
         if (gh_pages[p].n > 17u) ok = 0;
@@ -80,7 +99,7 @@ int main(void)
     ok = 1;
     for (uint32_t i = 0; i < GC_N; i++) if (strlen(gc_rows[i].key) > 21u || strlen(gc_rows[i].what) > 25u) { ok = 0; printf("  too long: %s / %s\n", gc_rows[i].key, gc_rows[i].what); }
     chk("every controls key (21) and meaning (25) fits its column", ok);
-    chk("the menu names fit", strlen(gm_names[0]) < 16 && strlen(gm_names[1]) < 16 && strlen(gm_names[2]) < 16 && strlen(gm_names[3]) < 16);
+    chk("the menu names fit", strlen(gm_names[0]) < 16 && strlen(gm_names[1]) < 16 && strlen(gm_names[2]) < 16 && strlen(gm_names[3]) < 16 && strlen(gm_names[4]) < 16);
     printf(fails ? "FAILED %d\n" : "PASSED\n", fails);
     return fails != 0;
 }

@@ -9,12 +9,13 @@
 #include "gallery_fmt.h"
 #include "gallery_pages.h"
 #include "gallery_settings_hw.h"
+#include "../ui/theme.h"
 
-#define BG   RGB565(0, 0, 0)
-#define FG   RGB565(255, 255, 255)
-#define DIM  RGB565(150, 150, 150)
-#define ACC  RGB565(255, 170, 40)
-#define BAD  RGB565(255, 80, 80)
+#define BG   th_role[TR_BG_BOTTOM]                /* the colours are the theme's roles (ui/theme.c, docs/THEME_SPEC.md) */
+#define FG   th_role[TR_TEXT_PRIMARY]
+#define DIM  th_role[TR_TEXT_SECONDARY]
+#define ACC  th_role[TR_ACCENT]
+#define BAD  th_role[TR_ERROR]
 #define COLS 4u
 #define ROWS 4u
 #define PER_PAGE (COLS * ROWS)
@@ -218,6 +219,17 @@ static void draw_help(const gh_t *h)
     }
     page_foot("UP DOWN PAGE   B BACK", h->page + 1u, GH_PAGES);
 }
+static void draw_theme(const gt_t *g, const gt_look_t *l)
+{
+    page_clear("THEME");
+    for (uint32_t r = 0; r < GT_ROWS; r++) {
+        const uint32_t y = PAGE_Y0 + r * LINE_H; const char *v = r == GT_THEME ? theme_name(l->theme) : r == GT_MODE ? (l->pol ? "LIGHT" : "DARK") : th_palette_name[l->pal];
+        gfx_text(6, y, gt_labels[r], r == g->sel ? FG : DIM, BG); gfx_text(110, y, v, r == g->sel ? FG : DIM, BG);
+        if (r == g->sel) gfx_text(GFX_W - 32u, y, "<", ACC, BG);
+    }
+    gfx_rect(110, PAGE_Y0 + 3u * LINE_H + 6u, 120, 14, ACC);                                       /* the accent as it is drawn with this theme */
+    page_foot("UP DOWN ROW  LEFT RIGHT CHANGE  B BACK", 0, 0);
+}
 static void draw_info(void)
 {
     gi_row_t r[GI_ROWS];
@@ -247,7 +259,16 @@ static void run_pages(void)
         const uint32_t edge = next_edge(&prev); const int r = gm_input(&m, edge);
         if (r == GP_CLOSE) return;
         if (r == GP_STAY) { draw_menu(&m); continue; }
-        if (r == GP_OPEN_SETTINGS) { draw_settings(); while (!gsp_input(&gset.resume, next_edge(&prev))) draw_settings(); }
+        if (r == GP_OPEN_THEME) {
+            gt_t g; gt_open(&g); gt_look_t l = { th_theme, th_pol, th_pal }; draw_theme(&g, &l);
+            for (;;) {
+                const int k = gt_input(&g, &l, theme_count(), next_edge(&prev));
+                if (k == GT_CLOSE) break;
+                if (k == GT_CHANGED) { theme_set(l.theme, l.pol, l.pal); gset.theme = th_theme; gset.pol = th_pol; gset.pal = th_pal; }      /* applied at once; saved after a quiet second */
+                draw_theme(&g, &l);
+            }
+        }
+        else if (r == GP_OPEN_SETTINGS) { draw_settings(); while (!gsp_input(&gset.resume, next_edge(&prev))) draw_settings(); }
         else if (r == GP_OPEN_CONTROLS) { gc_t c; gc_open(&c); draw_controls(&c); while (!gc_input(&c, next_edge(&prev))) draw_controls(&c); }
         else if (r == GP_OPEN_HELP) { gh_t h; gh_open(&h); draw_help(&h); while (!gh_input(&h, next_edge(&prev))) draw_help(&h); }
         else { draw_info(); while (!gi_input(next_edge(&prev))) draw_info(); }
@@ -258,6 +279,7 @@ static void run_pages(void)
 int main(void)
 {
     if (!platform_version_ok()) platform_halt_pattern();
+    theme_init();
     gfx_rect(0, 0, GFX_W, GFX_H, BG);
     platform_probe();
     gfx_text(6, 2, "TAU GALLERY", ACC, BG);
@@ -267,6 +289,7 @@ int main(void)
       if (rc) { char b[40], *q = put_s(b, "INDEX NOT USABLE E"); q = put_u(q, (uint32_t)rc); *q = 0; say(b, BAD); for (;;) { } }
       if (head.count == 0u) { say("NO PICTURES IN THE INDEX", BAD); for (;;) { } } }
     gs_hw_load(&gset); last_act = cycles();
+    theme_set(gset.theme, gset.pol, gset.pal); gset.theme = th_theme; gset.pol = th_pol; gset.pal = th_pal;      /* the saved look (a value this build does not have falls back to the default) */
     if (gset.resume && gset.last_idx < head.count) {                                           /* resume: only when it is the same picture (index and path CRC) */
         page = gset.last_idx / PER_PAGE;
         if (load_page()) { const uint32_t i = gs_resume_index(&gset, head.count, path_crc(gset.last_idx)); sel = i; page = i / PER_PAGE; }

@@ -13,7 +13,7 @@
 static uint16_t mem[HW_N];                         /* SDRAM, halfwords: the plane at 0x200000 */
 static uint16_t fb[512u * 1024u];                  /* the UI framebuffer, halfwords, stride 512 */
 static uint32_t clk, irq_pend, vid_req, vid_bus, vid_sw, vid_due, vbase, vstride, land_base, land_words, land_ovf, input_n;
-static int force_ovf, force_short, viewer_dead;
+static int force_ovf, force_short, viewer_dead; static uint32_t text_mode;
 static uint32_t setw[16], setidx; static int set_writes;                  /* the settings register file (R_SET_IDX / R_SET_DAT) and how many words were written */
 static void tick(void) { if (!viewer_dead && vid_req != vid_bus && vid_due && clk >= vid_due) { vid_bus = vid_req; vid_sw++; vid_due = 0; } }
 static uint32_t next_input(void);
@@ -30,6 +30,7 @@ static uint32_t rd(uint32_t a)
     case 0x80000040u: return 0x4D50331Bu;
     case 0x800001F8u: return 0x80000003u;
     case 0x80000070u: return setw[setidx & 15u];
+    case 0x80000114u: return 0x80000000u | text_mode;
     case 0x8000003Cu: return next_input();
     default: return 0;
     }
@@ -38,6 +39,7 @@ static uint32_t cyc_rd(void) { clk += 50u; tick(); return clk; }
 static void wr(uint32_t a, uint32_t v)
 {
     switch (a) {
+    case 0x80000114u: text_mode = v & 1u; break;
     case 0x8000006Cu: setidx = v; break;
     case 0x80000070u: setw[setidx & 15u] = v; set_writes++; break;
     case 0x800001ECu: vid_req = v & 1u; vid_due = clk + 2u * 1111111u; break;
@@ -114,6 +116,8 @@ static uint32_t next_input(void)
 #include "../fw2/gallery/gallery_pattern.c"
 #include "../fw2/gallery/gallery_hw.c"
 #include "../fw2/gallery/gallery_settings.c"
+#include "../fw2/gallery/gallery_theme_stub.c"
+#include "../fw2/ui/theme.c"
 #include "../fw2/gallery/gallery_app.c"
 #undef main
 
@@ -124,7 +128,7 @@ static int thumbs_on_screen(uint32_t first, uint32_t n)                         
     for (uint32_t k = 0; k < n; k++) {
         const uint8_t *t = thumb_of(first + k); const uint32_t x = 2u + (k % 4u) * 100u, y = 22u + (k / 4u) * 76u;
         for (uint32_t r = 0; r < 72u; r++) for (uint32_t c = 0; c < 96u; c++) { const uint32_t o = (r * 96u + c) * 2u; if (fb[(y + r) * 512u + x + c] != (uint16_t)(t[o] | t[o + 1] << 8)) return 0; }
-        for (uint32_t c = 0; c < 96u; c++) { const uint16_t v = fb[(y + 72u) * 512u + x + c]; if (v != 0u && v != RGB565(255, 170, 40)) return 0; }          /* nothing written under the thumbnail: black or the selection frame */
+        for (uint32_t c = 0; c < 96u; c++) { const uint16_t v = fb[(y + 72u) * 512u + x + c]; if (v != th_role[TR_BG_BOTTOM] && v != th_role[TR_ACCENT]) return 0; }          /* nothing written under the thumbnail: black or the selection frame */
     }
     return 1;
 }
@@ -142,7 +146,7 @@ static void checkpoint(int n)
 {
     char want[64]; char path[200];
     switch (n) {
-    case 1: chk(1, thumbs_on_screen(0, count < 16u ? count : 16u)); snprintf(want, sizeof want, "1/%u", count); chk(2, said(want)); chk(3, said("TAU GALLERY") && !said("FAILED")); break;
+    case 1: chk(50, th_role[TR_TEXT_PRIMARY] == 0xFFFFu && th_role[TR_BG_BOTTOM] == 0u && text_mode == 0u); chk(1, thumbs_on_screen(0, count < 16u ? count : 16u)); snprintf(want, sizeof want, "1/%u", count); chk(2, said(want)); chk(3, said("TAU GALLERY") && !said("FAILED")); break;
     case 2: snprintf(want, sizeof want, "3/%u", count); chk(4, !strcmp(last_text(), want)); chk(20, said("Picture 02")); break;
     case 3: chk(5, vid_bus == 1u && vbase == GAL_PLANE_BASE && vstride == 1200u); chk(6, plane_is(2)); snprintf(path, sizeof path, "/Assets/tau_gallery/common/photos/p%02u.tgy", 2u); chk(7, !strcmp(last_open, path)); chk(8, land_ovf == 0u && land_words == 1728512u / 4u); break;
     case 4: chk(9, plane_is(3) && vid_bus == 1u); break;
@@ -172,6 +176,11 @@ static void checkpoint(int n)
     case 29: { const char *p = "Assets/tau_gallery/common/photos/p03.tgy"; chk(39, setw[6] == 3u && setw[5] == (gf_crc32((const uint8_t *)p, (uint32_t)strlen(p)) & 0x7FFFFFFFu)); chk(40, (setw[0] >> 27) == 1u && setw[2] == 0x4000005Fu); } break;   /* the last picture opened: picture 4 (index 3), the open at CP(14) whose viewer did not start; its landing succeeded */
     case 30: clk += 2u * CLK_HZ; break;
     case 31: force_ovf = 1; break;                                                                                                                                       /* the next open fails: the last picture must stay the one before */
+    case 32: chk(45, said("THEME") && said("TAU") && said("DARK") && said("WHITE") && said("LEFT RIGHT CHANGE")); clear_texts(); break;                                          /* the Theme page: the defaults */
+    case 33: chk(46, said("LIGHT") && th_pol == 1u && text_mode == 1u && th_role[TR_BG_BOTTOM] == 0xEF9Du); clear_texts(); break;                                         /* Down, Right: light mode applied at once, and the text weights asked for */
+    case 34: chk(47, said("OCEAN") && said("GLOW") && th_theme == 1u && th_pal == 2u && th_role[TR_ACCENT] == tc_accent(0x2A83u, 1u)); clear_texts(); break;              /* the theme and the accent changed; on a light theme a bright accent is scaled down */
+    case 35: { const uint32_t x = 399u; chk(48, thumbs_on_screen(0, count < 16u ? count : 16u) && fb[100u * 512u + x] == th_role[TR_BG_BOTTOM] && fb[100u * 512u + x] != 0u); } break;   /* back in the grid: the background is the theme's, the frame its accent */
+    case 36: chk(49, setw[1] == (0x40000000u | 2u | (1u << 5) | (1u << 11)) && setw[0] == (1u << 27)); break;                                                             /* the look is saved after a quiet second, as word 1 only */
     case 21: snprintf(want, sizeof want, "1/%u", count); chk(29, thumbs_on_screen(0, count < 16u ? count : 16u) && said(want) && said("TAU GALLERY")); break;   /* B, B: the grid again, thumbnails and footer redrawn */
     default: break;
     }
@@ -184,22 +193,26 @@ int main(int argc, char **argv)
     count = (uint32_t)idx_data[8] | (uint32_t)idx_data[9] << 8;
     setw[0] = 1u << 27; setw[1] = 0x40000001u; setw[2] = 0x4000005Eu; setw[5] = 0x40000000u; setw[6] = 0x40000000u;      /* the package's defaults of the inherited variables: layout 1, appearance, word 2 with bit 0 clear (resume on), the player's marks in words 5 and 6 */
     if (argc > 2) {                                                                                     /* a boot scenario: the saved state, then the grid must open on the right picture */
-        const char *sc = argv[2]; const uint32_t want = !strcmp(sc, "resume5") ? 5u : !strcmp(sc, "resume17") ? 17u : 0u;
+        const char *sc = argv[2]; const uint32_t want = !strcmp(sc, "resume5") || !strcmp(sc, "ocean_light") || !strcmp(sc, "badlook") ? 5u : !strcmp(sc, "resume17") ? 17u : 0u;
         char pth[200]; const uint32_t idx = !strcmp(sc, "resume5") || !strcmp(sc, "badcrc") ? 5u : !strcmp(sc, "resume17") ? 17u : !strcmp(sc, "toohigh") ? count : 5u;
         snprintf(pth, sizeof pth, "Assets/tau_gallery/common/photos/p%02u.tgy", idx);
         setw[6] = idx; setw[5] = gf_crc32((const uint8_t *)pth, (uint32_t)strlen(pth)) & 0x7FFFFFFFu;
         if (!strcmp(sc, "badcrc")) setw[5] ^= 1u;
         if (!strcmp(sc, "off")) setw[2] |= 1u;
         if (!strcmp(sc, "layout0")) setw[0] = 0u;
+        if (!strcmp(sc, "ocean_light")) setw[1] = 0x40000000u | 2u | (1u << 5) | (1u << 11);
+        if (!strcmp(sc, "badlook")) setw[1] = 0x40000000u | 31u | (40u << 5);                      /* theme 40 and accent 31 do not exist in this build */
         const uint32_t S2[] = { CP(41), END }; nscript = 2; memcpy(script, S2, sizeof S2);
         if (!setjmp(done)) gallery_app_main();
         const uint32_t fp = want / 16u * 16u; char w[32]; snprintf(w, sizeof w, "%u/%u", want + 1u, count);
         chk(41, !strcmp(last_text(), w)); chk(42, thumbs_on_screen(fp, count - fp < 16u ? count - fp : 16u)); chk(43, set_writes == 0);
+        if (!strcmp(sc, "ocean_light")) chk(51, th_theme == 1u && th_pol == 1u && th_pal == 2u && fb[100u * 512u + 399u] == th_role[TR_BG_BOTTOM] && fb[100u * 512u + 399u] != 0u && text_mode == 1u);
+        else chk(52, th_theme == 0u && th_pol == 0u && th_pal == 1u && fb[100u * 512u + 399u] == 0u && text_mode == 0u);                     /* every other boot, and a look this build does not have, gives the default look */
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
     }
     const uint32_t S[] = { CP(1), KEY_START, 0, CP(16), KEY_A, 0, CP(17), KEY_B, 0, CP(18), KEY_DOWN, 0, KEY_A, 0, CP(19), KEY_DOWN, 0, CP(20), KEY_B, 0, KEY_DOWN, 0, KEY_A, 0, CP(22), KEY_B, 0, KEY_DOWN, 0, KEY_A, 0, CP(25), KEY_A, 0, CP(26), KEY_B, 0, KEY_B, 0, CP(27), 0, 0, CP(28), CP(21), KEY_RIGHT, 0, KEY_RIGHT, 0, CP(2), KEY_A, 0, CP(3), KEY_RIGHT, 0, CP(4), KEY_LEFT, 0, KEY_LEFT, 0, CP(5), KEY_LEFT, 0, KEY_LEFT, 0, CP(6), KEY_B, 0, CP(7), KEY_START, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_A, 0, CP(23), KEY_B, 0, KEY_B, 0,
                           KEY_L1, 0, CP(8), KEY_R1, 0, CP(9), KEY_L1, 0, KEY_RIGHT, 0, KEY_R1, 0, CP(13), KEY_L1, 0, CP(10), KEY_A, 0, CP(11), KEY_START, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_A, 0, CP(24), KEY_B, 0, KEY_B, 0, KEY_RIGHT, 0, KEY_A, 0, CP(12),
-                          KEY_RIGHT, 0, KEY_A, 0, CP(14), KEY_A, 0, CP(15), CP(31), KEY_RIGHT, 0, KEY_A, 0, CP(30), 0, 0, CP(29), END };
+                          KEY_RIGHT, 0, KEY_A, 0, CP(14), KEY_A, 0, CP(15), CP(31), KEY_RIGHT, 0, KEY_A, 0, CP(30), 0, 0, CP(29), KEY_START, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_A, 0, CP(32), KEY_DOWN, 0, KEY_RIGHT, 0, CP(33), KEY_DOWN, 0, KEY_RIGHT, 0, KEY_UP, 0, KEY_UP, 0, KEY_RIGHT, 0, CP(34), KEY_B, 0, KEY_B, 0, CP(35), CP(30), 0, 0, CP(36), END };
     nscript = (int)(sizeof S / sizeof S[0]); memcpy(script, S, sizeof S);
     if (!setjmp(done)) gallery_app_main();
     printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails);

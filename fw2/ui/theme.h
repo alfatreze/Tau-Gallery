@@ -1,6 +1,6 @@
 /* Player 2 themes (docs/THEME_SPEC.md): every drawn colour that a theme may change is read through th_role[]. Roles 0..11 are the spec's twelve in the spec's order, 12.. the extension roles of the previous
  * player; the numbering is append-only and is the numbering of THEM files in tau-assets.bin. A theme is a name and two role sets (dark, light); the mode picks the set; the accent is the user's pick from the 19
- * Analogue Pocket colours (scaled down on a light theme). Built-in themes are generated from themes/*.json (tools/gen_themes.py); up to four more come from tau-assets.bin (THEM). */
+ * Analogue Pocket colours (scaled down on a light theme). Built-in themes are generated from the .json files in themes/ (tools/gen_themes.py); up to four more come from tau-assets.bin (THEM). */
 #ifndef P2_THEME_H
 #define P2_THEME_H
 #include <stdint.h>

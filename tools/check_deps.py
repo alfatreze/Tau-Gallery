@@ -17,7 +17,7 @@ ALLOWED = {
     "gfx":         {"platform", "counters", "cores"},
     "art":         {"gfx", "stream", "platform", "counters", "cores"},
     "diagnostics": {"transport", "queue", "ui", "settings", "decode", "stream", "aout", "gfx", "art", "platform", "counters", "cores"},
-    "gallery":     {"stream", "gfx", "platform", "counters", "cores"},      # Tau Gallery app and test page: the picture file readers, the viewer and the card slot driver
+    "gallery":     {"stream", "gfx", "ui", "platform", "counters", "cores"},      # ui: only theme.c (the colour roles)      # Tau Gallery app and test page: the picture file readers, the viewer and the card slot driver
     "platform":    {"cores"},
     "counters":    {"cores"},
     "cores":       {"cores"},
