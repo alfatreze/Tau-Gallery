@@ -1,6 +1,6 @@
 /* fw2/gallery/gallery_pages.h -- Tau Gallery M1.6 slice 1 (docs/M1_DESIGN.md section 5): the menu, the Controls list and the Help pages. Pure: no drawing, no registers. Host-tested (sim/test_gallery_pages.py).
  * Start on the grid opens the menu; Up/Down move, A opens an entry, B or Start closes. Controls is a read-only list (Up/Down scroll, wrapping, Helios's rule); Help is three pages of text (Up/Down turn the
- * page, wrapping). B or Left leaves a page for the menu. Lines are at most GP_MAXCH characters so they fit the 400 px screen. Info and Settings join the menu in later slices. */
+ * page, wrapping). B or Left leaves a page for the menu. Lines are at most GP_MAXCH characters so they fit the 400 px screen. Info (slice 2) shows the core, the picture count and the last open; Settings joins the menu in a later slice. */
 #ifndef GALLERY_PAGES_H
 #define GALLERY_PAGES_H
 #include <stdint.h>
@@ -17,9 +17,9 @@
 #define GP_KEY_START (1u << 15)
 
 /* ---- the menu ---- */
-enum { GM_CONTROLS = 0, GM_HELP, GM_COUNT };
-static const char *const gm_names[GM_COUNT] = { "CONTROLS", "HELP" };
-enum { GP_STAY = 0, GP_CLOSE, GP_OPEN_CONTROLS, GP_OPEN_HELP };      /* what a key edge asks of the caller */
+enum { GM_CONTROLS = 0, GM_HELP, GM_INFO, GM_COUNT };
+static const char *const gm_names[GM_COUNT] = { "CONTROLS", "HELP", "INFO" };
+enum { GP_STAY = 0, GP_CLOSE, GP_OPEN_CONTROLS, GP_OPEN_HELP, GP_OPEN_INFO };      /* what a key edge asks of the caller */
 typedef struct { uint8_t sel; } gm_t;
 static inline void gm_open(gm_t *m) { m->sel = 0; }
 static inline int gm_input(gm_t *m, uint32_t edge)
@@ -34,9 +34,9 @@ static inline int gm_input(gm_t *m, uint32_t edge)
     }
     if (edge & GP_KEY_A) {
 #if BUG == 2
-        return m->sel == GM_CONTROLS ? GP_OPEN_HELP : GP_OPEN_CONTROLS;               /* the entries swapped */
+        return m->sel == GM_CONTROLS ? GP_OPEN_HELP : m->sel == GM_HELP ? GP_OPEN_CONTROLS : GP_OPEN_INFO;      /* the first two entries swapped */
 #else
-        return m->sel == GM_CONTROLS ? GP_OPEN_CONTROLS : GP_OPEN_HELP;
+        return m->sel == GM_CONTROLS ? GP_OPEN_CONTROLS : m->sel == GM_HELP ? GP_OPEN_HELP : GP_OPEN_INFO;
 #endif
     }
     return (edge & (GP_KEY_B | GP_KEY_START)) ? GP_CLOSE : GP_STAY;
@@ -124,4 +124,39 @@ static inline int gh_input(gh_t *h, uint32_t edge)
     }
     return (edge & (GP_KEY_LEFT | GP_KEY_B)) != 0;
 }
+
+/* ---- Info: what the firmware knows about itself and the last picture it opened (M1.6 slice 2) ---- */
+#define GI_NONE 0xFFFFFFFFu                                          /* open_ms before any picture was opened */
+#define GI_ROWS 6u
+typedef struct { uint32_t core_version, count, view_caps, open_ms, words, lost; const char *err; } gi_t;      /* view_caps: R_VIEW_CAPS (bit 1 = the 800 x 720 viewer); err: the last status line, 0 = none */
+typedef struct { const char *label; char value[28]; } gi_row_t;
+static inline char *gi_s(char *q, const char *p) { while (*p) *q++ = *p++; return q; }
+static inline char *gi_u(char *q, uint32_t v) { char t[10]; uint32_t n = 0; do { t[n++] = (char)('0' + v % 10u); v /= 10u; } while (v); while (n) *q++ = t[--n]; return q; }
+static inline char *gi_hex8(char *q, uint32_t v) { for (int i = 28; i >= 0; i -= 4) *q++ = "0123456789ABCDEF"[(v >> i) & 15u]; return q; }
+static inline void gi_format(const gi_t *d, gi_row_t r[GI_ROWS])
+{
+    char *q;
+    r[0].label = "CORE VERSION"; q = gi_hex8(r[0].value, d->core_version); *q = 0;
+    r[1].label = "PICTURES";     q = gi_u(r[1].value, d->count); *q = 0;
+#if BUG == 5
+    r[2].label = "VIEWER";       q = gi_s(r[2].value, (d->view_caps & 1u) ? "800 X 720" : "NO VIEWER"); *q = 0;       /* the mode-sequencer bit instead of the viewer bit */
+#else
+    r[2].label = "VIEWER";       q = gi_s(r[2].value, (d->view_caps & 2u) ? "800 X 720" : "NO VIEWER"); *q = 0;
+#endif
+    r[3].label = "LAST OPEN";
+    if (d->open_ms == GI_NONE) { q = gi_s(r[3].value, "NONE YET"); *q = 0; }
+    else {
+#if BUG == 6
+        q = gi_u(r[3].value, d->open_ms / 1000u); q = gi_s(q, " MS"); *q = 0;                                    /* seconds shown as milliseconds */
+#else
+        q = gi_u(r[3].value, d->open_ms); q = gi_s(q, " MS"); *q = 0;
+#endif
+    }
+    r[4].label = "LAST LOAD";
+    if (d->open_ms == GI_NONE) { q = gi_s(r[4].value, "NONE YET"); *q = 0; }
+    else { q = gi_u(r[4].value, d->words); q = gi_s(q, " WORDS, "); q = gi_u(q, d->lost); q = gi_s(q, " LOST"); *q = 0; }
+    r[5].label = "LAST ERROR";   q = gi_s(r[5].value, d->err ? d->err : "NONE"); *q = 0;
+}
+/* One key edge: returns 1 when the page should close (back to the menu). */
+static inline int gi_input(uint32_t edge) { return (edge & (GP_KEY_LEFT | GP_KEY_B)) != 0; }
 #endif

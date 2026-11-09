@@ -63,6 +63,12 @@ def mutants(setdir):
             ("gallery_app.c", "static void page_clear(const char *title) { gfx_rect(0, 0, GFX_W, GFX_H, BG);", "static void page_clear(const char *title) { "),
             ("gallery_app.c", "draw_menu(&m);\n    }\n}", "}\n}"),
             ("gallery_app.c", "else if (edge & KEY_START) {", "else if (edge & KEY_SELECT) {"),
+            ("gallery_app.c", "info.open_ms = (uint32_t)(cycles() - t0) / (CLK_HZ / 1000u);", "info.open_ms = GI_NONE;"),
+            ("gallery_app.c", "if (r == 0 || r >= 5) {", "if (1) {"),
+            ("gallery_app.c", "info.err = r ? open_msg[r] : 0;", "info.err = 0;"),
+            ("gallery_app.c", "else if (r == GP_OPEN_HELP) {", "else if (r == GP_OPEN_INFO) {"),
+            ("gallery_app.c", "info.core_version = REG_RD(R_VERSION);", "info.core_version = 0u;"),
+            ("gallery_app.c", "const int r = open_timed(sel, 1);", "const int r = open_picture(sel, 1);"),
             ("gallery_fmt.c", "return h->entries_off + i * GX_ENTRY_BYTES;" if False else "uint32_t gx_thumb_off(const gx_head_t *h, uint32_t thumb) { return h->atlas_off + thumb * GX_THUMB_BYTES; }", "uint32_t gx_thumb_off(const gx_head_t *h, uint32_t thumb) { return h->atlas_off + thumb * (GX_THUMB_BYTES - 2u); }")]
     bad = 0
     for i, (f, a, b) in enumerate(muts):

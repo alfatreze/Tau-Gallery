@@ -134,6 +134,18 @@ static int open_picture(uint32_t i, int show_progress)
 }
 static const char *const open_msg[] = { "", "OPEN FAILED", "HEADER READ FAILED", "NOT A TGY PICTURE", "NO LANDING PATH", "PICTURE READ FAILED", "PICTURE DAMAGED IN TRANSFER" };
 
+/* open_picture with the Info page's numbers: how long it took (ms), the landing's word counts (only when a landing ran), the status line text. */
+static gi_t info = { 0u, 0u, 0u, GI_NONE, 0u, 0u, 0 };
+static int open_timed(uint32_t i, int show_progress)
+{
+    const uint32_t t0 = cycles();
+    const int r = open_picture(i, show_progress);
+    info.open_ms = (uint32_t)(cycles() - t0) / (CLK_HZ / 1000u);
+    if (r == 0 || r >= 5) { info.words = REG_RD(R_LAND_WORDS); info.lost = REG_RD(R_LAND_OVF); } else { info.words = 0u; info.lost = 0u; }
+    info.err = r ? open_msg[r] : 0;
+    return r;
+}
+
 static void viewer(void)
 {
     uint32_t prev = REG_RD(R_INPUT) & 0xFFFFu;
@@ -145,7 +157,7 @@ static void viewer(void)
             const uint32_t np = n / PER_PAGE;
             if (np != page) { page = np; if (!load_page()) { gal_view_off(); draw_page(); return; } }
             sel = n;
-            const int r = open_picture(sel, 0);
+            const int r = open_timed(sel, 0);
             if (r) { gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); say(open_msg[r], BAD); return; }
         }
     }
@@ -153,7 +165,7 @@ static void viewer(void)
 
 static void open_from_grid(void)
 {
-    const int r = open_picture(sel, 1);
+    const int r = open_timed(sel, 1);
     if (r) { say(open_msg[r], BAD); return; }
     if (!gal_view_on()) { say("VIEWER DID NOT START", BAD); return; }
     viewer();
@@ -198,6 +210,14 @@ static void draw_help(const gh_t *h)
     }
     page_foot("UP DOWN PAGE   B BACK", h->page + 1u, GH_PAGES);
 }
+static void draw_info(void)
+{
+    gi_row_t r[GI_ROWS];
+    info.core_version = REG_RD(R_VERSION); info.count = head.count; info.view_caps = REG_RD(R_VIEW_CAPS);
+    gi_format(&info, r); page_clear("INFO");
+    for (uint32_t i = 0; i < GI_ROWS; i++) { gfx_text(6, PAGE_Y0 + i * LINE_H, r[i].label, DIM, BG); gfx_text(150, PAGE_Y0 + i * LINE_H, r[i].value, i == 5u && info.err ? BAD : FG, BG); }
+    page_foot("B BACK", 0, 0);
+}
 /* Waits for the next key press (an edge) and returns it. */
 static uint32_t next_edge(uint32_t *prev)
 {
@@ -212,7 +232,8 @@ static void run_pages(void)
         if (r == GP_CLOSE) return;
         if (r == GP_STAY) { draw_menu(&m); continue; }
         if (r == GP_OPEN_CONTROLS) { gc_t c; gc_open(&c); draw_controls(&c); while (!gc_input(&c, next_edge(&prev))) draw_controls(&c); }
-        else { gh_t h; gh_open(&h); draw_help(&h); while (!gh_input(&h, next_edge(&prev))) draw_help(&h); }
+        else if (r == GP_OPEN_HELP) { gh_t h; gh_open(&h); draw_help(&h); while (!gh_input(&h, next_edge(&prev))) draw_help(&h); }
+        else { draw_info(); while (!gi_input(next_edge(&prev))) draw_info(); }
         draw_menu(&m);
     }
 }

@@ -13,6 +13,9 @@ int main(void)
     chk("A on Controls opens Controls", gm_input(&m, GP_KEY_A) == GP_OPEN_CONTROLS);
     gm_input(&m, GP_KEY_DOWN);
     chk("A on Help opens Help", m.sel == GM_HELP && gm_input(&m, GP_KEY_A) == GP_OPEN_HELP);
+    gm_input(&m, GP_KEY_DOWN);
+    chk("A on Info opens Info", m.sel == GM_INFO && gm_input(&m, GP_KEY_A) == GP_OPEN_INFO);
+    chk("down from Info wraps to Controls", gm_input(&m, GP_KEY_DOWN) == GP_STAY && m.sel == GM_CONTROLS);
     chk("B closes the menu", gm_input(&m, GP_KEY_B) == GP_CLOSE);
     chk("Start closes the menu", gm_input(&m, GP_KEY_START) == GP_CLOSE);
     chk("Left and X do nothing in the menu", gm_input(&m, GP_KEY_LEFT) == GP_STAY && gm_input(&m, 1u << 6) == GP_STAY);
@@ -35,6 +38,24 @@ int main(void)
     chk("up from the first page wraps to the last", gh_input(&h, GP_KEY_UP) == 0 && h.page == GH_PAGES - 1u);
     chk("B and Left close Help", gh_input(&h, GP_KEY_B) == 1 && gh_input(&h, GP_KEY_LEFT) == 1);
 
+    {
+        gi_row_t r[GI_ROWS]; gi_t d = { 0x4D50331Bu, 18u, 0x80000003u, GI_NONE, 0u, 0u, 0 };
+        gi_format(&d, r);
+        chk("info: core version is 8 hex digits", !strcmp(r[0].label, "CORE VERSION") && !strcmp(r[0].value, "4D50331B"));
+        chk("info: picture count", !strcmp(r[1].value, "18"));
+        chk("info: viewer present (caps bit 1)", !strcmp(r[2].value, "800 X 720"));
+        chk("info: before any open", !strcmp(r[3].value, "NONE YET") && !strcmp(r[4].value, "NONE YET") && !strcmp(r[5].value, "NONE"));
+        d.core_version = 0xABCDu; d.view_caps = 0x80000001u; d.open_ms = 1234u; d.words = 432128u; d.lost = 3u; d.err = "OPEN FAILED"; gi_format(&d, r);
+        chk("info: leading zeros of the version", !strcmp(r[0].value, "0000ABCD"));
+        chk("info: no viewer when only the sequencer bit is set", !strcmp(r[2].value, "NO VIEWER"));
+        chk("info: open time in ms", !strcmp(r[3].value, "1234 MS"));
+        chk("info: words and lost words", !strcmp(r[4].value, "432128 WORDS, 3 LOST"));
+        chk("info: the last error text", !strcmp(r[5].value, "OPEN FAILED"));
+        d.open_ms = 0u; gi_format(&d, r); chk("info: 0 ms is a time, not 'none yet'", !strcmp(r[3].value, "0 MS"));
+        int fit = 1; for (uint32_t i = 0; i < GI_ROWS; i++) if (strlen(r[i].label) > 14u || strlen(r[i].value) > 27u) fit = 0;
+        chk("info: labels (14) and values (27) fit", fit);
+        chk("info: B and Left close, others do not", gi_input(GP_KEY_B) && gi_input(GP_KEY_LEFT) && !gi_input(GP_KEY_UP) && !gi_input(GP_KEY_A));
+    }
     int ok = 1;
     for (uint32_t p = 0; p < GH_PAGES; p++) {
         if (gh_pages[p].n > 17u) ok = 0;
@@ -44,7 +65,7 @@ int main(void)
     ok = 1;
     for (uint32_t i = 0; i < GC_N; i++) if (strlen(gc_rows[i].key) > 21u || strlen(gc_rows[i].what) > 25u) { ok = 0; printf("  too long: %s / %s\n", gc_rows[i].key, gc_rows[i].what); }
     chk("every controls key (21) and meaning (25) fits its column", ok);
-    chk("the menu names fit", strlen(gm_names[0]) < 16 && strlen(gm_names[1]) < 16);
+    chk("the menu names fit", strlen(gm_names[0]) < 16 && strlen(gm_names[1]) < 16 && strlen(gm_names[2]) < 16);
     printf(fails ? "FAILED %d\n" : "PASSED\n", fails);
     return fails != 0;
 }
