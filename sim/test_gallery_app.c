@@ -180,10 +180,11 @@ static void ldr_probe(uint32_t dst)      /* a chunk of a picture landing: what t
     uint32_t fill = 0u; for (uint32_t i = 0; i < 160u; i++) if (fb[178u * 512u + 120u + i] == th_role[TR_ACCENT]) fill++;
     if (dst == 0x40000000u) {
         ldr_skip = fill == 160u; ldr_prev = 0u;
-        if (!ldr_skip) { const int track = fb[178u * 512u + 279u] == th_role[TR_TEXT_SECONDARY]; ldr_opens++; if (!(track && fill == 0u && fb[181u * 512u + 120u] != th_role[TR_BG_BOTTOM] && fb[177u * 512u + 120u] != th_role[TR_ACCENT] && fb[182u * 512u + 120u] != th_role[TR_ACCENT])) ldr_first_ok = 0u; }
+        if (!ldr_skip) { const int track = fb[178u * 512u + 279u] == (uint16_t)((th_role[TR_TEXT_SECONDARY] >> 1) & 0x7BEFu); ldr_opens++; if (!(track && fill == 0u && fb[179u * 512u + 279u] == fb[178u * 512u + 279u] && fb[177u * 512u + 120u] != th_role[TR_ACCENT] && fb[180u * 512u + 120u] != th_role[TR_ACCENT])) ldr_first_ok = 0u; }
     }
     if (ldr_skip) return;
     if (fill < ldr_prev) ldr_mono = 0u;
+    if (fill > 0u && (fb[180u * 512u + 120u] == th_role[TR_ACCENT] || fb[177u * 512u + 120u] == th_role[TR_ACCENT] || fb[179u * 512u + 120u] != th_role[TR_ACCENT])) ldr_mono = 0u;      /* the bar is two rows: 178 and 179, no more */
     ldr_prev = fill; if (fill > ldr_max) ldr_max = fill; ldr_chunks++;
 }
 static void pass_hook(void)                                                                  /* a tile zoom: how far the shown view moved since the last pass, and for how many passes in a row it stood still while the wanted corner was elsewhere */

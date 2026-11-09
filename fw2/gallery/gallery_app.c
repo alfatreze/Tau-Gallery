@@ -120,11 +120,12 @@ static uint8_t h4[4096]; static gt_info_t pic;                                  
 #define LDR_X 120u
 #define LDR_Y 178u
 #define LDR_W 160u
-#define LDR_H 4u
+#define LDR_H 2u
+#define LDR_TRACK ((uint16_t)((DIM >> 1) & 0x7BEFu))     /* the track: the secondary text colour at half brightness */
 static void loader_bar(uint32_t done, uint32_t total)
 {
     const uint32_t w = total ? (uint32_t)((uint64_t)done * LDR_W / total) : 0u;
-    gfx_rect(LDR_X, LDR_Y, LDR_W, LDR_H, DIM);
+    gfx_rect(LDR_X, LDR_Y, LDR_W, LDR_H, LDR_TRACK);
     if (w) gfx_rect(LDR_X, LDR_Y, w > LDR_W ? LDR_W : w, LDR_H, ACC);
 }
 /* One landing of the canvas into the plane (restarts the landing counters). Returns 0, or 5 when a card read failed. */
