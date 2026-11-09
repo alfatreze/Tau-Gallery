@@ -49,3 +49,37 @@ TGY header, little-endian, 64 bytes: magic `TGY\0`, u16 version 0, u16 header si
 6. Tests per screen, in the style of M1.3: host test of the cores (existing), and the real firmware against the hardware model for each page, with mutants.
 
 **Order:** Controls + Help, then Info, then the settings table and Settings, then Theme. Each slice is one commit and one DEV build.
+
+## 6. M1.6 Settings: the persistence design (2026-11-09; decisions marked OWNER wait for an answer)
+
+**What exists (read from the code, not assumed).** The Pocket saves a core's `interact.json` variables with `"persist": true` into `Settings/<core id>/interact_persist.json`, and the core reads and writes them through a register file: `R_SET_IDX` (0x6C) selects a word, `R_SET_DAT` (0x70) reads or writes it (`fw2/settings/settings.c`). The gallery package already carries the player's 16 persisted variables (ids 10, 11, 12, 15, 16, 20 to 23, 27 to 33; addresses 0x20000000 + 4 x word), copied from the base core by `package_dev_build.py`; their names and defaults are the player's ("(internal) playback", "appearance", "audio", "meters 1", "last played 1" ...). So **the package already has room for gallery settings: no new variable, no new slot, no bitstream change.** Words 0, 1, 2, 5, 6, 8, 9, 10, 11 and 15 are the ones below 16 (the narrow register file reaches them; words 16 and up need the wide-file probe, `settings.c wide_probe`).
+
+**What does not fit the gallery.** `cores/settings_core.h` is a table of 27 music fields (volume, meters, tunings, last track, a legacy layout 0 migration). `settings.c` publishes with that table. Both stay in the tree only until the gallery table replaces them.
+
+**The gallery table (proposal): new `fw2/gallery/gallery_settings.h` (pure) and `.c` (register access).**
+
+| Word (variable id) | Bits | Field | Values | Used by |
+|---|---|---|---|---|
+| 0 (10) | 30..27 | layout version | 1 (0 = nothing saved) | validity of the whole file |
+| 1 (11) | 4..0 / 10..5 / 11 / 14..12 | accent / theme / polarity / font | 0..18 / 0..31 / dark, light / 0..7 | Theme slice (same bit positions as the player, so `theme_core`, `colour_core` and `ui/appearance` read them unchanged) |
+| 2 (12) | 0 | resume the last picture | 0 / 1 (default 1) | the grid opens on the last picture shown |
+| 5 (15) | 30..0 | last picture: CRC-32 of its path (31 bits) | | resume check |
+| 6 (16) | 30..0 | last picture: its index number | | resume position |
+
+**Rules, each with a test:**
+1. **Read:** a word is trusted only when the layout version (word 0) is 1; anything else gives the defaults. Every field is clamped into its range (a raw edit in Core Settings, a garbage word or a card from another build cannot select a theme that does not exist or an index past the count).
+2. **Resume:** at boot the saved index counts only when it is below the picture count and the CRC of that entry's path equals the saved CRC; otherwise the grid opens on picture 1. A changed library therefore never opens the wrong picture.
+3. **Write:** read-modify-write per word (bits that are not ours stay), word 0 last, and only words that changed. Same discipline as `settings.c`.
+4. **When (the risk):** an APF save drops the slot's fragment cache and can disturb a card read in flight (`settings.h`: "published only when nothing is streaming"). The gallery has no stream, but it reads the card in bursts (thumbnails, a 1.7 MB landing). So a change is published only when the app is idle: no key for one second and no read started; the last-picture words are published that way after a picture opens, never during the landing.
+5. **Core Settings:** the variables are visible in the Pocket's own Core Settings menu; a value changed there is adopted at the next poll (every 0.5 s, as `settings_service`), clamped by rule 1.
+
+**Package change (small).** `package_dev_build.py` for `gallery` and `galleryapp` rewrites the declared variables: names `(internal) gallery layout`, `appearance`, `browse`, `last picture crc`, `last picture index` with gallery defaults (word 0 default = layout 1; word 1 = accent 1 and bit 30 as the player's default; word 2 = resume on), and drops the 11 unused ones. `tools/persist_registry.json` gets the gallery meanings, and **`tools/tau_compat.py` reads `SF_LAYOUT_VERSION` from `fw2/cores/settings_core.h` (line 220): that fact moves to `gallery_settings.h` in the same change as its test (`sim/test_tau_compat.py`)**. This is the dependency that broke when the audio files were deleted: change the tool, the test and the doc together.
+
+**Tests.** Host: pack and unpack round trip of every field at its extremes; defaults; clamping of garbage; the layout rule; the resume rule (CRC mismatch, index too high, resume off); write only what changed with word 0 last; the idle rule (no publish while a read starts or within one second of a key). App test: the hardware model gets the register file (`R_SET_IDX`, `R_SET_DAT`) with a saved state, the real firmware must open on that picture, and a change in the Settings page must appear in the words; mutants for each rule. **Pocket proof, one run:** the Info page gets two rows (SETTINGS LOADS and STORES, LAYOUT), the owner changes a setting, quits the core, starts it again and sees it kept; that proves the APF round trip for the gallery core id (the one thing the host cannot show).
+
+**Slices.** (a) the table, the register access, the package change and the tests, with only RESUME on the Settings page; (b) the appearance selectors and their effect on the grid and status lines (the Theme slice). OWNER: merge (a) and (b) into one slice, because a selector that changes nothing on screen is dead UI, or keep (a) alone first (smaller, proves persistence before the colours).
+
+**Open owner decisions.**
+1. Merge Settings and Theme into one slice, or RESUME first? (recommended: RESUME first, then Theme; the Pocket proof of persistence needs only RESUME.)
+2. Font choice in v1? The player's fonts are `.tfnt` files loaded into the writable font RAM (`gfx/font.c`, `generated/fonts/`); the gallery build links only the default font. Recommended: no font selector in v1 (3 bits stay reserved in word 1).
+3. Slideshow interval, sort order: **not offered**. Sort needs the converter (the index is read in file order and the firmware reads one page at a time); a slideshow does not exist yet. Say so if you want either planned.
