@@ -353,7 +353,7 @@ def main():
 
     # Snapshot of every non-core file the copy will overwrite (review M3), so a failed copy or card check can put the card back. The
     # core folder itself is in the backup above whenever it existed.
-    pkg_rel = [str(f.relative_to(pkg)) for f in sorted((pkg / "Assets" / new_plat).rglob("*")) if f.is_file()]
+    pkg_rel = [str(f.relative_to(pkg)) for d in sorted(x for x in (pkg / "Assets").iterdir() if x.is_dir()) for f in sorted(d.rglob("*")) if f.is_file()]       # every Assets folder of the package (the platform's own and any other media folder it carries)
     pkg_rel += [f"Platforms/{new_plat}.json", f"Platforms/_images/{new_plat}.bin"]
     snap = bdir / "_overwritten"
     pre = {}
@@ -396,11 +396,13 @@ def main():
         rmtree_tolerant(core_paths(card, new_id)[0])
     copy_tree(pkg / "Cores" / new_id, card / "Cores" / new_id)
     copy_tree(pkg / "Assets" / new_plat, card / "Assets" / new_plat)
+    other_assets = sorted(d.name for d in (pkg / "Assets").iterdir() if d.is_dir() and d.name != new_plat)           # a package that carries its own media on another platform's folder (Tau Gallery pictures under tau_gallery/common)
+    for oa in other_assets: copy_tree(pkg / "Assets" / oa, card / "Assets" / oa)
     (card / "Platforms/_images").mkdir(parents=True, exist_ok=True)
     shutil.copy2(pkg / "Platforms" / f"{new_plat}.json", card / "Platforms" / f"{new_plat}.json")
     shutil.copy2(pkg / "Platforms/_images" / f"{new_plat}.bin", card / "Platforms/_images" / f"{new_plat}.bin")
     test_fault("copy")
-    for rel in (f"Cores/{new_id}", f"Assets/{new_plat}"):
+    for rel in (f"Cores/{new_id}", f"Assets/{new_plat}") + tuple(f"Assets/{oa}" for oa in other_assets):
         want, got = tree(pkg / rel), tree(card / rel)
         bad = [k for k in want if want[k] != got.get(k)]           # every package file must be on the card, identical
         if rel.startswith("Cores/"): bad += [k for k in got if k not in want]   # a core dir must match exactly
