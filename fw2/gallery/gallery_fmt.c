@@ -69,15 +69,26 @@ int gt_zoom_level(const uint8_t *b, uint32_t n, uint32_t k, gt_zoom_t *z)
     uint32_t seen = 0;
     for (uint32_t i = 0; i < nlev; i++) {
         const uint8_t *e = b + lt + i * 48u;
-        if (e[16] != 1u || e[17] != 0u || e[18] != 0u || e[19] != 1u) continue;                          /* layout tile128, mode RAW, RGB888, kind zoom: anything else is not ours */
+        if ((e[16] != 0u && e[16] != 1u) || e[17] != 0u || e[18] != 0u || e[19] != 1u) continue;          /* layout raster or tile128, mode RAW, RGB888, kind zoom: anything else is not ours */
         if (seen++ != k) continue;
-        const uint32_t w = rd32(e), h = rd32(e + 4), off = rd32(e + 24), len = rd32(e + 28);
-        if (w == 0u || h == 0u || w > 16384u || h > 16384u || rd32(e + 20) != GT_TILE * 3u) return GF_RANGE;
-        const uint32_t ntx = (w + GT_TILE - 1u) / GT_TILE, nty = (h + GT_TILE - 1u) / GT_TILE;
-        if (len != ntx * nty * GT_TILE_BYTES || off < 128u || (off & 4095u) || off > fsize || len > fsize - off) return GF_RANGE;
-        z->w = w; z->h = h; z->off = off; z->len = len; z->ntx = ntx; z->nty = nty; z->scale_q16 = (uint32_t)(((uint64_t)w * 65536u + width / 2u) / width);
+        const uint32_t w = rd32(e), h = rd32(e + 4), stride = rd32(e + 20), off = rd32(e + 24), len = rd32(e + 28);
+        uint32_t ntx = 0, nty = 0;
+        if (e[16] == 1u) {
+            if (w == 0u || h == 0u || w > 16384u || h > 16384u || stride != GT_TILE * 3u) return GF_RANGE;
+            ntx = (w + GT_TILE - 1u) / GT_TILE; nty = (h + GT_TILE - 1u) / GT_TILE;
+            if (len != ntx * nty * GT_TILE_BYTES) return GF_RANGE;
+        } else {
+            const uint32_t rx = rd16(e + 8), ry = rd16(e + 10), rw = rd16(e + 12), rh = rd16(e + 14);
+            if (w < GT_CANVAS_W || h < GT_CANVAS_H || w > 16384u || h > 16384u || stride != ((w * 3u + 3u) & ~3u) || len != stride * h) return GF_RANGE;
+            if (rw == 0u || rh == 0u || rx + rw > w || ry + rh > h) return GF_RANGE;
+            z->rx = (uint16_t)rx; z->ry = (uint16_t)ry; z->rw = (uint16_t)rw; z->rh = (uint16_t)rh;
+        }
+        if (off < 128u || (off & 4095u) || off > fsize || len > fsize - off) return GF_RANGE;
+        z->layout = e[16]; z->w = w; z->h = h; z->off = off; z->len = len; z->stride = stride; z->ntx = ntx; z->nty = nty;
+        { const uint32_t cw = e[16] == 1u ? w : z->rw; z->scale_q16 = (uint32_t)(((uint64_t)cw * 65536u + width / 2u) / width); }
         return GF_OK;
     }
     return GF_NOLEVEL;
 }
-uint32_t gt_tile_off(const gt_zoom_t *z, uint32_t tx, uint32_t ty) { return (tx < z->ntx && ty < z->nty) ? z->off + (ty * z->ntx + tx) * GT_TILE_BYTES : 0xFFFFFFFFu; }
+uint32_t gt_row_off(const gt_zoom_t *z, uint32_t row) { return (z->layout == 0u && row < z->h) ? z->off + row * z->stride : 0xFFFFFFFFu; }
+uint32_t gt_tile_off(const gt_zoom_t *z, uint32_t tx, uint32_t ty) { return (z->layout == 1u && tx < z->ntx && ty < z->nty) ? z->off + (ty * z->ntx + tx) * GT_TILE_BYTES : 0xFFFFFFFFu; }

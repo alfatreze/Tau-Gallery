@@ -57,7 +57,7 @@ def main(argv=None):
         data = tgy.pack_tgy(canvas, rect, thumb, size, levels)
         write_atomic(a.out / (stem + ".tgy"), data)
         entries.append(dict(path=path, name=name_of(shown), size=len(data), width=size[0], height=size[1])); thumbs.append(thumb)
-        print(json.dumps({"event": "converted", "file": p.name, "tgy": stem + ".tgy", "size": len(data), "width": size[0], "height": size[1], "rect": rect, "levels": [[lw, lh] for (lw, lh, _d) in levels]}))
+        print(json.dumps({"event": "converted", "file": p.name, "tgy": stem + ".tgy", "size": len(data), "width": size[0], "height": size[1], "rect": rect, "levels": [[l["w"], l["h"], "raster"] if isinstance(l, dict) else [l[0], l[1], "tiles"] for l in levels]}))
     write_atomic(a.out / a.index_name, tgy.pack_index(entries, thumbs))
     print(json.dumps({"event": "done", "pictures": len(entries), "skipped": skipped}))
     return 0

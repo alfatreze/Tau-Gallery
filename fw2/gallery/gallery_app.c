@@ -10,6 +10,7 @@
 #include "gallery_pages.h"
 #include "gallery_settings_hw.h"
 #include "../ui/theme.h"
+#include "gallery_view.h"
 
 #define BG   th_role[TR_BG_BOTTOM]                /* the colours are the theme's roles (ui/theme.c, docs/THEME_SPEC.md) */
 #define FG   th_role[TR_TEXT_PRIMARY]
@@ -25,6 +26,8 @@
 #define GYS 76u
 #define SLOT_PIC 2u
 #define SLOT_IDX 5u
+#define GAL_ZOOM_BASE 0x400000u                  /* the zoom plane (a raster zoom level at its own stride), SDRAM halfword address 8 MiB */
+#define ZOOM_FRAME (CLK_HZ / 60u)                /* one pan step a frame */
 #define LAND_CHUNK 131072u                       /* the largest single command measured in M0 (1.5 to 1.6 MB/s) */
 
 
@@ -112,6 +115,7 @@ static void select_to(uint32_t n)
 }
 
 /* Lands the picture's fit canvas in the viewer plane. Returns 0 when it is there, else a code for the status line. */
+static uint8_t h4[4096];                                                       /* the first 4 KB of the open picture: its header and level table */
 /* One landing of the canvas into the plane (restarts the landing counters). Returns 0, or 5 when a card read failed. */
 static int land_canvas(const gt_info_t *t, uint32_t total, int show_progress)
 {
@@ -129,7 +133,7 @@ static int open_picture(uint32_t i, int show_progress)
     { const char *s = ent[i - page * PER_PAGE].path; uint32_t n = 0; while (s[n] && n < GX_PATH_MAX) { path[1u + n] = s[n]; n++; } path[1u + n] = 0; }
     if (show_progress) say("OPENING", ACC);
     if (!slot_open_path(SLOT_PIC, path)) return 1;
-    static uint8_t h4[4096]; gt_info_t t;
+    gt_info_t t;
     if (!read_bytes(SLOT_PIC, 0u, 4096u, h4) && !read_bytes(SLOT_PIC, 0u, 4096u, h4)) return 2;      /* one retry of a failed read: a transient card error should not cost the picture */
     if (gt_parse(h4, 4096u, &t)) return 3;
     if (!(REG_RD(R_LAND_STATUS) >> 31)) return 4;                                   /* no landing path in this bitstream */
@@ -159,13 +163,72 @@ static int open_timed(uint32_t i, int show_progress)
     return r;
 }
 
+/* ---- M2 zoom, option A (docs/M2_DESIGN.md sections 3 and 4): a raster zoom level is landed in 48 KB chunks into the zoom plane at its own stride; A toggles it, the D-pad pans, B returns to the fit view.
+ * The screen is shown only inside the rows that have wholly landed (gallery_view.h); one chunk lands a pass, so the keys are polled between commands. ---- */
+static gt_zoom_t zl; static gv_stop_t z_stop;
+static uint32_t z_stride_hw, z_nch, z_lo, z_hi, z_shown;        /* the level's row stride in halfwords, its chunks, the loaded chunk interval, 1 when the zoom plane is on screen */
+static int32_t z_wx, z_wy, z_sx, z_sy;                          /* the wanted and the shown top-left corner */
+static int zoom_find(void)
+{
+    for (uint32_t k = 0; k < 8u; k++) { gt_zoom_t z; if (gt_zoom_level(h4, 4096u, k, &z)) return 0; if (z.layout == 0u) { zl = z; return 1; } }
+    return 0;
+}
+static int zoom_enter(void)
+{
+    if (!zoom_find()) return 0;
+    z_stride_hw = zl.stride / 2u; z_nch = gv_nchunks((zl.len + 4095u) & ~4095u); z_lo = 0u; z_hi = 0u; z_shown = 0u;
+    z_stop.w = zl.w; z_stop.h = zl.h; z_stop.scale_q16 = zl.scale_q16;
+    z_wx = ((int32_t)zl.w - GV_SCREEN_W) / 2; z_wy = ((int32_t)zl.h - GV_SCREEN_H) / 2; gv_clamp(&z_stop, &z_wx, &z_wy);
+    z_sx = -1; z_sy = -1; return 1;
+}
+static void zoom_leave(void) { REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16); REG_WR(R_VIEW_BASE, GAL_PLANE_BASE); z_shown = 0u; }      /* the fit plane is still in SDRAM: back in one write */
+/* Lands chunk c of the level (a read of the file's own bytes, at the same offset of the zoom plane), once more on a failure. 1 when it landed with every word counted. */
+static int zoom_land(uint32_t c)
+{
+    const uint32_t padded = (zl.len + 4095u) & ~4095u, rest = padded - c * GV_CHUNK, len = rest < GV_CHUNK ? rest : GV_CHUNK;
+    for (int attempt = 0; attempt < 2; attempt++) {
+        REG_WR(R_LAND_BASE, GAL_ZOOM_BASE + c * (GV_CHUNK / 2u)); REG_WR(R_LAND_CTRL, 1u);
+        if (!slot_read_blocking(SLOT_PIC, zl.off + c * GV_CHUNK, 0x40000000u, len, CLK_HZ)) continue;
+        const uint32_t t0 = cycles(); while (!(REG_RD(R_LAND_STATUS) & 1u) && (uint32_t)(cycles() - t0) < CLK_HZ / 10u) { }
+        if (REG_RD(R_LAND_OVF) == 0u && REG_RD(R_LAND_WORDS) == len / 4u) return 1;
+    }
+    return 0;
+}
+/* One pass of the zoom loop: on a frame tick the held direction moves the wanted corner; one chunk lands; the screen follows inside the loaded rows. Returns 1 when a chunk could not be read. */
+static int zoom_pass(int dirx, int diry, uint32_t held, int moving)
+{
+    if (moving) gv_move(&z_stop, &z_wx, &z_wy, dirx, diry, held);
+    uint32_t c;
+    if (gv_next_chunk(zl.stride, zl.len, z_nch, z_lo, z_hi, (uint32_t)z_wy, diry, &c)) {
+        if (!zoom_land(c)) return 1;
+        if (z_hi <= z_lo) { z_lo = c; z_hi = c + 1u; } else if (c + 1u == z_lo) z_lo = c; else z_hi++;
+    }
+    uint32_t rlo, rhi; int32_t y;
+    gv_rows_loaded(zl.stride, zl.len, z_lo, z_hi, &rlo, &rhi);
+    if (gv_display_y(z_wy, rlo, rhi, &y) && (!z_shown || y != z_sy || z_wx != z_sx)) {
+        REG_WR(R_VIEW_STRIDE, z_stride_hw); REG_WR(R_VIEW_BASE, gv_plane_base(GAL_ZOOM_BASE, z_stride_hw, z_wx, y)); z_sx = z_wx; z_sy = y; z_shown = 1u;
+    }
+    return 0;
+}
+
 static void viewer(void)
 {
-    uint32_t prev = REG_RD(R_INPUT) & 0xFFFFu;
+    uint32_t prev = REG_RD(R_INPUT) & 0xFFFFu, held = 0u, next_tick = 0u; int zoomed = 0;
     for (;;) {
         const uint32_t keys = REG_RD(R_INPUT) & 0xFFFFu, edge = keys & ~prev; prev = keys;
         if (edge) last_act = cycles();
         settings_tick();
+        if (zoomed) {
+            if (edge & (KEY_A | KEY_B)) { zoom_leave(); zoomed = 0; continue; }                      /* A: back to fit; B: back one level, not to the grid */
+            if (!((keys & KEY_SELECT) && (edge & (KEY_LEFT | KEY_RIGHT)))) {                          /* Select + Left/Right leave the zoom and go to the next picture below; anything else pans */
+                const int dx = (keys & KEY_RIGHT) ? 1 : (keys & KEY_LEFT) ? -1 : 0, dy = (keys & KEY_DOWN) ? 1 : (keys & KEY_UP) ? -1 : 0;
+                int tick = 0; if ((int32_t)(cycles() - next_tick) >= 0) { next_tick = cycles() + ZOOM_FRAME; tick = 1; held = (dx || dy) ? held + 1u : 0u; }
+                if (zoom_pass(dx, dy, held, tick && (dx || dy))) { zoom_leave(); gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); say("PICTURE READ FAILED", BAD); return; }
+                continue;
+            }
+            zoom_leave(); zoomed = 0;
+        }
+        if (edge & KEY_A) { if (zoom_enter()) { zoomed = 1; held = 0u; next_tick = cycles(); } continue; }
         if (edge & KEY_B) { gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); return; }
         if (edge & (KEY_LEFT | KEY_RIGHT)) {
             const uint32_t n = (edge & KEY_RIGHT) ? (sel + 1u) % head.count : (sel + head.count - 1u) % head.count;

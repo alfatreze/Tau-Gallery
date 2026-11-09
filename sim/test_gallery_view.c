@@ -147,6 +147,55 @@ int main(void)
     while (rem) { const uint32_t c = gv_next_cmd_len(rem); if (c == 0 || c > GV_CMD_MAX || (c & 4095u)) okc = 0; if (c > mx) mx = c; sum += c; rem -= c; }
     chk("command size: three tiles (147,456 bytes) are read in commands of at most 48 KB, whole 4 KB pieces, and add up", okc && sum == GV_TILE_BYTES * 3u && mx == GV_CMD_MAX);
     chk("command size: a 4 KB remainder is one 4 KB command", gv_next_cmd_len(4096u) == 4096u && gv_next_cmd_len(100000u) == GV_CMD_MAX);
+    /* ---- option A: chunks, rows and the base register ---- */
+    { int okr = 1;
+      for (int i = 0; i < 4000; i++) {
+          const uint32_t stride = 4u * (800u + rnd() % 1248u), h = 720u + rnd() % 1500u, len = stride * h, padded = (len + 4095u) & ~4095u, nch = gv_nchunks(padded);
+          const uint32_t c_lo = rnd() % nch, c_hi = c_lo + 1u + rnd() % (nch - c_lo);
+          uint32_t rlo, rhi; gv_rows_loaded(stride, len, c_lo, c_hi, &rlo, &rhi);
+          uint32_t blo = 0xFFFFFFFFu, bhi = 0;                                                  /* brute force: the rows whose every byte is inside the interval */
+          for (uint32_t r = 0; r < h; r++) { const uint64_t s = (uint64_t)r * stride, e = s + stride; if (s >= (uint64_t)c_lo * GV_CHUNK && e <= (uint64_t)c_hi * GV_CHUNK && e <= len) { if (blo == 0xFFFFFFFFu) blo = r; bhi = r + 1u; } }
+          if (blo == 0xFFFFFFFFu) { if (rhi > rlo) okr = 0; } else if (rlo != blo || rhi != bhi) okr = 0;
+      }
+      chk("rows loaded: the rows wholly inside the chunk interval, against brute force (4,000 levels and intervals)", okr); }
+    { int okn = 1, okcov = 1, okadj = 1, okpre = 1;
+      for (int i = 0; i < 600; i++) {
+          const uint32_t stride = 4u * (800u + rnd() % 1248u), h = 720u + rnd() % 1500u, len = stride * h, padded = (len + 4095u) & ~4095u, nch = gv_nchunks(padded), rows = h;
+          const uint32_t want = rnd() % (h - 719u); const int dir = (int)(rnd() % 3) - 1;
+          uint32_t lo = 0, hi = 0, c, steps = 0; uint8_t seen[1024]; memset(seen, 0, sizeof seen);
+          while (gv_next_chunk(stride, len, nch, lo, hi, want, dir, &c)) {
+              if (c >= nch || seen[c]) { okn = 0; break; } seen[c] = 1;
+              if (hi <= lo) { lo = c; hi = c + 1u; } else if (c + 1u == lo) lo = c; else if (c == hi) hi++; else { okadj = 0; break; }
+              if (++steps > nch + 2u) { okn = 0; break; }
+          }
+          uint32_t rlo, rhi; gv_rows_loaded(stride, len, lo, hi, &rlo, &rhi);
+          uint32_t need_end = want + 720u; if (need_end > rows) need_end = rows;
+          if (!(rlo <= want && rhi >= need_end)) okcov = 0;
+          { const uint32_t want2 = want > 300u ? want - 300u : 0u; memset(seen, 0, sizeof seen); steps = 0;                    /* the screen then moves UP: the top rows must be completed from below the interval */
+            while (gv_next_chunk(stride, len, nch, lo, hi, want2, 0, &c)) { if (c >= nch || seen[c]) { okn = 0; break; } seen[c] = 1; if (c + 1u == lo) lo = c; else if (c == hi) hi++; else { okadj = 0; break; } if (++steps > nch + 2u) { okn = 0; break; } }
+            gv_rows_loaded(stride, len, lo, hi, &rlo, &rhi); uint32_t ne2 = want2 + 720u; if (ne2 > rows) ne2 = rows; if (!(rlo <= want2 && rhi >= ne2)) okcov = 0; }
+          if (dir > 0 && hi < nch && rhi < (want + 720u + GV_PREFETCH_ROWS < rows ? want + 720u + GV_PREFETCH_ROWS : rows)) okpre = 0;
+          if (dir < 0 && lo > 0u && rlo > (want > GV_PREFETCH_ROWS ? want - GV_PREFETCH_ROWS : 0u)) okpre = 0;
+      }
+      chk("next chunk: from empty it loads adjacent chunks, each once, within the level, and stops (600 levels and views)", okn && okadj);
+      chk("next chunk: when it stops, every row of the screen is loaded", okcov);
+      chk("next chunk: the prefetch ahead in the direction of travel is loaded too (up to its limit or the level's end)", okpre); }
+    { /* a held pan down with one chunk landing a frame: the screen is held inside the loaded rows, never ahead of them */
+      const uint32_t stride = 6000u, h = 1500u, len = stride * h, nch = gv_nchunks((len + 4095u) & ~4095u);
+      uint32_t lo = 0, hi = 0, c; int32_t want = 390, shown = -1; int okp = 1, hadshow = 0, lag = 0;
+      for (int f = 0; f < 3000; f++) {
+          if (f > 300 && want < (int32_t)(h - 720u)) want += 16;
+          if (gv_next_chunk(stride, len, nch, lo, hi, (uint32_t)want, f > 300 ? 1 : 0, &c)) { if (hi <= lo) { lo = c; hi = c + 1u; } else if (c + 1u == lo) lo = c; else if (c == hi) hi++; }
+          uint32_t rlo, rhi; gv_rows_loaded(stride, len, lo, hi, &rlo, &rhi); int32_t y;
+          if (gv_display_y(want, rlo, rhi, &y)) { hadshow = 1; shown = y; if (y < (int32_t)rlo || y + 720 > (int32_t)rhi) okp = 0; if (y < want && f > 600) lag = 1; }
+      }
+      chk("a held pan with one 48 KB chunk a frame: the screen is always inside the loaded rows, and it reaches the end of the level", okp && hadshow && shown == (int32_t)(h - 720u));
+      chk("display row: held to the loaded rows, and none is shown when less than a screenful is loaded", gv_display_y(100, 200, 1000, &shown) && shown == 200 && gv_display_y(900, 200, 1000, &shown) && shown == 280 && !gv_display_y(0, 0, 700, &shown));
+      (void)lag; }
+    { int okb = 1;
+      for (int i = 0; i < 3000; i++) { const uint32_t sw = 800u + rnd() % 1249u, stride_b = (sw * 3u + 3u) & ~3u, plane = 0x400000u; const int32_t x = (int32_t)(rnd() % ((sw - 800u) / 4u + 1u)) * 4, y = (int32_t)(rnd() % 700u);
+          const uint32_t base = gv_plane_base(plane, stride_b / 2u, x, y); if (base != plane + ((uint32_t)y * stride_b + (uint32_t)x * 3u) / 2u) okb = 0; }
+      chk("plane base: the halfword address of pixel (x, y) for x a multiple of 4, against the byte formula (3,000 cases)", okb); }
     printf(fails ? "FAILED %d\n" : "PASSED\n", fails);
     return fails != 0;
 }

@@ -15,7 +15,8 @@ int main(int argc, char **argv)
         for (uint32_t k = 0; k < 8u; k++) {
             gt_zoom_t z; memset(&z, 0, sizeof z); int r = gt_zoom_level(buf, (uint32_t)n, k, &z);
             if (r) { printf("zoom %u rc %d\n", k, r); break; }
-            printf("zoom %u rc 0 w %u h %u off %u len %u ntx %u nty %u scale %u first %u last %u right %u outside %u\n", k, z.w, z.h, z.off, z.len, z.ntx, z.nty, z.scale_q16, gt_tile_off(&z, 0, 0), gt_tile_off(&z, z.ntx - 1u, z.nty - 1u), gt_tile_off(&z, z.ntx - 1u, 0), gt_tile_off(&z, z.ntx, 0));
+            if (z.layout == 1u) printf("zoom %u rc 0 layout 1 w %u h %u off %u len %u stride %u ntx %u nty %u scale %u first %u last %u right %u outside %u\n", k, z.w, z.h, z.off, z.len, z.stride, z.ntx, z.nty, z.scale_q16, gt_tile_off(&z, 0, 0), gt_tile_off(&z, z.ntx - 1u, z.nty - 1u), gt_tile_off(&z, z.ntx - 1u, 0), gt_tile_off(&z, z.ntx, 0));
+            else printf("zoom %u rc 0 layout 0 w %u h %u off %u len %u stride %u rect %u %u %u %u scale %u first %u last %u outside %u tileoff %u\n", k, z.w, z.h, z.off, z.len, z.stride, z.rx, z.ry, z.rw, z.rh, z.scale_q16, gt_row_off(&z, 0), gt_row_off(&z, z.h - 1u), gt_row_off(&z, z.h), gt_tile_off(&z, 0, 0));
         }
         return 0;
     }

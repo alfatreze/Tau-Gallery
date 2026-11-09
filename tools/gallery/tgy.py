@@ -17,6 +17,7 @@ IDX_MAGIC, IDX_VERSION, IDX_HEADER, IDX_ENTRY = b"TGIX", 0, 32, 160
 LAYOUT_RASTER, MODE_RAW, PIX_RGB888, KIND_FIT = 0, 0, 0, 0
 LAYOUT_TILE128, KIND_ZOOM = 1, 1                       # M2 (docs/M2_DESIGN.md section 6): a zoom level of raw 128 x 128 tiles, row-major, 49,152 bytes each; ids 2 (compressed, band-major) and 3 (macro-tiles) are reserved
 TILE, TILE_BYTES, Q16 = 128, 128 * 128 * 3, 65536
+RASTER_MAX_W = 2048                                      # a zoom stop up to this wide is stored as full-width row strips (option A, docs/M2_DESIGN.md section 3); wider ones as tiles (option B)
 PATH_BYTES, NAME_BYTES = 96, 40
 
 def align(n, a=ALIGN): return (n + a - 1) // a * a
@@ -94,18 +95,34 @@ def to_srgb(img):
     except Exception:
         return img
 
+def raster_level(img, lw, lh):
+    """A zoom stop as full-width row strips (option A): the picture padded onto a canvas of at least 800 x 720 (centred, even offsets, black) so the viewer's plane line (1,200 words) is always whole, rows of
+    ceil(width * 3 / 4) * 4 bytes. Returns a dict for pack_tgy: storage size w x h, the content rect, the row stride in bytes, the data."""
+    from PIL import Image
+    sw, sh = max(lw, CANVAS_W), max(lh, CANVAS_H)
+    px, py = ((sw - lw) // 2) & ~1, (sh - lh) // 2
+    lv = img if (lw, lh) == img.size else img.resize((lw, lh), Image.LANCZOS)
+    canvas = Image.new("RGB", (sw, sh), (0, 0, 0)); canvas.paste(lv, (px, py))
+    stride = (sw * 3 + 3) // 4 * 4
+    rows = canvas.tobytes(); pad = bytes(stride - sw * 3)
+    data = b"".join(rows[r * sw * 3:(r + 1) * sw * 3] + pad for r in range(sh))
+    return dict(raster=True, w=sw, h=sh, rect=(px, py, lw, lh), stride=stride, data=data)
+
 def zoom_levels(img):
-    """The tile levels of a prepared image for the ladder stops past fit: a list of (width, height, tile bytes). Each stop is resampled from the full-size picture (never from the fit canvas); the 1:1 stop is the picture itself."""
+    """The zoom levels of a prepared image for the ladder stops past fit. A stop up to RASTER_MAX_W wide is a raster level (option A, a dict), a wider one a list entry (width, height, tile bytes) (option B).
+    Each stop is resampled from the full-size picture (never from the fit canvas); the 1:1 stop is the picture itself."""
     from PIL import Image
     out = []
     for (lw, lh, sc) in ladder(img.width, img.height)[1:]:
+        if lw <= RASTER_MAX_W: out.append(raster_level(img, lw, lh)); continue
         lv = img if (lw, lh) == img.size else img.resize((lw, lh), Image.LANCZOS)
         data, ntx, nty = tile_data(lv); out.append((lw, lh, data))
     return out
 
 def pack_tgy(canvas, rect, thumb, size, levels=()):
-    """One .tgy file. `levels` (M2, optional) are zoom levels after the fit canvas: each (width, height, tile bytes from tile_data), written as raw 128 x 128 tiles, row-major, 4 KB aligned, one level table entry each
-    (layout 1, kind 1, stride 384 = a tile row, no index: a tile's offset is the level's offset plus (row * tiles across + column) * 49,152). Without levels the file is byte for byte the M1 file."""
+    """One .tgy file. `levels` (M2, optional) are zoom levels after the fit canvas, 4 KB aligned, one level table entry each: a dict from raster_level (layout 0, kind 1: full-width row strips on a canvas of at least
+    800 x 720, `stride` bytes a row, `rect` the content) or a tuple (width, height, tile bytes from tile_data) (layout 1, kind 1, stride 384 = a tile row, no index: a tile's offset is the level's offset plus
+    (row * tiles across + column) * 49,152). Without levels the file is byte for byte the M1 file."""
     w, h = size
     assert len(canvas) == CANVAS_W * CANVAS_H * 3 and len(thumb) == THUMB_BYTES
     nlev = 1 + len(levels); assert TGY_HEADER + nlev * LEVEL_ENTRY <= ALIGN
@@ -114,10 +131,14 @@ def pack_tgy(canvas, rect, thumb, size, levels=()):
     entries = [struct.pack("<IIHHHHBBBBIIIIIII", CANVAS_W, CANVAS_H, *rect, LAYOUT_RASTER, MODE_RAW, PIX_RGB888, KIND_FIT,
                            CANVAS_W * 3, data_off, data_len, 0, 0, crc(canvas), 0)]
     placed = []
-    for (lw, lh, data) in levels:
-        ntx, nty = (lw + TILE - 1) // TILE, (lh + TILE - 1) // TILE
-        assert len(data) == ntx * nty * TILE_BYTES
-        entries.append(struct.pack("<IIHHHHBBBBIIIIIII", lw, lh, 0, 0, lw, lh, LAYOUT_TILE128, MODE_RAW, PIX_RGB888, KIND_ZOOM, TILE * 3, end, len(data), 0, 0, crc(data), 0))
+    for lvl in levels:
+        if isinstance(lvl, dict):                                   # a raster zoom level (option A)
+            data = lvl["data"]; assert len(data) == lvl["h"] * lvl["stride"] and lvl["stride"] == (lvl["w"] * 3 + 3) // 4 * 4
+            entries.append(struct.pack("<IIHHHHBBBBIIIIIII", lvl["w"], lvl["h"], *lvl["rect"], LAYOUT_RASTER, MODE_RAW, PIX_RGB888, KIND_ZOOM, lvl["stride"], end, len(data), 0, 0, crc(data), 0))
+        else:                                                       # a tile level (option B)
+            lw, lh, data = lvl; ntx, nty = (lw + TILE - 1) // TILE, (lh + TILE - 1) // TILE
+            assert len(data) == ntx * nty * TILE_BYTES
+            entries.append(struct.pack("<IIHHHHBBBBIIIIIII", lw, lh, 0, 0, lw, lh, LAYOUT_TILE128, MODE_RAW, PIX_RGB888, KIND_ZOOM, TILE * 3, end, len(data), 0, 0, crc(data), 0))
         placed.append((end, data)); end += align(len(data))
     file_size = end
     for e in entries: assert len(e) == LEVEL_ENTRY
@@ -152,6 +173,11 @@ def level_bytes(data, lv):
     b = data[lv["off"]:lv["off"] + lv["len"]]
     if crc(b) != lv["crc"]: raise ValueError("level checksum")
     return b
+
+def row_of(data, lv, row):
+    """The stride bytes of row `row` of a raster zoom level (storage rows, padding included)."""
+    if lv["layout"] != LAYOUT_RASTER or lv["kind"] != KIND_ZOOM: raise ValueError("not a raster zoom level")
+    o = lv["off"] + row * lv["stride"]; return data[o:o + lv["stride"]]
 
 def tile_of(data, lv, tx, ty):
     """The 49,152 bytes of tile (tx, ty) of a raw tile level."""

@@ -19,6 +19,18 @@ def make_big_set(d, n=300):
         im = Image.new("RGB", (640, 480), ((i * 5) % 256, (i * 3 + 40) % 256, (i * 11 + 90) % 256)); im.paste(((i * 13) % 256, 255, 0), (i % 200, 10, i % 200 + 100, 60))
         canvas, rect, thumb, size = tgy.render(im); (d / f"b{i:03d}.tgy").write_bytes(tgy.pack_tgy(canvas, rect, thumb, size))
 
+def make_zoom_set(d):
+    """Five pictures with zoom levels, for the zoom scenario: z00 2000 x 1500 (a raster 1:1 level), z01 1000 x 800 (raster 1:1), z02 600 x 400 (no zoom level), z03 700 x 1500 (a raster level padded to 800 wide), z04 3200 x 2400 (a
+    raster half level 1600 x 1200 and a tile 1:1 level), z05 2300 x 1500 (a tile 1:1 level only: no half stop, wider than a raster level). Random pixels, so a wrong address cannot match by accident."""
+    import random
+    rnd = random.Random(5); ents, ths = [], []
+    for i, (w, h) in enumerate([(2000, 1500), (1000, 800), (600, 400), (700, 1500), (3200, 2400), (2300, 1500)]):
+        prep = tgy.prepare(Image.frombytes("RGB", (w, h), rnd.randbytes(w * h * 3)))
+        canvas, rect, thumb, size = tgy.render_prepared(prep); data = tgy.pack_tgy(canvas, rect, thumb, size, tgy.zoom_levels(prep))
+        (d / f"z{i:02d}.tgy").write_bytes(data)
+        ents.append(dict(path=f"Assets/tau_gallery/common/photos/z{i:02d}.tgy", name=f"Zoom {i:02d}", size=len(data), width=size[0], height=size[1])); ths.append(thumb)
+    (d / "tau-library.tdb").write_bytes(tgy.pack_index(ents, ths))
+
 def make_set(d, n=18):
     ents, ths = [], []
     for i in range(n):
@@ -50,15 +62,18 @@ def build(workdir, fw=None):
     return True
 
 SCENARIOS = ("resume5", "resume17", "badcrc", "toohigh", "off", "layout0", "ocean_light", "badlook")     # boot scenarios: the saved state, the grid must open on picture 6 or 18, or on picture 1 when it is not the same picture / resume is off / the file is not ours
-BIGSET = None
+BIGSET = None; ZSET = None
 def run(workdir, setdir):
     r = subprocess.run([str(workdir / "t"), str(setdir)], capture_output=True, text=True, timeout=600)
     rc, out = r.returncode, r.stdout
     for sc in SCENARIOS:
         r = subprocess.run([str(workdir / "t"), str(setdir), sc], capture_output=True, text=True, timeout=600)
         if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
-    global BIGSET
+    global BIGSET, ZSET
     if BIGSET is None: BIGSET = Path(tempfile.mkdtemp()); make_big_set(BIGSET)
+    if ZSET is None: ZSET = Path(tempfile.mkdtemp()); make_zoom_set(ZSET)
+    r = subprocess.run([str(workdir / "t"), str(ZSET), "zoom"], capture_output=True, text=True, timeout=900)
+    if r.returncode: rc = 1; out += "\nFAIL scenario zoom\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
     for sc in ("big", "bigresume250", "bigresume299"):
         r = subprocess.run([str(workdir / "t"), str(BIGSET), sc], capture_output=True, text=True, timeout=900)
         if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
@@ -116,6 +131,18 @@ def mutants(setdir):
             ("gallery_app.c", "if (land_canvas(&t, total, show_progress) && land_canvas(&t, total, show_progress)) return 5;", "if (land_canvas(&t, total, show_progress) && land_canvas(&t, total, show_progress) && land_canvas(&t, total, show_progress)) return 5;"),
             ("gallery_app.c", "if (!read_bytes(SLOT_PIC, 0u, 4096u, h4) && !read_bytes(SLOT_PIC, 0u, 4096u, h4)) return 2;", "if (!read_bytes(SLOT_PIC, 0u, 4096u, h4)) return 2;"),
             ("gallery_app.c", "    info.err = r ? open_msg[r] : 0;\n", "    info.err = r ? open_msg[r] : 0;\n    if (r == 0) remember(i);\n"),
+            ("gallery_app.c", "if (gv_display_y(z_wy, rlo, rhi, &y) &&", "if ((y = z_wy, rhi >= rlo + GV_SCREEN_H) &&"),
+            ("gallery_app.c", "REG_WR(R_LAND_BASE, GAL_ZOOM_BASE + c * (GV_CHUNK / 2u)); REG_WR(R_LAND_CTRL, 1u);", "REG_WR(R_LAND_BASE, GAL_ZOOM_BASE + c * (GV_CHUNK / 2u));"),
+            ("gallery_app.c", "len = rest < GV_CHUNK ? rest : GV_CHUNK;", "len = GV_CHUNK;"),
+            ("gallery_app.c", "if (edge & (KEY_A | KEY_B)) { zoom_leave(); zoomed = 0; continue; }", "if (edge & KEY_A) { zoom_leave(); zoomed = 0; continue; }"),
+            ("gallery_app.c", "static void zoom_leave(void) { REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16); REG_WR(R_VIEW_BASE, GAL_PLANE_BASE);", "static void zoom_leave(void) { REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16);"),
+            ("gallery_app.c", "if (!((keys & KEY_SELECT) && (edge & (KEY_LEFT | KEY_RIGHT)))) {", "if (1) {"),
+            ("gallery_app.c", "held = (dx || dy) ? held + 1u : 0u;", "held = held + 1u;"),
+            ("gallery_app.c", "if (z.layout == 0u) { zl = z; return 1; }", "if (1) { zl = z; return 1; }"),
+            ("gallery_app.c", "REG_WR(R_VIEW_STRIDE, z_stride_hw); REG_WR(R_VIEW_BASE, gv_plane_base(GAL_ZOOM_BASE, z_stride_hw, z_wx, y));", "REG_WR(R_VIEW_STRIDE, z_stride_hw); REG_WR(R_VIEW_BASE, gv_plane_base(GAL_ZOOM_BASE, z_stride_hw, z_wx & ~7, y));"),
+            ("gallery_app.c", "if (!zoom_land(c)) return 1;", "if (!zoom_land(c)) { }"),
+            ("gallery_app.c", "if (gv_next_chunk(zl.stride, zl.len, z_nch, z_lo, z_hi, (uint32_t)z_wy, diry, &c)) {", "if (gv_next_chunk(zl.stride, zl.len, z_nch, z_lo, z_hi, (uint32_t)z_wy, 0, &c)) {"),
+            ("gallery_app.c", "if (zoom_pass(dx, dy, held, tick && (dx || dy))) {", "if (zoom_pass(dx, dy, held, (dx || dy))) {"),
             ("gallery_fmt.c", "return h->entries_off + i * GX_ENTRY_BYTES;" if False else "uint32_t gx_thumb_off(const gx_head_t *h, uint32_t thumb) { return h->atlas_off + thumb * GX_THUMB_BYTES; }", "uint32_t gx_thumb_off(const gx_head_t *h, uint32_t thumb) { return h->atlas_off + thumb * (GX_THUMB_BYTES - 2u); }")]
     bad = 0
     for i, (f, a, b) in enumerate(muts):

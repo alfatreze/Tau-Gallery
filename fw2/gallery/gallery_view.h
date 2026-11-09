@@ -199,4 +199,70 @@ static inline void gv_q_retarget(gv_queue_t *q, const gv_tile_t *need, uint32_t 
     *q = k;
 #endif
 }
+
+/* ---- option A: a raster zoom level is read in chunks into a plane the size of the level; rows are what the screen needs ---- */
+/* The file's rows are `stride` bytes apart; a chunk is GV_CHUNK bytes (a whole number of 4 KB pieces) of the level, landed at the same offset of the zoom plane, so the plane holds the level at its own
+ * stride and a pan is a register change. The chunks loaded are always one contiguous interval [c_lo, c_hi): loading extends it at either end. A row is usable only when ALL of its bytes are loaded. */
+#define GV_CHUNK GV_CMD_MAX
+#define GV_PREFETCH_ROWS 240                 /* rows loaded ahead of the screen in the direction of travel */
+static inline uint32_t gv_nchunks(uint32_t padded_len) { return (padded_len + GV_CHUNK - 1u) / GV_CHUNK; }
+/* The rows [rlo, rhi) that lie wholly inside chunks [c_lo, c_hi) of a level of `len` bytes of rows. */
+static inline void gv_rows_loaded(uint32_t stride, uint32_t len, uint32_t c_lo, uint32_t c_hi, uint32_t *rlo, uint32_t *rhi)
+{
+    if (c_hi <= c_lo) { *rlo = 0; *rhi = 0; return; }
+    const uint64_t b0 = (uint64_t)c_lo * GV_CHUNK; uint64_t b1 = (uint64_t)c_hi * GV_CHUNK;
+    if (b1 > len) b1 = len;
+#if BUG == 10
+    *rlo = (uint32_t)(b0 / stride);                                                          /* the row that starts before the interval counts */
+#else
+    *rlo = (uint32_t)((b0 + stride - 1u) / stride);
+#endif
+    *rhi = (uint32_t)(b1 / stride);
+    if (*rhi < *rlo) *rhi = *rlo;
+}
+/* The next chunk to land (returns 1 and sets *out), or 0 when nothing is needed. Order: the screen's own rows first (the top if it is not covered, then the bottom), then the prefetch ahead in the direction
+ * of travel (dir > 0 down, < 0 up, 0 none). From an empty interval the first chunk is the one that holds the first byte of row want_y. One chunk a call: the caller does one a pass of its loop. */
+static inline int gv_next_chunk(uint32_t stride, uint32_t len, uint32_t nch, uint32_t c_lo, uint32_t c_hi, uint32_t want_y, int dir, uint32_t *out)
+{
+    const uint32_t rows = len / stride;
+    if (c_hi <= c_lo) { uint32_t c = (uint32_t)((uint64_t)want_y * stride / GV_CHUNK); if (c >= nch) c = nch - 1u; *out = c; return 1; }
+    uint32_t rlo, rhi; gv_rows_loaded(stride, len, c_lo, c_hi, &rlo, &rhi);
+    uint32_t need_end = want_y + GV_SCREEN_H; if (need_end > rows) need_end = rows;
+#if BUG == 11
+    (void)c_lo;                                                                              /* the top of the screen is never completed */
+#else
+    if (rlo > want_y && c_lo > 0u) { *out = c_lo - 1u; return 1; }
+#endif
+    if (rhi < need_end && c_hi < nch) { *out = c_hi; return 1; }
+    uint32_t ahead_end = want_y + GV_SCREEN_H + GV_PREFETCH_ROWS; if (ahead_end > rows) ahead_end = rows;
+    const uint32_t ahead_start = want_y > GV_PREFETCH_ROWS ? want_y - GV_PREFETCH_ROWS : 0u;
+#if BUG == 12
+    if (dir < 0 && c_hi < nch && rhi < ahead_end) { *out = c_hi; return 1; }                 /* the prefetch goes the wrong way */
+    if (dir > 0 && c_lo > 0u && rlo > ahead_start) { *out = c_lo - 1u; return 1; }
+#else
+    if (dir > 0 && c_hi < nch && rhi < ahead_end) { *out = c_hi; return 1; }
+    if (dir < 0 && c_lo > 0u && rlo > ahead_start) { *out = c_lo - 1u; return 1; }
+#endif
+    return 0;
+}
+/* The row at which the screen may be shown: the wanted one, held inside the loaded rows [rlo, rhi) so that no pixel that has not landed is ever on screen. Returns 0 when fewer than a screenful is loaded. */
+static inline int gv_display_y(int32_t want_y, uint32_t rlo, uint32_t rhi, int32_t *y)
+{
+    if (rhi < rlo + GV_SCREEN_H) return 0;
+#if BUG == 13
+    *y = want_y; return 1;                                                                    /* the screen runs ahead of the loaded rows */
+#else
+    int32_t v = want_y; if (v < (int32_t)rlo) v = (int32_t)rlo; if (v > (int32_t)(rhi - GV_SCREEN_H)) v = (int32_t)(rhi - GV_SCREEN_H);
+    *y = v; return 1;
+#endif
+}
+/* The halfword address of plane line 0 for a viewport at (x, y) of a raster level whose plane starts at plane_hw and whose rows are stride_hw halfwords apart. x is a multiple of 4: four pixels are six halfwords. */
+static inline uint32_t gv_plane_base(uint32_t plane_hw, uint32_t stride_hw, int32_t x, int32_t y)
+{
+#if BUG == 14
+    return plane_hw + (uint32_t)y * stride_hw + (uint32_t)(x >> 2) * 5u;                      /* five halfwords for four pixels */
+#else
+    return plane_hw + (uint32_t)y * stride_hw + (uint32_t)(x >> 2) * 6u;
+#endif
+}
 #endif

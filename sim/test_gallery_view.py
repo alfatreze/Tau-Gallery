@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Host test of fw2/gallery/gallery_view.h (sim/test_gallery_view.c): the viewport rules of M2 (ladder, clamp and 4-pixel alignment, zoom mapping, pan speed, the resident window, the tiles a viewport needs, the tile
-queue, the 48 KB command limit). The unmodified build must pass; the nine built-in mutants (-DBUG=1..9) and the source mutants must each fail."""
+queue, the 48 KB command limit). The unmodified build must pass; the fourteen built-in mutants (-DBUG=1..14) and the source mutants must each fail."""
 import os, subprocess, sys, tempfile
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
@@ -22,7 +22,7 @@ if __name__ == "__main__":
     if rc: sys.exit(1)
     if "--mutants" in sys.argv:
         bad = 0
-        for n in range(1, 10):
+        for n in range(1, 15):
             w = build([f"-DBUG={n}"]); rc, _ = run(w) if w else (1, ""); print("killed  " if rc else "SURVIVED", f"BUG={n}"); bad += rc == 0
         src = (ROOT / "fw2/gallery/gallery_view.h").read_text()
         for a, b in (("if (v < 0) v = 0;\n    if (align) v = gv_floor4(v);", "if (v < 0) v = 0;"),
