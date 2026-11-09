@@ -29,6 +29,8 @@ VARIANTS = {   # fw/build.sh target -> (ROM dir, kind text, default note)
     "player2":    ("player2", "Player 2 build (new player, docs/features/PLAYER_V2_SPEC.md)", "new player, S2 platform page"),
     # Tau Gallery M0 test page (fw2/build_gallery.sh -> work/diagnostics/gallery): a hot-RAM program for the stripped Gallery bitstream. Built by hand first (make gallery-firmware), never by --build-flags.
     "gallery":    ("gallery", "Gallery M0 test page (viewer, mode switch, landing reads, interrupts)", "fw2/gallery on the stripped bitstream"),
+    # Tau Gallery M1 (fw2/build_gallery.sh with APP=gallery -> work/diagnostics/gallery-app): the gallery itself. --photos DIR converts a folder of pictures into the package (tools/gallery/tgy_convert.py).
+    "galleryapp": ("gallery-app", "Gallery M1 (thumbnail grid, 800 x 720 viewer)", "fw2/gallery app on the stripped bitstream"),
     "tempo":      ("release", "release-style build with Cymo tempo for MP3 (Settings > Playback > TEMPO)", "pitch-preserving MP3 speed, release-style",
                    "release", "work/ram192k"),
 }
@@ -56,6 +58,7 @@ def main():
     ap.add_argument("--cover-slot", action="store_true", help="(kept for old command lines; data slot 7, the TIM1 cover image, is always declared now)")
     ap.add_argument("--hang-pack", metavar="KEY[:MODE]", help="a TEST package for the pack watchdog (W4): that meter's pack is replaced by its hang variant (needs --variant player2 and PACKS=1; the core's description says so)")
     ap.add_argument("--preset-probe", action="store_true", help="a TEST package for the preset-read measurement (docs/features/METER_PRESETS_EXTERNAL.md step 0b, B-963): writes preset-probe.bin (200 bytes: \"TPRB\" then byte i = (i*37+11) & 255) into the core's Assets folder, which the Diagnostic Build of this firmware opens and reads on every new track (Report rows PP ...)")
+    ap.add_argument("--photos", type=Path, help="with --variant galleryapp: a folder of pictures to convert into the package (Assets/tau_gallery/common/photos/*.tgy and the index tau-library.tdb)")
     ap.add_argument("--note", help="replaces the default text after the build kind in the description")
     ap.add_argument("--rbf", type=Path, help="pair the ROM with this raw Quartus RBF instead of dist/'s")
     ap.add_argument("--rbf-sha256", help="expected SHA-256 of --rbf (required with --rbf)")
@@ -202,7 +205,7 @@ def main():
         desc = desc[:60] + "..."
     m["description"] = desc
     save(c / "core.json", j)
-    slots_lib.add_library_slot(c, persist_words=args.variant not in ("player2", "gallery"))                       # data slot 5 + persist words 24-26 (27 retired)
+    slots_lib.add_library_slot(c, persist_words=args.variant not in ("player2", "gallery", "galleryapp"))                       # data slot 5 + persist words 24-26 (27 retired)
     if len(platform) > 15 or not re.fullmatch(r"[a-z0-9][a-z0-9_]*", platform):
         raise ValueError(f"invalid Analogue Pocket platform shortname: {platform!r}")
     if len(short) > 31: raise ValueError(f"core shortname exceeds Pocket limit: {short!r}")
@@ -215,7 +218,19 @@ def main():
     slots_lib.add_cover_slot(c)                         # data slot 7 = the cover image (TIM1 reader, on by default since B-325)
     if shared_media:                                    # library index and tau-assets.bin come from TAU's common/ (platform_ids[1])
         save(c / "data.json", tau_layout.read_shared_media(json.loads((c / "data.json").read_text())))
+    if args.variant == "galleryapp":                    # slot 2 is the picture slot of the gallery (opened by path, .tgy), not an audio file
+        dj = json.loads((c / "data.json").read_text())
+        for sl in dj["data"]["data_slots"]:
+            if sl["id"] == 2: sl["name"] = "Picture"; sl["extensions"] = ["tgy"]
+        save(c / "data.json", dj)
     a = out / "Assets" / platform
+    if args.photos is not None:
+        if args.variant != "galleryapp": sys.exit("--photos goes with --variant galleryapp")
+        sys.path.insert(0, str(root / "tools/gallery"))
+        import tgy_convert
+        common = out / "Assets" / "tau_gallery" / "common"; (common / "photos").mkdir(parents=True)
+        if tgy_convert.main([str(args.photos), str(common / "photos"), "--card-dir", "Assets/tau_gallery/common/photos"]) != 0: sys.exit("photo conversion failed")
+        shutil.move(str(common / "photos" / "tau-library.tdb"), str(common / "tau-library.tdb"))
     cd = a / core_id                                   # H4: build-bound files are core-specific (tools/tau_layout.py)
     cd.mkdir(parents=True)
     shutil.copy2(rom, cd / "tau.rom")
