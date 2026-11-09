@@ -371,4 +371,33 @@ static inline void gv_map_corner(uint32_t s_from, int32_t ofx, int32_t ofy, uint
     *nx = (int32_t)(cx * s_to / s_from + otx - GV_SCREEN_W / 2); *ny = (int32_t)(cy * s_to / s_from + oty - GV_SCREEN_H / 2);
 #endif
 }
+
+/* ---- the map: the fit view with the rectangle of a stop's screen drawn on it, to jump to another part of the picture ---- */
+#define GV_RECT_T 2                          /* the outline is 2 pixels thick: a pixel pair is 3 halfwords, so an edge is a whole number of them */
+/* The screen of a stop (its corner (vx, vy) in the stop's canvas) on the fit canvas. (fox, foy): where the picture starts on the fit canvas, sf: the fit scale (Q16); (okx, oky) and sk the same for the stop. rx is a multiple of 4,
+ * rw and rh are even (no smaller than 8). */
+static inline void gv_map_rect(uint32_t sf, int32_t fox, int32_t foy, uint32_t sk, int32_t okx, int32_t oky, int32_t vx, int32_t vy, int32_t *rx, int32_t *ry, int32_t *rw, int32_t *rh)
+{
+    int64_t w = ((int64_t)GV_SCREEN_W * sf + sk / 2u) / sk, h = ((int64_t)GV_SCREEN_H * sf + sk / 2u) / sk;
+    w &= ~(int64_t)1; h &= ~(int64_t)1; if (w < 8) w = 8; if (h < 8) h = 8;
+#if BUG == 22
+    *rx = gv_floor4((int32_t)((int64_t)vx * sf / sk + fox)); *ry = (int32_t)((int64_t)vy * sf / sk + foy);      /* the stop's padding is ignored */
+#else
+    *rx = gv_floor4((int32_t)((int64_t)(vx - okx) * sf / sk + fox)); *ry = (int32_t)((int64_t)(vy - oky) * sf / sk + foy);
+#endif
+    *rw = (int32_t)w; *rh = (int32_t)h;
+}
+/* The corner in a stop's canvas for a rectangle at (rx, ry) on the fit canvas: the inverse of gv_map_rect. No clamp: the caller clamps in the stop. */
+static inline void gv_map_view(uint32_t sf, int32_t fox, int32_t foy, uint32_t sk, int32_t okx, int32_t oky, int32_t rx, int32_t ry, int32_t *vx, int32_t *vy)
+{
+    *vx = (int32_t)((int64_t)(rx - fox) * sk / sf + okx); *vy = (int32_t)((int64_t)(ry - foy) * sk / sf + oky);
+}
+/* Keeps a rectangle (rw x rh) over the picture (pw x ph at (px, py) on the fit canvas): inside it, with rx on a multiple of 4; a rectangle larger than the picture is centred on it. */
+static inline void gv_map_clamp(int32_t px, int32_t py, int32_t pw, int32_t ph, int32_t rw, int32_t rh, int32_t *rx, int32_t *ry)
+{
+    if (rw >= pw) *rx = gv_floor4(px - (rw - pw) / 2);
+    else { const int32_t lo = (px + 3) & ~3, hi = gv_floor4(px + pw - rw); *rx = *rx < lo ? lo : *rx > hi ? (hi < lo ? lo : hi) : *rx; *rx = gv_floor4(*rx); }
+    if (rh >= ph) *ry = py - (rh - ph) / 2;
+    else { const int32_t lo = py, hi = py + ph - rh; *ry = *ry < lo ? lo : *ry > hi ? hi : *ry; }
+}
 #endif

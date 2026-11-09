@@ -248,6 +248,15 @@ static void zoom_leave(void)
     REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16); REG_WR(R_VIEW_BASE, GAL_PLANE_BASE);              /* the fit plane is still in SDRAM: back in one write */
     z_shown = 0u; t_job = 0u; t_recentre = 0u; zk = -1;
 }
+/* Opens stop k with its screen corner at (nx, ny) of the stop's canvas (clamped here): the fit view shows while the level loads. */
+static void zoom_open(int k, int32_t nx, int32_t ny)
+{
+    zl = zs[k]; zk = k; z_stop.w = zl.w; z_stop.h = zl.h; z_stop.scale_q16 = zl.scale_q16; gv_clamp(&z_stop, &nx, &ny);
+    z_wx = nx; z_wy = ny; z_sx = -1; z_sy = -1; z_shown = 0u; z_t0 = cycles(); z_first = 1u;
+    if (zl.layout == 0u) { z_stride_hw = zl.stride / 2u; z_nch = gv_nchunks((zl.len + 4095u) & ~4095u); z_lo = 0u; z_hi = 0u; }
+    else { t_front = 0u; gv_window_for(&z_stop, z_wx, z_wy, &t_wx[0], &t_wy[0]); res_clear(0u); }
+    zb_begin();
+}
 /* Goes to stop k (-1: fit). The fit view shows while the new level loads, and its first view keeps the screen centre on the same point of the picture. */
 static void zoom_goto(int k)
 {
@@ -258,11 +267,7 @@ static void zoom_goto(int k)
     if (k < 0) return;
     zoom_off(k, &tox, &toy);
     gv_map_corner(sf, fox, foy, zoom_scale(k), tox, toy, x, y, &nx, &ny);
-    zl = zs[k]; zk = k; z_stop.w = zl.w; z_stop.h = zl.h; z_stop.scale_q16 = zl.scale_q16; gv_clamp(&z_stop, &nx, &ny);
-    z_wx = nx; z_wy = ny; z_sx = -1; z_sy = -1; z_shown = 0u; z_t0 = cycles(); z_first = 1u;
-    if (zl.layout == 0u) { z_stride_hw = zl.stride / 2u; z_nch = gv_nchunks((zl.len + 4095u) & ~4095u); z_lo = 0u; z_hi = 0u; }
-    else { t_front = 0u; gv_window_for(&z_stop, z_wx, z_wy, &t_wx[0], &t_wy[0]); res_clear(0u); }
-    zb_begin();
+    zoom_open(k, nx, ny);
 }
 /* ---- option A ---- */
 /* Lands chunk c of the level (a read of the file's own bytes, at the same offset of the zoom plane), once more on a failure. 1 when it landed with every word counted. */
@@ -382,6 +387,93 @@ static int tile_pass(int dx, int dy, uint32_t held, int moving, int tick)
 }
 static int zoom_pass(int dx, int dy, uint32_t held, int moving, int tick) { return zl.layout == 0u ? raster_pass(dx, dy, held, moving, tick) : tile_pass(dx, dy, held, moving, tick); }
 
+/* ---- the map (docs/M2_DESIGN.md, the navigator): START while zoomed shows the fit view with the rectangle of the screen drawn on it ---- */
+/* The viewer plane has no overlay, so the outline (2 pixels, ACC) is written into the fit plane and the picture's own pixels under it are saved first: a copy of a row piece or of a 3-halfword pixel pair per row with one fixed pair of
+ * Talos bases for each half of the plane (a command offset is below 2^19 halfwords, a plane is 864,000). D-pad moves the rectangle, L1 and R1 change the stop (the rectangle's size), A opens that stop there, B or START go back to the view. */
+#define MAP_SPR 0x1000u                          /* one row of ACC pixels, 1,200 halfwords, inside the GAL_BARSAVE area */
+#define MAP_SAVE 0x2000u                         /* the saved pixels: 4 edge rows of 1,200, then the left and right edges at 3 halfwords a row */
+#define MAP_VERT 4800u
+static int32_t m_rx, m_ry, m_rw, m_rh; static uint32_t map_runs;      /* the rectangle on the fit canvas; how many times the map was opened */
+static void map_blit(int op, int half, uint32_t poff, uint32_t soff, uint32_t n)
+{
+    const uint32_t pb = GAL_PLANE_BASE + (half ? 360u * GAL_LINE_WORDS16 : 0u);
+    for (uint32_t d = 0; d < n; d += 127u) {
+        const uint32_t w = n - d < 127u ? n - d : 127u;
+        if (op == 0) gfx_blit_raw(pb, GAL_BARSAVE, poff + d, MAP_SAVE + soff + d, w);                 /* save the plane's pixels */
+        else if (op == 1) gfx_blit_raw(GAL_BARSAVE, pb, MAP_SPR + d, poff + d, w);                    /* draw the outline from the sprite row */
+        else gfx_blit_raw(GAL_BARSAVE, pb, MAP_SAVE + soff + d, poff + d, w);                         /* put the pixels back */
+    }
+}
+static void map_ops(int op, int32_t rx, int32_t ry, int32_t rw, int32_t rh)
+{
+    const int32_t x0 = rx < 0 ? 0 : rx, x1 = rx + rw > 800 ? 800 : rx + rw;
+    for (int half = 0; half < 2; half++) {
+        const int32_t rlo = half ? 360 : 0, rhi = half ? 720 : 360;
+        for (int e = 0; e < 4; e++) {                                                        /* the two top rows, the two bottom rows */
+            const int32_t row = e < 2 ? ry + e : ry + rh - 4 + e;
+            if (row < rlo || row >= rhi || x1 <= x0) continue;
+            map_blit(op, half, (uint32_t)(row - rlo) * GAL_LINE_WORDS16 + (uint32_t)(x0 * 3 / 2), (uint32_t)e * 1200u, (uint32_t)((x1 - x0) * 3 / 2));
+        }
+        for (int side = 0; side < 2; side++) {                                               /* the left and right edges between them */
+            const int32_t px = side ? rx + rw - GV_RECT_T : rx; if (px < 0 || px + GV_RECT_T > 800) continue;
+            const int32_t r0 = ry + 2 > rlo ? ry + 2 : rlo, r1 = ry + rh - 2 < rhi ? ry + rh - 2 : rhi;
+            for (int32_t row = r0 < 0 ? 0 : r0; row < r1; row++) {
+                const uint32_t k = (uint32_t)(row - (ry + 2)); if (k >= 720u) continue;
+                map_blit(op, half, (uint32_t)(row - rlo) * GAL_LINE_WORDS16 + (uint32_t)(px * 3 / 2), MAP_VERT + (uint32_t)side * 2160u + k * 3u, 3u);
+            }
+        }
+    }
+}
+static void map_rect_of(int k, int32_t cx, int32_t cy)                                      /* the rectangle of stop k's screen centred on the fit point (cx, cy), kept over the picture */
+{
+    int32_t okx, oky, rw, rh, ry0; zoom_off(k, &okx, &oky);
+    gv_map_rect(zoom_scale(-1), (int32_t)pic.rx, (int32_t)pic.ry, zoom_scale(k), okx, oky, okx, oky, &m_rx, &ry0, &rw, &rh);
+    m_rw = rw; m_rh = rh; m_rx = cx - rw / 2; m_ry = cy - rh / 2;
+    gv_map_clamp((int32_t)pic.rx, (int32_t)pic.ry, (int32_t)pic.rw, (int32_t)pic.rh, m_rw, m_rh, &m_rx, &m_ry);
+}
+static void zoom_reshow(void)                                                                /* the zoom view that was on screen, again */
+{
+    if (zl.layout == 0u) { REG_WR(R_VIEW_STRIDE, z_stride_hw); REG_WR(R_VIEW_BASE, gv_plane_base(GAL_ZOOM_BASE, z_stride_hw, z_sx, z_sy)); }
+    else tile_show(z_sx, z_sy);
+}
+/* Returns 1 when a stop was opened from the map, 0 when it was left. */
+static int map_mode(void)
+{
+    map_runs++;
+    if (t_job) { gfx_fence(); t_job = 0u; }                                                  /* an abandoned tile copy: its tile is not marked whole, a later pass does it again */
+    REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16); REG_WR(R_VIEW_BASE, GAL_PLANE_BASE);              /* the fit plane */
+    for (uint32_t h = 0; h < 1200u; h += 2u) gfx_mb_write(GAL_BARSAVE + MAP_SPR + h, (uint32_t)zb_half(h, 1000000u) | ((uint32_t)zb_half(h + 1u, 1000000u) << 16));      /* the sprite row: ACC all along */
+    int mk = zk; int32_t okx, oky; zoom_off(zk, &okx, &oky);
+    gv_map_rect(zoom_scale(-1), (int32_t)pic.rx, (int32_t)pic.ry, zoom_scale(zk), okx, oky, z_sx, z_sy, &m_rx, &m_ry, &m_rw, &m_rh);
+    gv_map_clamp((int32_t)pic.rx, (int32_t)pic.ry, (int32_t)pic.rw, (int32_t)pic.rh, m_rw, m_rh, &m_rx, &m_ry);
+    int32_t dx0 = m_rx, dy0 = m_ry, dw0 = m_rw, dh0 = m_rh;                                  /* what is drawn now */
+    map_ops(0, dx0, dy0, dw0, dh0); map_ops(1, dx0, dy0, dw0, dh0); gfx_fence();
+    uint32_t prev = REG_RD(R_INPUT) & 0xFFFFu, held = 0u, next_tick = cycles();
+    for (;;) {
+        const uint32_t keys = REG_RD(R_INPUT) & 0xFFFFu, edge = keys & ~prev; prev = keys;
+        if (edge) last_act = cycles();
+        settings_tick();
+        int redraw = 0;
+        if (edge & (KEY_B | KEY_START)) { map_ops(2, dx0, dy0, dw0, dh0); gfx_fence(); zoom_reshow(); return 0; }
+        if (edge & KEY_A) {
+            map_ops(2, dx0, dy0, dw0, dh0); gfx_fence();
+            int32_t sx2, sy2; zoom_off(mk, &okx, &oky);
+            gv_map_view(zoom_scale(-1), (int32_t)pic.rx, (int32_t)pic.ry, zoom_scale(mk), okx, oky, m_rx, m_ry, &sx2, &sy2);
+            zoom_leave(); zoom_open(mk, sx2, sy2); return 1;
+        }
+        if ((edge & KEY_R1) && (uint32_t)mk + 1u < zn) { const int32_t cx = m_rx + m_rw / 2, cy = m_ry + m_rh / 2; mk++; map_rect_of(mk, cx, cy); redraw = 1; }
+        if ((edge & KEY_L1) && mk > 0) { const int32_t cx = m_rx + m_rw / 2, cy = m_ry + m_rh / 2; mk--; map_rect_of(mk, cx, cy); redraw = 1; }
+        const int dx = (keys & KEY_RIGHT) ? 1 : (keys & KEY_LEFT) ? -1 : 0, dy = (keys & KEY_DOWN) ? 1 : (keys & KEY_UP) ? -1 : 0;
+        if ((int32_t)(cycles() - next_tick) >= 0) {
+            next_tick = cycles() + ZOOM_FRAME; held = (dx || dy) ? held + 1u : 0u;
+            if (dx || dy) { const int32_t st = gv_speed(held); m_rx += dx * st; m_ry += dy * st; gv_map_clamp((int32_t)pic.rx, (int32_t)pic.ry, (int32_t)pic.rw, (int32_t)pic.rh, m_rw, m_rh, &m_rx, &m_ry); redraw = 1; }
+        }
+        if (redraw && (m_rx != dx0 || m_ry != dy0 || m_rw != dw0 || m_rh != dh0)) {
+            map_ops(2, dx0, dy0, dw0, dh0); map_ops(0, m_rx, m_ry, m_rw, m_rh); map_ops(1, m_rx, m_ry, m_rw, m_rh); gfx_fence();
+            dx0 = m_rx; dy0 = m_ry; dw0 = m_rw; dh0 = m_rh;
+        }
+    }
+}
 static void viewer(void)
 {
     uint32_t prev = REG_RD(R_INPUT) & 0xFFFFu, held = 0u, next_tick = 0u;
@@ -390,6 +482,7 @@ static void viewer(void)
         if (edge) last_act = cycles();
         settings_tick();
         if (zk >= 0) {
+            if ((edge & KEY_START) && z_shown) { map_mode(); held = 0u; next_tick = cycles(); prev = REG_RD(R_INPUT) & 0xFFFFu; continue; }                   /* START: the map */
             if (edge & (KEY_A | KEY_B)) { zoom_goto(-1); continue; }                                  /* A: back to fit; B: back one level, not to the grid */
             if (edge & KEY_R1) { if ((uint32_t)zk + 1u < zn) { zoom_goto(zk + 1); held = 0u; next_tick = cycles(); } continue; }                /* R1 and L1 step the stops */
             if (edge & KEY_L1) { zoom_goto(zk > 0 ? zk - 1 : -1); held = 0u; next_tick = cycles(); continue; }

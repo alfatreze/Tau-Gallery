@@ -4,6 +4,7 @@
  *   test_gallery_app DIR     (DIR holds tau-library.tdb and p00.tgy .. pNN.tgy, written by sim/test_gallery_app.py)
  * Prints "GALLERY APP ok n" / "GALLERY APP FAIL n"; exit 1 on a failure. Mutants are made by the Python driver (it edits copies of the firmware sources). */
 #include <stdio.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -17,7 +18,7 @@ static uint16_t mem[HW_N];                         /* SDRAM, halfwords: the plan
 static uint16_t fb[512u * 1024u];                  /* the UI framebuffer, halfwords, stride 512 */
 static uint32_t clk, irq_pend, vid_req, vid_bus, vid_sw, vid_due, vbase, vstride, land_base, land_words, land_ovf, input_n;
 static int force_ovf, force_short, viewer_dead, fail_pic_reads, pass_pic_reads;
-static int zb_ok_phase = 0;
+static int zb_ok_phase = 0; static int32_t map_cx, map_cy, map_rx1, map_rw2, map_x0, map_y0, map_rx0, map_ry0, map_ex, map_ey, map_rw1;
 static uint32_t rc_lead_n, rc_lead_bad; static uint32_t rc_prev, rc_starts, rc_retarget; static int32_t rc_bx, rc_by;
 static void ldr_lead_probe(void);
 static void ldr_probe(uint32_t dst);
@@ -180,6 +181,18 @@ static int plane_is_f(const char *fname)                                        
     for (uint32_t b = 0; b < 1728000u; b++) { const uint8_t got = (uint8_t)(mem[0x200000u + b / 2u] >> (8u * (b & 1u))); if (got != d[20480u + b]) bad++; }
     free(d); return bad == 0u;
 }
+static int plane_outline_is(const char *fname, int32_t rx, int32_t ry, int32_t rw, int32_t rh)      /* the plane is the canvas of `fname` with a 2-pixel ACC frame on the rectangle and nothing else changed */
+{
+    char f[600]; snprintf(f, sizeof f, "%s/%s", dir, fname); uint32_t n; uint8_t *d = slurp(f, &n); if (!d) return 0;
+    const uint16_t ac = th_role[TR_ACCENT]; const uint8_t col[3] = { (uint8_t)(((ac >> 11) & 31u) << 3), (uint8_t)(((ac >> 5) & 63u) << 2), (uint8_t)((ac & 31u) << 3) };
+    uint32_t bad = 0, framed = 0;
+    for (int32_t y = 0; y < 720; y++) for (int32_t x = 0; x < 800; x++) {
+        const int in = x >= rx && x < rx + rw && y >= ry && y < ry + rh, fr = in && (x < rx + 2 || x >= rx + rw - 2 || y < ry + 2 || y >= ry + rh - 2);
+        for (int c = 0; c < 3; c++) { const uint32_t b = ((uint32_t)y * 800u + (uint32_t)x) * 3u + (uint32_t)c; const uint8_t got = (uint8_t)(mem[0x200000u + b / 2u] >> (8u * (b & 1u))); if (got != (fr ? col[c] : d[20480u + b])) bad++; }
+        framed += fr;
+    }
+    free(d); return bad == 0u && framed > 100u;
+}
 static uint32_t ph_stall, ph_stall_max, ph_jump_max, ph_axx, ph_axy; static int32_t ph_px = -1, ph_py = -1;
 static void ldr_probe(uint32_t dst)      /* a chunk of a picture landing: what the loader bar shows before it (a track at the start, a fill that only grows). An open that shows no progress (a picture change in the viewer) leaves the last bar full under the viewer: its chunks are not judged */
 {
@@ -316,7 +329,7 @@ static void checkpoint(int n)
     case 14: chk(22, said("PICTURE DAMAGED IN TRANSFER") && vid_bus == 0u); force_short = 0; viewer_dead = 1; clear_texts(); break;     /* a lost word without an overflow is damage too */
     case 15: chk(23, said("VIEWER DID NOT START")); break;
     case 16: chk(24, said("CONTROLS") && said("HELP") && said("INFO") && said("A OPEN") && !thumbs_on_screen(0, count < 16u ? count : 16u)); clear_texts(); break;           /* Start: the menu replaces the grid */
-    case 17: chk(25, said("OPEN THE PICTURE") && said("1/21") && !said("HELP")); clear_texts(); break;                                                           /* A on Controls: the list, its first row of 21 */
+    case 17: chk(25, said("OPEN THE PICTURE") && said("1/22") && !said("HELP")); clear_texts(); break;                                                           /* A on Controls: the list, its first row of 22 */
     case 18: chk(26, said("CONTROLS") && said("HELP") && !said("OPEN THE PICTURE")); clear_texts(); break;                                                       /* B: back in the menu */
     case 19: chk(27, said("ADD PHOTOS") && said("1/3") && !said("MENU")); clear_texts(); break;                                                                  /* Down, A: Help page 1 of 3 */
     case 20: chk(28, said("WHERE THINGS ARE") && said("2/3") && !said("ADD PHOTOS")); clear_texts(); break;                                                      /* Down turns the page */
@@ -395,6 +408,24 @@ static void checkpoint(int n)
     case 136: chk(130, zk == -1 && vbase == GAL_PLANE_BASE && plane_is_f("z06.tgy")); break;
     case 134: chk(131, sel == 5u && zk == -1); break;
     case 135: chk(132, zk == -1 && vbase == GAL_PLANE_BASE && plane_is_f("z05.tgy") && zbp_max >= 1u); break;
+    case 140: { int32_t x = -1, y = -1; chk(137, tile_view_matches("z06.tgy", &x, &y) && zk == 1); map_x0 = x; map_y0 = y; } break;
+    case 141: { int32_t okx = 0, oky = 0; (void)okx; (void)oky; const double sf = (double)pic.rw / pic.width, sk = 1.0;      /* the rectangle is where the screen is, worked out here with doubles */
+        const double ew = 800.0 * sf / sk, eh = 720.0 * sf / sk, ex = pic.rx + map_x0 * sf / sk, ey = pic.ry + map_y0 * sf / sk;
+        chk(138, vbase == GAL_PLANE_BASE && fabs(m_rw - ew) <= 2.5 && fabs(m_rh - eh) <= 2.5 && fabs(m_rx - ex) <= 5.0 && fabs(m_ry - ey) <= 2.5 && plane_outline_is("z06.tgy", m_rx, m_ry, m_rw, m_rh)); map_rx0 = m_rx; map_ry0 = m_ry; map_rw1 = m_rw; } break;
+    case 142: chk(139, m_rx > map_rx0 + 20 && m_ry > map_ry0 + 10 && plane_outline_is("z06.tgy", m_rx, m_ry, m_rw, m_rh)); break;      /* moved right and down: the frame is at the new place and the old place is the picture again */
+    case 143: { int32_t x = -1, y = -1; chk(140, plane_is_f("z06.tgy") && zk == 1 && tile_view_matches("z06.tgy", &x, &y) && x == map_x0 && y == map_y0); } break;      /* B: the same view again, the plane without a frame */
+    case 149: map_cx = m_rx + m_rw / 2; map_cy = m_ry + m_rh / 2; break;
+    case 144: chk(141, m_rw > 1.8 * map_rw1 && m_rw < 2.2 * map_rw1 && abs((m_rx + m_rw / 2) - map_cx) <= 8 && abs((m_ry + m_rh / 2) - map_cy) <= 8 && plane_outline_is("z06.tgy", m_rx, m_ry, m_rw, m_rh)); break;      /* L1: the half stop's screen is twice the size */
+    case 145: { const double sf = (double)pic.rw / pic.width, sk = 0.5; int32_t okx, oky; zoom_off(0, &okx, &oky);
+        map_ex = (int32_t)((m_rx - (int32_t)pic.rx) / sf * sk + okx); map_ey = (int32_t)((m_ry - (int32_t)pic.ry) / sf * sk + oky); chk(142, plane_outline_is("z06.tgy", m_rx, m_ry, m_rw, m_rh)); map_rw2 = m_rw; } break;
+    case 146: { int32_t x = -1, y = -1; chk(143, zk == 0 && view_matches("z06.tgy", &x, &y) && abs(x - map_ex) <= 12 && abs(y - map_ey) <= 12 && plane_is_f("z06.tgy")); } break;      /* A: the half stop opened where the frame was, and nothing of the frame is left in the fit plane */
+    case 147: chk(144, map_runs == 3u && !z_shown && zk >= 0); break;      /* START while the first view is still loading does not open the map (three scripted STARTs opened it before) */
+    case 148: map_rx1 = m_rx; break;
+    case 154: chk(145, m_rx > map_rx1 && m_rx - map_rx1 <= 16); break;      /* released and pressed again: the speed starts from 4 again, not from where it was */
+    case 150: chk(146, m_ry + m_rh == (int32_t)(pic.ry + pic.rh) && m_rx + m_rw <= (int32_t)(pic.rx + pic.rw) && m_rx + m_rw >= (int32_t)(pic.rx + pic.rw) - 3 && plane_outline_is("z06.tgy", m_rx, m_ry, m_rw, m_rh)); break;      /* held to the bottom right: the rectangle stops at the picture's edge */
+    case 151: chk(147, m_ry == (int32_t)pic.ry && m_rx >= (int32_t)pic.rx && m_rx <= (int32_t)pic.rx + 3 && plane_outline_is("z06.tgy", m_rx, m_ry, m_rw, m_rh)); break;
+    case 152: { const double sf = (double)pic.rw / pic.width; map_ex = (int32_t)((m_rx - (int32_t)pic.rx) / sf); map_ey = (int32_t)((m_ry - (int32_t)pic.ry) / sf); chk(148, m_rw < 0.6 * map_rw2 && m_rw > 0.4 * map_rw2 && plane_outline_is("z06.tgy", m_rx, m_ry, m_rw, m_rh)); } break;      /* R1 from the half stop: the 1:1 screen is half the size */
+    case 153: { int32_t x = -1, y = -1; chk(149, zk == 1 && tile_view_matches("z06.tgy", &x, &y) && abs(x - map_ex) <= 12 && abs(y - map_ey) <= 12 && plane_is_f("z06.tgy")); } break;
     case 118: chk(112, fit_or_exact_tile("z05.tgy") && blit_visible == 0u); break;                                                                                           /* while loading under a held pan: the fit plane or an exact view, never an unloaded tile */
     case 119: { int32_t x = -1, y = -1; chk(113, tile_view_matches("z05.tgy", &x, &y) && y == 780 && blit_visible == 0u && ph_jump_max <= 16u && ph_stall_max <= 300u); } break;                                          /* down to the bottom edge */
     case 120: { int32_t x = -1, y = -1; chk(114, tile_view_matches("z05.tgy", &x, &y) && x == 0 && y == 0 && blit_visible == 0u && blit_bad == 0u); rc_retarget = 0u; } break;                   /* back to the top-left corner */
@@ -447,7 +478,17 @@ int main(int argc, char **argv)
         HOLD(KEY_LEFT, 200); HOLD(KEY_UP, 200); HOLD(KEY_LEFT, 200); HOLD(0, 1200); HOLD(KEY_RIGHT, 200); HOLD(KEY_DOWN, 200); HOLD(KEY_RIGHT, 200); HOLD(0, 1200); HOLD(KEY_UP, 150); HOLD(KEY_LEFT, 150); HOLD(KEY_UP, 150); HOLD(0, 1200);
         S4[k++] = CP(132);
         S4[k++] = KEY_B; S4[k++] = 0; HOLD(0, 5); S4[k++] = CP(133);
-        S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 2); S4[k++] = KEY_B; S4[k++] = 0; HOLD(0, 3); S4[k++] = CP(136);      /* the zoom is left while its first view is loading: the loader bar is taken out of the fit plane */
+        S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 700); S4[k++] = CP(140);                                   /* the map: the 1:1 view of z06 is on screen */
+        S4[k++] = KEY_START; S4[k++] = 0; HOLD(0, 3); S4[k++] = CP(141);
+        HOLD(KEY_RIGHT, 30); HOLD(KEY_DOWN, 20); HOLD(0, 3); S4[k++] = CP(142); HOLD(0, 10); S4[k++] = CP(148); HOLD(KEY_RIGHT, 3); HOLD(0, 2); S4[k++] = CP(154);
+        S4[k++] = KEY_B; S4[k++] = 0; HOLD(0, 3); S4[k++] = CP(143);
+        S4[k++] = KEY_START; S4[k++] = 0; HOLD(0, 2); S4[k++] = CP(149); S4[k++] = KEY_L1; S4[k++] = 0; HOLD(0, 2); S4[k++] = CP(144);
+        HOLD(KEY_DOWN, 300); HOLD(KEY_RIGHT, 300); HOLD(0, 2); S4[k++] = CP(150); HOLD(KEY_UP, 600); HOLD(KEY_LEFT, 600); HOLD(0, 2); S4[k++] = CP(151);
+        HOLD(KEY_RIGHT, 20); HOLD(0, 3); S4[k++] = CP(145);
+        S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 700); S4[k++] = CP(146);
+        S4[k++] = KEY_START; S4[k++] = 0; HOLD(0, 2); S4[k++] = KEY_R1; S4[k++] = 0; HOLD(0, 2); HOLD(KEY_DOWN, 30); HOLD(0, 2); S4[k++] = CP(152);
+        S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 700); S4[k++] = CP(153); S4[k++] = KEY_B; S4[k++] = 0; HOLD(0, 5);
+        S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 2); S4[k++] = KEY_START; S4[k++] = 0; HOLD(0, 2); S4[k++] = CP(147); S4[k++] = KEY_B; S4[k++] = 0; HOLD(0, 3); S4[k++] = CP(136);      /* the zoom is left while its first view is loading: the loader bar is taken out of the fit plane */
         S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 2); S4[k++] = KEY_SELECT | KEY_LEFT; S4[k++] = 0; HOLD(0, 3); S4[k++] = CP(134); S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 700); S4[k++] = KEY_B; S4[k++] = 0; HOLD(0, 5); S4[k++] = CP(135);      /* another picture is opened while the zoom loads: its plane is its own, and the next zoom starts a fresh bar */      /* z06 3,600 x 2,400: windows that the level's edges do not clamp */
         S4[k++] = KEY_B; S4[k++] = 0; S4[k++] = KEY_B; S4[k++] = 0; HOLD(0, 12);
         S4[k++] = KEY_START; S4[k++] = 0; S4[k++] = KEY_DOWN; S4[k++] = 0; S4[k++] = KEY_DOWN; S4[k++] = 0; S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 3); S4[k++] = CP(128); S4[k++] = END;

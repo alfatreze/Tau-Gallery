@@ -1,5 +1,6 @@
 /* Host test of fw2/gallery/gallery_view.h (the viewport rules of M2). Compile with -DBUG=n for the mutants (1..9 must fail). */
 #include <stdio.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include "../fw2/gallery/gallery_view.h"
@@ -173,6 +174,38 @@ int main(void)
       chk("tiles: moving left, the first ring tile is on the left of the screen", first < n && a[first].tx * GV_TILE < x); }
     { s = gv_make_stop(800, 600, Q16); gv_tile_t a[GV_MAX_TILES]; gv_window_for(&s, 0, -60, &wx, &wy); uint32_t n = gv_tiles_needed(&s, 0, -60, wx, wy, 0, 0, a);
       chk("tiles: a centred stop 800 x 600 needs its 7 x 5 stored tiles and no more", n == 7u * 5u); }
+
+    /* ---- the map ---- */
+    { int okm2 = 1, okc = 1, oks = 1; double worst = 0.0;
+      for (int i = 0; i < 2000; i++) {
+          const uint32_t pw = 1600u + rnd() % 2400u, ph = 1200u + rnd() % 1800u;
+          /* the fit canvas: the picture scaled into 800 x 720, centred */
+          const uint32_t sf = (uint32_t)(((uint64_t)800u * 65536u) / pw) < (uint32_t)(((uint64_t)720u * 65536u) / ph) ? (uint32_t)(((uint64_t)800u * 65536u) / pw) : (uint32_t)(((uint64_t)720u * 65536u) / ph);
+          const int32_t fw = (int32_t)(((uint64_t)pw * sf) >> 16), fh = (int32_t)(((uint64_t)ph * sf) >> 16), fox = (800 - fw) / 2, foy = (720 - fh) / 2;
+          const uint32_t sk = (rnd() & 1u) ? 65536u : 32768u; const int32_t okx = (rnd() & 1u) ? (int32_t)(rnd() % 40u) : 0, oky = (rnd() & 1u) ? (int32_t)(rnd() % 40u) : 0;
+          const int32_t vx = (int32_t)(rnd() % (pw * sk / 65536u)) & ~3, vy = (int32_t)(rnd() % (ph * sk / 65536u));
+          int32_t rx, ry, rw, rh, bx, by; gv_map_rect(sf, fox, foy, sk, okx, oky, vx + okx, vy + oky, &rx, &ry, &rw, &rh);
+          const double ew = 800.0 * sf / sk, eh = 720.0 * sf / sk;
+          if (rx & 3 || (rw & 1) || (rh & 1) || rw < 8 || rh < 8 || rw < ew - 2.5 || rw > ew + 2.5 || rh < eh - 2.5 || rh > eh + 2.5) okm2 = 0;
+          gv_map_view(sf, fox, foy, sk, okx, oky, rx, ry, &bx, &by);
+          const double tol = 4.0 * sk / sf + 8.0; const double ex = fabs((double)(bx - okx - vx)), ey = fabs((double)(by - oky - vy)); if (ex > tol || ey > tol) okm2 = 0; if (ex / tol > worst) worst = ex / tol;
+          int32_t cx = (int32_t)(rnd() % 1200u) - 200, cy = (int32_t)(rnd() % 1200u) - 200;
+          gv_map_clamp(fox, foy, fw, fh, rw, rh, &cx, &cy);
+          if (cx & 3) okc = 0;
+          if (rw < fw && (cx < fox || cx + rw > fox + fw + 3)) okc = 0;
+          if (rh < fh && (cy < foy || cy + rh > foy + fh)) okc = 0;
+          if (rw >= fw && cx > fox) okc = 0;                                                    /* a rectangle wider than the picture covers it */
+          if (rh >= fh && cy > foy) okc = 0;
+          if (rw >= fw && abs((cx + rw / 2) - (fox + fw / 2)) > 4) okc = 0;                            /* and it is centred on it */
+          if (rh >= fh && abs((cy + rh / 2) - (foy + fh / 2)) > 1) okc = 0;
+          int32_t ax = cx, ay = cy; gv_map_clamp(fox, foy, fw, fh, rw, rh, &ax, &ay); if (ax != cx || ay != cy) oks = 0;      /* clamping twice changes nothing */
+      }
+      chk("map: the rectangle of a stop's screen: 4-aligned x, even size, the scale ratio, and the inverse comes back to the corner (2,000 cases)", okm2);
+      chk("map: the rectangle is kept over the picture (centred when larger), on 4 pixels, and clamping is idempotent (2,000 cases)", okc && oks); }
+    { int32_t rx, ry, rw, rh; gv_map_rect(14563u, 0, 93, 65536u, 0, 0, 1800, 1200, &rx, &ry, &rw, &rh);
+      chk("map: 3,600 x 2,400 on an 800 x 533 fit canvas at 1:1: the screen from (1800, 1200) is a 178 x 160 rectangle at (396, 359)", rw == 178 && rh == 160 && rx == 396 && ry == 93 + 266); }
+    { int32_t rx, ry, rw, rh, rx2, ry2; gv_map_rect(14563u, 0, 93, 65536u, 24, 8, 1800 + 24, 1200 + 8, &rx, &ry, &rw, &rh); gv_map_rect(14563u, 0, 93, 65536u, 0, 0, 1800, 1200, &rx2, &ry2, &rw, &rh);
+      chk("map: a stop's padding (the picture starts at (24, 8) in its canvas) does not move the rectangle", rx == rx2 && ry == ry2); }
 
     /* ---- the queue and the command size ---- */
     gv_queue_t q; gv_q_clear(&q); gv_tile_t t; gv_tile_t j1 = { 1, 1, 0 }, j2 = { 2, 1, 0 }, j3 = { 3, 1, 1 };

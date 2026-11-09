@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Host test of fw2/gallery/gallery_view.h (sim/test_gallery_view.c): the viewport rules of M2 (ladder, clamp and 4-pixel alignment, zoom mapping, pan speed, the resident window, the tiles a viewport needs, the tile
-queue, the 48 KB command limit). The unmodified build must pass; the twenty-one built-in mutants (-DBUG=1..21) and the source mutants must each fail."""
+queue, the 48 KB command limit). The unmodified build must pass; the twenty-two built-in mutants (-DBUG=1..22) and the source mutants must each fail."""
 import os, subprocess, sys, tempfile
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
@@ -22,7 +22,7 @@ if __name__ == "__main__":
     if rc: sys.exit(1)
     if "--mutants" in sys.argv:
         bad = 0
-        for n in range(1, 22):
+        for n in range(1, 23):
             w = build([f"-DBUG={n}"]); rc, _ = run(w) if w else (1, ""); print("killed  " if rc else "SURVIVED", f"BUG={n}"); bad += rc == 0
         src = (ROOT / "fw2/gallery/gallery_view.h").read_text()
         for a, b in (("if (v < 0) v = 0;\n    if (align) v = gv_floor4(v);", "if (v < 0) v = 0;"),
@@ -36,6 +36,13 @@ if __name__ == "__main__":
                      ("if (wy + GV_WIN_H < sh && (wy + GV_WIN_H) - (vy + GV_SCREEN_H) < GV_MARGIN) return 0;", ""),
                      ("static inline uint32_t gv_toggle(const gv_ladder_t *l, uint32_t cur) { return cur == 0u ? l->n - 1u : 0u; }", "static inline uint32_t gv_toggle(const gv_ladder_t *l, uint32_t cur) { return cur == 0u ? 1u : 0u; }"),
                      ("while (i > 0u && key[i - 1u] > k)", "while (0)"),
+                     ("*vx = (int32_t)((int64_t)(rx - fox) * sk / sf + okx);", "*vx = (int32_t)((int64_t)(rx - fox) * sk / sf);"),
+                     ("*vy = (int32_t)((int64_t)(ry - foy) * sk / sf + oky);", "*vy = (int32_t)((int64_t)(ry - fox) * sk / sf + oky);"),
+                     ("if (rw >= pw) *rx = gv_floor4(px - (rw - pw) / 2);", "if (rw >= pw) *rx = px;"),
+                     ("if (rh >= ph) *ry = py - (rh - ph) / 2;", "if (rh >= ph) *ry = py;"),
+                     ("const int32_t lo = (px + 3) & ~3, hi = gv_floor4(px + pw - rw);", "const int32_t lo = px, hi = px + pw - rw;"),
+                     ("const int32_t lo = py, hi = py + ph - rh;", "const int32_t lo = py, hi = py + ph - rh + 8;"),
+                     ("w &= ~(int64_t)1; h &= ~(int64_t)1;", "h &= ~(int64_t)1;"),
                      ("out[i].ring = on ? 0u : 1u;", "out[i].ring = 0u;"),
                      ("if (q->n < GV_MAX_TILES && !gv_q_has(q, t.tx, t.ty))", "if (q->n < GV_MAX_TILES)")):
             assert a in src, a; w = build([], src.replace(a, b, 1)); rc, _ = run(w) if w else (1, ""); print("killed  " if rc else "SURVIVED", a[:60]); bad += rc == 0

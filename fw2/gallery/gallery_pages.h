@@ -58,6 +58,7 @@ static const gc_row_t gc_rows[] = {
     { "B",              "BACK TO THE GRID"    },
     { "ZOOMED IN",      ""                    },
     { "D-PAD",          "PAN"                 },
+    { "START",          "MAP: JUMP TO A SPOT" },
     { "L1 / R1",        "ZOOM OUT / IN"       },
     { "A",              "BACK TO FIT"         },
     { "B",              "BACK TO FIT"         },
