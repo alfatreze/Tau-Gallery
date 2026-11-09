@@ -928,7 +928,10 @@ gallery-firmware:
 	bash fw2/build_gallery.sh
 	APP=gallery bash fw2/build_gallery.sh
 
-.PHONY: test-gallery-fmt test-gallery-app test-gallery-pages test-gallery-settings
+.PHONY: test-gallery-fmt test-gallery-app test-gallery-pages test-gallery-settings test-gallery-folder
+test-gallery-folder:
+	$(PYTHON) sim/test_gallery_folder.py
+	$(PYTHON) sim/test_gallery_folder.py --mutants
 test-gallery-settings:
 	$(PYTHON) sim/test_gallery_settings.py
 	$(PYTHON) sim/test_gallery_settings.py --mutants

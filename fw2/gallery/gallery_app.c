@@ -112,6 +112,17 @@ static void select_to(uint32_t n)
 }
 
 /* Lands the picture's fit canvas in the viewer plane. Returns 0 when it is there, else a code for the status line. */
+/* One landing of the canvas into the plane (restarts the landing counters). Returns 0, or 5 when a card read failed. */
+static int land_canvas(const gt_info_t *t, uint32_t total, int show_progress)
+{
+    REG_WR(R_LAND_BASE, GAL_PLANE_BASE); REG_WR(R_LAND_CTRL, 1u);
+    for (uint32_t c = 0; c < total; c += LAND_CHUNK) {
+        const uint32_t len = total - c < LAND_CHUNK ? total - c : LAND_CHUNK;
+        if (!slot_read_blocking(SLOT_PIC, t->canvas_off + c, 0x40000000u + c, len, CLK_HZ * 4u)) return 5;
+        if (show_progress) { char b[24], *q = put_s(b, "LOADING "); q = put_u(q, (c + len) * 100u / total); q = put_s(q, "%"); *q = 0; say(b, ACC); }
+    }
+    return 0;
+}
 static int open_picture(uint32_t i, int show_progress)
 {
     char path[GX_PATH_MAX + 2u]; path[0] = '/';
@@ -119,16 +130,11 @@ static int open_picture(uint32_t i, int show_progress)
     if (show_progress) say("OPENING", ACC);
     if (!slot_open_path(SLOT_PIC, path)) return 1;
     static uint8_t h4[4096]; gt_info_t t;
-    if (!read_bytes(SLOT_PIC, 0u, 4096u, h4)) return 2;
+    if (!read_bytes(SLOT_PIC, 0u, 4096u, h4) && !read_bytes(SLOT_PIC, 0u, 4096u, h4)) return 2;      /* one retry of a failed read: a transient card error should not cost the picture */
     if (gt_parse(h4, 4096u, &t)) return 3;
     if (!(REG_RD(R_LAND_STATUS) >> 31)) return 4;                                   /* no landing path in this bitstream */
     const uint32_t total = (t.canvas_len + 4095u) & ~4095u;                         /* the file is padded to 4 KB: read the padding too, it lands just past the plane */
-    REG_WR(R_LAND_BASE, GAL_PLANE_BASE); REG_WR(R_LAND_CTRL, 1u);
-    for (uint32_t c = 0; c < total; c += LAND_CHUNK) {
-        const uint32_t len = total - c < LAND_CHUNK ? total - c : LAND_CHUNK;
-        if (!slot_read_blocking(SLOT_PIC, t.canvas_off + c, 0x40000000u + c, len, CLK_HZ * 4u)) return 5;
-        if (show_progress) { char b[24], *q = put_s(b, "LOADING "); q = put_u(q, (c + len) * 100u / total); q = put_s(q, "%"); *q = 0; say(b, ACC); }
-    }
+    if (land_canvas(&t, total, show_progress) && land_canvas(&t, total, show_progress)) return 5;     /* a failed read lands the whole picture again once (the counters restart with it); two failures are reported */
     uint32_t t0 = cycles();
     while (!(REG_RD(R_LAND_STATUS) & 1u) && (uint32_t)(cycles() - t0) < CLK_HZ / 10u) { }
     if (REG_RD(R_LAND_OVF) != 0u || REG_RD(R_LAND_WORDS) != total / 4u) return 6;   /* a word was dropped or lost: do not show a damaged picture */
@@ -140,6 +146,7 @@ static const char *const open_msg[] = { "", "OPEN FAILED", "HEADER READ FAILED",
 static gi_t info = { 0u, 0u, 0u, GI_NONE, 0u, 0u, 0, 0u, 0u, 0u };
 static gs_vals_t gset; static uint32_t last_act;                                              /* the persisted settings; the clock of the last key or card read (a save waits for a quiet second after it) */
 static uint32_t path_crc(uint32_t i) { const char *s = ent[i - page * PER_PAGE].path; uint32_t n = 0; while (s[n]) n++; return gf_crc32((const uint8_t *)s, n) & GS_M31; }
+static void remember(uint32_t i) { gset.last_idx = i; gset.last_crc = path_crc(i); }       /* the picture the next start resumes on: only one the viewer has shown */
 static void settings_tick(void) { gs_hw_service(&gset, last_act); }
 static int open_timed(uint32_t i, int show_progress)
 {
@@ -148,7 +155,6 @@ static int open_timed(uint32_t i, int show_progress)
     info.open_ms = (uint32_t)(cycles() - t0) / (CLK_HZ / 1000u);
     if (r == 0 || r >= 5) { info.words = REG_RD(R_LAND_WORDS); info.lost = REG_RD(R_LAND_OVF); } else { info.words = 0u; info.lost = 0u; }
     info.err = r ? open_msg[r] : 0;
-    if (r == 0) { gset.last_idx = i; gset.last_crc = path_crc(i); }                           /* the picture the next start resumes on */
     last_act = cycles();
     return r;
 }
@@ -168,6 +174,7 @@ static void viewer(void)
             sel = n;
             const int r = open_timed(sel, 0);
             if (r) { gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); say(open_msg[r], BAD); return; }
+            remember(sel);
         }
     }
 }
@@ -177,6 +184,7 @@ static void open_from_grid(void)
     const int r = open_timed(sel, 1);
     if (r) { say(open_msg[r], BAD); return; }
     if (!gal_view_on()) { say("VIEWER DID NOT START", BAD); return; }
+    remember(sel);
     viewer();
 }
 

@@ -13,7 +13,7 @@
 static uint16_t mem[HW_N];                         /* SDRAM, halfwords: the plane at 0x200000 */
 static uint16_t fb[512u * 1024u];                  /* the UI framebuffer, halfwords, stride 512 */
 static uint32_t clk, irq_pend, vid_req, vid_bus, vid_sw, vid_due, vbase, vstride, land_base, land_words, land_ovf, input_n;
-static int force_ovf, force_short, viewer_dead; static uint32_t text_mode;
+static int force_ovf, force_short, viewer_dead, fail_pic_reads, pass_pic_reads; static uint32_t text_mode;
 static uint32_t setw[16], setidx; static int set_writes;                  /* the settings register file (R_SET_IDX / R_SET_DAT) and how many words were written */
 static void tick(void) { if (!viewer_dead && vid_req != vid_bus && vid_due && clk >= vid_due) { vid_bus = vid_req; vid_sw++; vid_due = 0; } }
 static uint32_t next_input(void);
@@ -71,6 +71,7 @@ uint32_t _tag_start[1024];
 int slot_read_blocking(uint32_t slot, uint32_t off, uint32_t dst, uint32_t len, uint32_t to)
 {
     (void)to; reads++;
+    if (slot == 2u) { if (pass_pic_reads > 0) pass_pic_reads--; else if (fail_pic_reads > 0) { fail_pic_reads--; return 0; } }      /* a transient card error: after `pass` good reads the next `fail` reads of a picture fail */
     const uint8_t *src = slot == 5u ? idx_data : slot == 2u ? pic_data : 0; const uint32_t n = slot == 5u ? idx_len : pic_len;
     if (!src || off + len > n || (len & 3u)) return 0;                                        /* a read past the end of the file fails, as on the Pocket */
     if ((dst >> 28) == 4u) {
@@ -96,7 +97,7 @@ void platform_probe(void) { }
 /* ---- the key script ---- */
 #define CP(n) (0x10000u | (n))
 #define END 0x20000u
-static uint32_t script[256]; static int nscript;
+static uint32_t script[1024]; static int nscript;
 static jmp_buf done;
 static int fails;
 static void chk(int n, int ok) { printf("GALLERY APP %s %d\n", ok ? "ok" : "FAIL", n); if (!ok) fails++; }
@@ -139,9 +140,23 @@ static int plane_is(uint32_t pic)                                               
     for (uint32_t b = 0; b < 1728000u; b++) { const uint8_t got = (uint8_t)(mem[0x200000u + b / 2u] >> (8u * (b & 1u))); if (got != d[20480u + b]) bad++; }
     free(d); return bad == 0u;
 }
+static int plane_is_f(const char *fname)                                                         /* the plane equals the canvas of the file `fname` of the set directory */
+{
+    char f[600]; snprintf(f, sizeof f, "%s/%s", dir, fname); uint32_t n; uint8_t *d = slurp(f, &n); if (!d) return 0;
+    uint32_t bad = 0;
+    for (uint32_t b = 0; b < 1728000u; b++) { const uint8_t got = (uint8_t)(mem[0x200000u + b / 2u] >> (8u * (b & 1u))); if (got != d[20480u + b]) bad++; }
+    free(d); return bad == 0u;
+}
 static int said(const char *s) { for (int i = 0; i < 64; i++) if (strstr(texts[i], s)) return 1; return 0; }
 static const char *last_text(void) { return texts[(ntext + 63) % 64]; }
 static void clear_texts(void) { memset(texts, 0, sizeof texts); ntext = 0; }
+static int big_grid_ok(void)                                                                      /* a large index: the page on screen is the page of the selection, with its thumbnails, its counter and its frame */
+{
+    const uint32_t pg = sel / 16u, first = pg * 16u, n = count - first < 16u ? count - first : 16u; char w[32]; snprintf(w, sizeof w, "%u/%u", sel + 1u, count);
+    const uint32_t k = sel - first, fx = 2u + (k % 4u) * 100u - 2u, fy = 22u + (k / 4u) * 76u - 2u;
+    for (uint32_t e = n; e < 16u; e++) { const uint32_t x = 2u + (e % 4u) * 100u, y = 22u + (e / 4u) * 76u; for (uint32_t r = 0; r < 72u; r++) for (uint32_t c = 0; c < 96u; c++) if (fb[(y + r) * 512u + x + c] != th_role[TR_BG_BOTTOM]) return 0; }      /* the cells past the last picture stay empty */
+    return page == pg && !strcmp(last_text(), w) && thumbs_on_screen(first, n) && fb[fy * 512u + fx] == th_role[TR_ACCENT];
+}
 static void checkpoint(int n)
 {
     char want[64]; char path[200];
@@ -173,7 +188,7 @@ static void checkpoint(int n)
     case 26: chk(36, said("OFF") && (setw[2] & 1u) == 0u && set_writes == 0); clear_texts(); break;                                                                   /* toggled off: shown, but not yet written */
     case 27: chk(37, (setw[2] & 1u) == 0u && set_writes == 0); clk += 2u * CLK_HZ; break;                                                                             /* back in the grid, a key a moment ago: nothing published yet; now a quiet 2 s */
     case 28: chk(38, setw[2] == 0x4000005Fu && setw[0] == (1u << 27) && setw[1] == 0x40000001u && set_writes == 1); break;                                              /* published: only word 2 changed */
-    case 29: { const char *p = "Assets/tau_gallery/common/photos/p03.tgy"; chk(39, setw[6] == 3u && setw[5] == (gf_crc32((const uint8_t *)p, (uint32_t)strlen(p)) & 0x7FFFFFFFu)); chk(40, (setw[0] >> 27) == 1u && setw[2] == 0x4000005Fu); } break;   /* the last picture opened: picture 4 (index 3), the open at CP(14) whose viewer did not start; its landing succeeded */
+    case 29: { const char *p = "Assets/tau_gallery/common/photos/p17.tgy"; chk(39, setw[6] == count - 1u && setw[5] == (gf_crc32((const uint8_t *)p, (uint32_t)strlen(p)) & 0x7FFFFFFFu)); chk(40, (setw[0] >> 27) == 1u && setw[2] == 0x4000005Fu); } break;   /* the last picture the viewer showed: the last one (the open at CP(14), whose landing worked but whose viewer did not start, is not remembered) */
     case 30: clk += 2u * CLK_HZ; break;
     case 31: force_ovf = 1; break;                                                                                                                                       /* the next open fails: the last picture must stay the one before */
     case 32: chk(45, said("THEME") && said("TAU") && said("DARK") && said("WHITE") && said("LEFT RIGHT CHANGE")); clear_texts(); break;                                          /* the Theme page: the defaults */
@@ -181,6 +196,20 @@ static void checkpoint(int n)
     case 34: chk(47, said("OCEAN") && said("GLOW") && th_theme == 1u && th_pal == 2u && th_role[TR_ACCENT] == tc_accent(0x2A83u, 1u)); clear_texts(); break;              /* the theme and the accent changed; on a light theme a bright accent is scaled down */
     case 35: { const uint32_t x = 399u; chk(48, thumbs_on_screen(0, count < 16u ? count : 16u) && fb[100u * 512u + x] == th_role[TR_BG_BOTTOM] && fb[100u * 512u + x] != 0u); } break;   /* back in the grid: the background is the theme's, the frame its accent */
     case 36: chk(49, setw[1] == (0x40000000u | 2u | (1u << 5) | (1u << 11)) && setw[0] == (1u << 27)); break;                                                             /* the look is saved after a quiet second, as word 1 only */
+    case 60: chk(60, big_grid_ok()); break;
+    case 61: chk(61, plane_is_f("b299.tgy") && sel == count - 1u); break;                                                                                                 /* A on the last picture of 300: the file of index 299 */
+    case 62: chk(62, plane_is_f("b298.tgy") && sel == count - 2u && page == (count - 2u) / 16u); break;                                                                 /* Left in the viewer */
+    case 63: chk(63, plane_is_f("b000.tgy") && sel == 0u && page == 0u); break;                                                                                         /* Right, Right: past the end to the first picture, across 18 pages */
+    case 69: chk(69, sel == 0u && big_grid_ok()); break;
+    case 70: chk(70, sel == 298u && big_grid_ok()); break;
+    case 71: chk(71, sel == 299u && big_grid_ok()); break;
+    case 64: chk(64, plane_is_f("b150.tgy") && sel == 150u && page == 9u); break;                                                                                       /* a picture in the middle, opened from its page */
+    case 72: fail_pic_reads = 1; pass_pic_reads = 0; clear_texts(); break;                                                                                              /* the header read fails once */
+    case 73: chk(72, vid_bus == 1u && fail_pic_reads == 0 && plane_is(count - 1u) && !said("FAILED")); clear_texts(); break;                                                          /* the header is read again and the picture shows */
+    case 75: fail_pic_reads = 1; pass_pic_reads = 1; clear_texts(); break;                                                                                               /* the header reads, the first landing chunk fails once */
+    case 76: chk(74, vid_bus == 1u && fail_pic_reads == 0 && plane_is(count - 1u) && land_ovf == 0u && land_words == 1728512u / 4u && !said("FAILED")); clear_texts(); break;           /* the landing is repeated whole: the picture shows and the word count is exact, not doubled */
+    case 77: fail_pic_reads = 2; pass_pic_reads = 1; clear_texts(); break;                                                                                               /* the landing fails twice in a row */
+    case 74: chk(73, said("PICTURE READ FAILED") && vid_bus == 0u && fail_pic_reads == 0); clear_texts(); break;                                                                /* two failed reads: reported, the viewer stays off */
     case 21: snprintf(want, sizeof want, "1/%u", count); chk(29, thumbs_on_screen(0, count < 16u ? count : 16u) && said(want) && said("TAU GALLERY")); break;   /* B, B: the grid again, thumbnails and footer redrawn */
     default: break;
     }
@@ -192,6 +221,30 @@ int main(int argc, char **argv)
     idx_data = slurp(f, &idx_len); if (!idx_data) return 2;
     count = (uint32_t)idx_data[8] | (uint32_t)idx_data[9] << 8;
     setw[0] = 1u << 27; setw[1] = 0x40000001u; setw[2] = 0x4000005Eu; setw[5] = 0x40000000u; setw[6] = 0x40000000u;      /* the package's defaults of the inherited variables: layout 1, appearance, word 2 with bit 0 clear (resume on), the player's marks in words 5 and 6 */
+    if (argc > 2 && !strncmp(argv[2], "big", 3)) {                                                   /* a large index (300 pictures): paging end to end, then the viewer across pages */
+        setw[6] = 0x40000000u; int k = 0; uint32_t S3[1024];
+        if (!strcmp(argv[2], "bigresume250") || !strcmp(argv[2], "bigresume299")) {
+            const uint32_t idx = !strcmp(argv[2], "bigresume250") ? 250u : 299u; char pth[200]; snprintf(pth, sizeof pth, "Assets/tau_gallery/common/photos/b%03u.tgy", idx);
+            setw[6] = idx; setw[5] = gf_crc32((const uint8_t *)pth, (uint32_t)strlen(pth)) & 0x7FFFFFFFu;
+            S3[k++] = CP(60); S3[k++] = END;
+        } else {
+            const uint32_t pages = (count + 15u) / 16u;
+            S3[k++] = CP(60); S3[k++] = KEY_RIGHT; S3[k++] = 0; S3[k++] = KEY_RIGHT; S3[k++] = 0; S3[k++] = KEY_RIGHT; S3[k++] = 0; S3[k++] = CP(60); S3[k++] = KEY_L1; S3[k++] = 0; S3[k++] = CP(69);      /* L1 on the first page goes to the first picture */
+            for (uint32_t p = 0; p < pages; p++) { S3[k++] = KEY_R1; S3[k++] = 0; S3[k++] = CP(60); }                      /* R1 up to the last picture, one page at a time */
+            S3[k++] = KEY_R1; S3[k++] = 0; S3[k++] = CP(60); S3[k++] = KEY_DOWN; S3[k++] = 0; S3[k++] = CP(60); S3[k++] = KEY_RIGHT; S3[k++] = 0; S3[k++] = CP(60);      /* the end: nothing moves */
+            S3[k++] = KEY_A; S3[k++] = 0; S3[k++] = CP(61); S3[k++] = KEY_LEFT; S3[k++] = 0; S3[k++] = CP(62);
+            S3[k++] = KEY_RIGHT; S3[k++] = 0; S3[k++] = KEY_RIGHT; S3[k++] = 0; S3[k++] = CP(63); S3[k++] = KEY_B; S3[k++] = 0; S3[k++] = CP(60);
+            for (uint32_t p = 0; p < 10u; p++) { S3[k++] = KEY_R1; S3[k++] = 0; }                                         /* 0 -> 160 by pages */
+            S3[k++] = CP(60); S3[k++] = KEY_UP; S3[k++] = 0; S3[k++] = KEY_UP; S3[k++] = 0; S3[k++] = KEY_LEFT; S3[k++] = 0; S3[k++] = KEY_LEFT; S3[k++] = 0; S3[k++] = CP(60);      /* 160 - 4 - 4 - 1 - 1 = 150, on page 9 */
+            S3[k++] = KEY_A; S3[k++] = 0; S3[k++] = CP(64); S3[k++] = KEY_B; S3[k++] = 0; S3[k++] = CP(60);
+            for (uint32_t p = 0; p < 9u; p++) { S3[k++] = KEY_R1; S3[k++] = 0; }                                          /* 150 -> 294 */
+            S3[k++] = KEY_DOWN; S3[k++] = 0; S3[k++] = CP(70); S3[k++] = KEY_DOWN; S3[k++] = 0; S3[k++] = CP(71); S3[k++] = END;      /* a row down, then Down from the last row goes to the last picture */
+        }
+        nscript = k; memcpy(script, S3, (size_t)k * sizeof S3[0]);
+        if (!setjmp(done)) gallery_app_main();
+        if (!strncmp(argv[2], "bigresume", 9)) { const uint32_t idx = setw[6]; chk(66, sel == idx && page == idx / 16u); chk(67, set_writes == 0); }
+        printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
+    }
     if (argc > 2) {                                                                                     /* a boot scenario: the saved state, then the grid must open on the right picture */
         const char *sc = argv[2]; const uint32_t want = !strcmp(sc, "resume5") || !strcmp(sc, "ocean_light") || !strcmp(sc, "badlook") ? 5u : !strcmp(sc, "resume17") ? 17u : 0u;
         char pth[200]; const uint32_t idx = !strcmp(sc, "resume5") || !strcmp(sc, "badcrc") ? 5u : !strcmp(sc, "resume17") ? 17u : !strcmp(sc, "toohigh") ? count : 5u;
@@ -210,7 +263,7 @@ int main(int argc, char **argv)
         else chk(52, th_theme == 0u && th_pol == 0u && th_pal == 1u && fb[100u * 512u + 399u] == 0u && text_mode == 0u);                     /* every other boot, and a look this build does not have, gives the default look */
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
     }
-    const uint32_t S[] = { CP(1), KEY_START, 0, CP(16), KEY_A, 0, CP(17), KEY_B, 0, CP(18), KEY_DOWN, 0, KEY_A, 0, CP(19), KEY_DOWN, 0, CP(20), KEY_B, 0, KEY_DOWN, 0, KEY_A, 0, CP(22), KEY_B, 0, KEY_DOWN, 0, KEY_A, 0, CP(25), KEY_A, 0, CP(26), KEY_B, 0, KEY_B, 0, CP(27), 0, 0, CP(28), CP(21), KEY_RIGHT, 0, KEY_RIGHT, 0, CP(2), KEY_A, 0, CP(3), KEY_RIGHT, 0, CP(4), KEY_LEFT, 0, KEY_LEFT, 0, CP(5), KEY_LEFT, 0, KEY_LEFT, 0, CP(6), KEY_B, 0, CP(7), KEY_START, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_A, 0, CP(23), KEY_B, 0, KEY_B, 0,
+    const uint32_t S[] = { CP(1), KEY_START, 0, CP(16), KEY_A, 0, CP(17), KEY_B, 0, CP(18), KEY_DOWN, 0, KEY_A, 0, CP(19), KEY_DOWN, 0, CP(20), KEY_B, 0, KEY_DOWN, 0, KEY_A, 0, CP(22), KEY_B, 0, KEY_DOWN, 0, KEY_A, 0, CP(25), KEY_A, 0, CP(26), KEY_B, 0, KEY_B, 0, CP(27), 0, 0, CP(28), CP(21), KEY_RIGHT, 0, KEY_RIGHT, 0, CP(2), KEY_A, 0, CP(3), KEY_RIGHT, 0, CP(4), KEY_LEFT, 0, KEY_LEFT, 0, CP(5), KEY_LEFT, 0, KEY_LEFT, 0, CP(6), KEY_B, 0, CP(7), KEY_START, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_A, 0, CP(23), KEY_B, 0, KEY_B, 0, CP(72), KEY_A, 0, CP(73), KEY_B, 0, CP(75), KEY_A, 0, CP(76), KEY_B, 0, CP(77), KEY_A, 0, CP(74), KEY_A, 0, KEY_B, 0,
                           KEY_L1, 0, CP(8), KEY_R1, 0, CP(9), KEY_L1, 0, KEY_RIGHT, 0, KEY_R1, 0, CP(13), KEY_L1, 0, CP(10), KEY_A, 0, CP(11), KEY_START, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_A, 0, CP(24), KEY_B, 0, KEY_B, 0, KEY_RIGHT, 0, KEY_A, 0, CP(12),
                           KEY_RIGHT, 0, KEY_A, 0, CP(14), KEY_A, 0, CP(15), CP(31), KEY_RIGHT, 0, KEY_A, 0, CP(30), 0, 0, CP(29), KEY_START, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_A, 0, CP(32), KEY_DOWN, 0, KEY_RIGHT, 0, CP(33), KEY_DOWN, 0, KEY_RIGHT, 0, KEY_UP, 0, KEY_UP, 0, KEY_RIGHT, 0, CP(34), KEY_B, 0, KEY_B, 0, CP(35), CP(30), 0, 0, CP(36), END };
     nscript = (int)(sizeof S / sizeof S[0]); memcpy(script, S, sizeof S);

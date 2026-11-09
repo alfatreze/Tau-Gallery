@@ -8,6 +8,17 @@ sys.path.insert(0, str(ROOT / "tools/gallery"))
 import tgy
 from PIL import Image
 
+def make_big_set(d, n=300):
+    """A 300-entry index with a thumbnail of its own for every entry (a pattern of the index) and real picture files only for the pictures the script opens (the others fail to open, which is also a case)."""
+    ents, ths = [], []
+    for i in range(n):
+        ents.append(dict(path=f"Assets/tau_gallery/common/photos/b{i:03d}.tgy", name=f"Photo {i:03d}", size=1748992, width=800, height=600))
+        ths.append(bytes(((i * 7 + j // 192 * 5 + j % 192 * 3) & 255) for j in range(tgy.THUMB_BYTES)))
+    (d / "tau-library.tdb").write_bytes(tgy.pack_index(ents, ths))
+    for i in (0, 150, 298, 299):
+        im = Image.new("RGB", (640, 480), ((i * 5) % 256, (i * 3 + 40) % 256, (i * 11 + 90) % 256)); im.paste(((i * 13) % 256, 255, 0), (i % 200, 10, i % 200 + 100, 60))
+        canvas, rect, thumb, size = tgy.render(im); (d / f"b{i:03d}.tgy").write_bytes(tgy.pack_tgy(canvas, rect, thumb, size))
+
 def make_set(d, n=18):
     ents, ths = [], []
     for i in range(n):
@@ -39,18 +50,24 @@ def build(workdir, fw=None):
     return True
 
 SCENARIOS = ("resume5", "resume17", "badcrc", "toohigh", "off", "layout0", "ocean_light", "badlook")     # boot scenarios: the saved state, the grid must open on picture 6 or 18, or on picture 1 when it is not the same picture / resume is off / the file is not ours
+BIGSET = None
 def run(workdir, setdir):
     r = subprocess.run([str(workdir / "t"), str(setdir)], capture_output=True, text=True, timeout=600)
     rc, out = r.returncode, r.stdout
     for sc in SCENARIOS:
         r = subprocess.run([str(workdir / "t"), str(setdir), sc], capture_output=True, text=True, timeout=600)
         if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
+    global BIGSET
+    if BIGSET is None: BIGSET = Path(tempfile.mkdtemp()); make_big_set(BIGSET)
+    for sc in ("big", "bigresume250", "bigresume299"):
+        r = subprocess.run([str(workdir / "t"), str(BIGSET), sc], capture_output=True, text=True, timeout=900)
+        if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
     return rc, out
 
 def mutants(setdir):
     muts = [("gallery_app.c", "REG_WR(R_LAND_BASE, GAL_PLANE_BASE);", "REG_WR(R_LAND_BASE, GAL_PLANE_BASE + 2u);"),
             ("gallery_app.c", "0x40000000u + c, len,", "0x40000000u, len,"),
-            ("gallery_app.c", "t.canvas_off + c, 0x40000000u", "t.canvas_off, 0x40000000u"),
+            ("gallery_app.c", "t->canvas_off + c, 0x40000000u", "t->canvas_off, 0x40000000u"),
             ("gallery_app.c", "const uint32_t total = (t.canvas_len + 4095u) & ~4095u;", "const uint32_t total = t.canvas_len;"),
             ("gallery_app.c", "if (REG_RD(R_LAND_OVF) != 0u ||", "if ("),
             ("gallery_app.c", "|| REG_RD(R_LAND_WORDS) != total / 4u) return 6;", ") return 6;"),
@@ -79,7 +96,6 @@ def mutants(setdir):
             ("gallery_app.c", "const int r = open_timed(sel, 1);", "const int r = open_picture(sel, 1);"),
             ("gallery_app.c", "gset.last_idx = i; gset.last_crc = path_crc(i); }", "gset.last_idx = i; }"),
             ("gallery_app.c", "gs_resume_index(&gset, head.count, path_crc(gset.last_idx));", "gset.last_idx;"),
-            ("gallery_app.c", "if (r == 0) { gset.last_idx = i;", "if (r == 0 || r) { gset.last_idx = i;"),
             ("gallery_app.c", "        settings_tick();\n        if (edge & KEY_LEFT) { if (sel > 0u)", "        if (edge & KEY_LEFT) { if (sel > 0u)"),
             ("gallery_app.c", "if (r == GP_OPEN_SETTINGS) { draw_settings(); while (!gsp_input(&gset.resume, next_edge(&prev))) draw_settings(); }", "if (r == GP_OPEN_SETTINGS) { draw_settings(); while (!gsp_input(&gset.resume, next_edge(&prev))) draw_settings(); gset.resume = 1u; }"),
             ("gallery_settings.c", "if (gs_publish_due(cycles(), last_activity, CLK_HZ, 1)) publish(v);", "publish(v);"),
@@ -92,6 +108,14 @@ def mutants(setdir):
             ("gallery_app.c", "    theme_init();\n", ""),
             ("gallery_app.c", "if (k == GT_CHANGED) { theme_set(l.theme, l.pol, l.pal);", "if (k == GT_CHANGED) { "),
             ("gallery_app.c", "if (r == GP_OPEN_THEME) {", "if (r == GP_OPEN_HELP) {"),
+            ("gallery_app.c", "const uint32_t np = n / PER_PAGE;\n    if (np != page) { sel = n;", "const uint32_t np = n / (PER_PAGE + 1u);\n    if (np != page) { sel = n;"),
+            ("gallery_app.c", "n_on_page = head.count - first < PER_PAGE ? head.count - first : PER_PAGE;", "n_on_page = PER_PAGE;"),
+            ("gallery_app.c", "else if (edge & KEY_L1) { select_to(sel >= PER_PAGE ? sel - PER_PAGE : 0u); }", "else if (edge & KEY_L1) { select_to(sel >= PER_PAGE ? sel - PER_PAGE : sel); }"),
+            ("gallery_app.c", "else if (edge & KEY_DOWN) { if (sel + COLS < head.count) select_to(sel + COLS); else if (sel + 1u < head.count) select_to(head.count - 1u); }", "else if (edge & KEY_DOWN) { if (sel + COLS < head.count) select_to(sel + COLS); }"),
+            ("gallery_app.c", "if (land_canvas(&t, total, show_progress) && land_canvas(&t, total, show_progress)) return 5;", "if (land_canvas(&t, total, show_progress)) return 5;"),
+            ("gallery_app.c", "if (land_canvas(&t, total, show_progress) && land_canvas(&t, total, show_progress)) return 5;", "if (land_canvas(&t, total, show_progress) && land_canvas(&t, total, show_progress) && land_canvas(&t, total, show_progress)) return 5;"),
+            ("gallery_app.c", "if (!read_bytes(SLOT_PIC, 0u, 4096u, h4) && !read_bytes(SLOT_PIC, 0u, 4096u, h4)) return 2;", "if (!read_bytes(SLOT_PIC, 0u, 4096u, h4)) return 2;"),
+            ("gallery_app.c", "    info.err = r ? open_msg[r] : 0;\n", "    info.err = r ? open_msg[r] : 0;\n    if (r == 0) remember(i);\n"),
             ("gallery_fmt.c", "return h->entries_off + i * GX_ENTRY_BYTES;" if False else "uint32_t gx_thumb_off(const gx_head_t *h, uint32_t thumb) { return h->atlas_off + thumb * GX_THUMB_BYTES; }", "uint32_t gx_thumb_off(const gx_head_t *h, uint32_t thumb) { return h->atlas_off + thumb * (GX_THUMB_BYTES - 2u); }")]
     bad = 0
     for i, (f, a, b) in enumerate(muts):

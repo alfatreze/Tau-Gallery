@@ -26,3 +26,7 @@ M1.6 is built and host-tested, not packaged, not run on a Pocket: Start on the g
 3. `test_check_qsf_files`: list `tau_scanout_v`, `tau_vidmode` (and `tau_land`) in `ap_core.qsf`; needs a VM fit and the owner's yes.
 4. Small: one retry on a failed picture read if it recurs without a screenshot; the last picture is recorded when its landing succeeds even if the viewer did not start; no font selector (3 bits reserved in word 1).
 5. Open owner items: dock run, 565 dither, 150 MHz SDRAM, real folders of hundreds of photos, ICC, then M2 (pan and zoom).
+
+## Addendum 2 (same day, last): folder test, small fixes, M2 design (B-1017)
+Done: the folder test (`make test-gallery-folder`; a converter bug fixed: a too-long name no longer loses the whole run and the index), the 300-entry paging tests, one retry of a failed card read, the last picture remembered only when shown. Written: `docs/M2_DESIGN.md` (pan and zoom; four owner decisions at its end). The firmware is 18,300 bytes. Still not packaged: DEV 007 now carries all of this.
+**Next:** (1) DEV 007 with the owner's yes, and a Pocket run (also the settings round trip and Light mode). (2) M2.0 and M2.1 need no hardware: read `tau_talos.sv` for A1 and A2, then `gallery_view.h`, the tile level and `tgy_convert.py --levels` (see the design). (3) The qsf listing of the viewer RTL (VM fit, owner's yes).

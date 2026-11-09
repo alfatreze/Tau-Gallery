@@ -30,21 +30,24 @@ def main(argv=None):
     from PIL import Image
     a.out.mkdir(parents=True, exist_ok=True)
     files = sorted(p for p in a.src.iterdir() if p.suffix.lower() in EXT and p.is_file())
-    entries, thumbs, used = [], [], set()
+    entries, thumbs, used, skipped = [], [], set(), 0
     for p in files:
+        stem = p.stem; n = 1
+        while stem.lower() in used: n += 1; stem = f"{p.stem}_{n}"
+        path = f"{a.card_dir.strip('/')}/{stem}.tgy"
+        if len(path.encode("utf-8")) >= tgy.PATH_BYTES:              # never cut a name (M1 decision 7): the file is skipped, said so, and the rest of the folder still converts
+            print(json.dumps({"event": "skip", "file": p.name, "error": f"the card path is {len(path.encode('utf-8'))} bytes, the limit is {tgy.PATH_BYTES - 1}: shorten the file name or the card folder"})); skipped += 1; continue
         try:
             canvas, rect, thumb, size = tgy.render(Image.open(p), upscale=a.upscale)
         except Exception as e:                                       # a file that is not a readable picture is skipped, and said so
-            print(json.dumps({"event": "skip", "file": p.name, "error": str(e)})); continue
-        stem = p.stem; n = 1
-        while stem.lower() in used: n += 1; stem = f"{p.stem}_{n}"
+            print(json.dumps({"event": "skip", "file": p.name, "error": str(e)})); skipped += 1; continue
         used.add(stem.lower())
         data = tgy.pack_tgy(canvas, rect, thumb, size)
         write_atomic(a.out / (stem + ".tgy"), data)
-        entries.append(dict(path=f"{a.card_dir.strip('/')}/{stem}.tgy", name=name_of(stem), size=len(data), width=size[0], height=size[1])); thumbs.append(thumb)
+        entries.append(dict(path=path, name=name_of(stem), size=len(data), width=size[0], height=size[1])); thumbs.append(thumb)
         print(json.dumps({"event": "converted", "file": p.name, "tgy": stem + ".tgy", "size": len(data), "width": size[0], "height": size[1], "rect": rect}))
     write_atomic(a.out / a.index_name, tgy.pack_index(entries, thumbs))
-    print(json.dumps({"event": "done", "pictures": len(entries)}))
+    print(json.dumps({"event": "done", "pictures": len(entries), "skipped": skipped}))
     return 0
 
 if __name__ == "__main__":
