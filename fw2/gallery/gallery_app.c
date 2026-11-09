@@ -85,7 +85,7 @@ static void footer(void)
     char b[48], *q = put_s(b, ""); q = put_u(q, sel + 1u); q = put_s(q, "/"); q = put_u(q, head.count); *q = 0;
     gfx_rect(0, 336, GFX_W, 24, BG);
     gfx_text(6, 338, ent[sel - page * PER_PAGE].name, FG, BG);
-    gfx_text(GFX_W - 6u - gfx_text_width(b), 338, b, DIM, BG);
+    gfx_text(GFX_W - 16u - gfx_text_width(b), 338, b, DIM, BG);   /* gfx_text drops a glyph cell that starts within 16 px of the right edge: a 6 px margin lost the last digit */
 }
 
 static void draw_page(void)
