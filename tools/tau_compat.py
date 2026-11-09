@@ -314,7 +314,7 @@ def firmware_formats(root=ROOT):
 # this table stops the release: someone added a slot and must say who makes the file.
 NOT_SHIPPED = {"tau-library.tdb": "generated", "tau-assets.bin": "user"}
 # Slots opened by name at run time (no filename), by extension set.
-BY_EXTENSION = {("flac", "mp3"): "media", ("timg",): "cover"}
+BY_EXTENSION = {("flac", "mp3"): "media", ("timg",): "cover", ("tgy",): "picture"}      # "picture": the Tau Gallery picture slot (tools/gallery, docs/M1_DESIGN.md)
 
 
 def layout(pkg, root=ROOT, obsolete=()):
@@ -323,6 +323,7 @@ def layout(pkg, root=ROOT, obsolete=()):
     by_name = {sl["filename"]: sl for sl in slots if sl.get("filename")}
     common = f"Assets/{plat}/common/"
     mine = f"Assets/{plat}/{core}/"
+    media_roots = tuple(f"Assets/{p}/common/" for p in (pkg.get("platforms") or [plat]))       # a dev build reads its media from every platform it is listed under
     out = []
     for sl in slots:                                   # H4: a slot whose file ships in the zip is build-bound: it must be core-specific
         if sl.get("filename") in BUILD_BOUND and not int(str(sl.get("parameters", "0")), 16) & CORE_SPECIFIC:
@@ -335,6 +336,10 @@ def layout(pkg, root=ROOT, obsolete=()):
             role, slot = "owned", by_name[path[len(mine):]]
         elif path.startswith((f"Cores/{core}/", mine)):
             role, slot = "owned", None
+        elif any(path.startswith(m + "photos/") for m in media_roots) and path.endswith(".tgy"):          # Tau Gallery pictures (tools/gallery/tgy_convert.py): the owner's content, never checked or overwritten as a core file
+            role, slot = "user", None
+        elif path in {m + "tau-library.tdb" for m in media_roots} and any(q.startswith(m + "photos/") for q in pkg["files"] for m in media_roots):      # a package that carries its own pictures carries the index its converter wrote
+            role, slot = "generated", None
         elif path.startswith(common) and path[len(common):] in NOT_SHIPPED:
             raise CompatError(f"{pkg['zip']}: ships {path}, which is {NOT_SHIPPED[path[len(common):]]} data: installing it would overwrite the user's copy")
         elif path.startswith(common) and path[len(common):] in by_name:
@@ -372,6 +377,8 @@ def layout(pkg, root=ROOT, obsolete=()):
             if kind == "media":
                 out.append({"path": media + "**/*.{" + ",".join(sorted(sl["extensions"])) + "}", "pattern": True, "role": "user",
                             "slot": sl["id"], "required": False})
+            elif kind == "picture":
+                out.append({"path": media + "**/*.tgy", "pattern": True, "role": "user", "slot": sl["id"], "required": False})
             elif kind == "cover":
                 f = dict(fmts["cover"]); tail = f.pop("tail")
                 out.append({"path": media + "**/" + tail, "pattern": True, "role": "generated", "slot": sl["id"],
