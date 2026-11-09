@@ -10,7 +10,8 @@ Plan: `../../docs/GALLERY_ANALYSIS_2026-11-07.md` (sections 6.5, 7, 8; M1 row of
 | M1.2 | Firmware readers (C, `fw2/gallery/gallery_fmt.c`): index head and entries, picture header with the level checks, CRC-32; bounds-checked, refuse what they do not know | **done, host-tested** (`make test-gallery-fmt`: the C parse equals the Python parse on real files, 15 damaged files refused with the right code, 19 of 19 mutants killed) |
 | M1.3 | Firmware gallery (`fw2/gallery/gallery_app.c`, `APP=gallery bash fw2/build_gallery.sh`, 9 KB ROM): 4 x 4 thumbnail grid, selection and paging, open a picture (open by path, header check, the canvas lands in the plane in 128 KB commands, word count and overflow checked), viewer, Left/Right neighbours, B back | **done, host-tested end to end** (`make test-gallery-app`: the real firmware runs against a hardware model that serves 18 real converted files; thumbnails compared with the atlas pixel for pixel, the plane compared byte for byte with the canvas, navigation, wrap-around, paging, redraw after the viewer, open failure, damaged transfer, viewer that does not start; 19 of 19 mutants killed) |
 | M1.4 | Package with a few real photos, install, Pocket run, owner review (grid, picture quality, buttons, load times) | packaged and installed 2026-11-09 as DEV 005 (`package_dev_build.py --variant galleryapp --photos ../test-images/unsplash`, five photos); **not run on a Pocket yet** |
-| M1.5 | Delete the music player pieces and the audio source files (M0.8's second half) once M1.3 stands on its own | not started |
+| M1.5 | Delete the music player pieces and the audio source files (M0.8's second half) once M1.3 stands on its own | **done** 2026-11-09 (commits 1e1640b, 0565276; B-1010, B-1011) |
+| M1.6 | Gallery screens on the kept UI layer: Settings, Controls + Help, Info, Theme (owner choice 2026-11-09, all four). See section 5 | designed, not started |
 
 ## 2. Decisions taken (change any of them cheaply now, expensively after M1.4)
 
@@ -33,3 +34,18 @@ TGY header, little-endian, 64 bytes: magic `TGY\0`, u16 version 0, u16 header si
 - A card layout for the pictures (`Assets/tau_gallery/common/photos/` by default).
 - The first-picture experience: a progress bar while 1.7 MB lands (about 1.1 s), and which key does what (A opens, B back, L1 and R1 page, Left and Right neighbour picture).
 - Memory: a plane is 1.7 MB of the 64 MB SDRAM; the next picture can be landed into a second plane while the first is shown (M2 prefetch), the viewer switches by the base register at a vblank.
+
+
+## 5. M1.6 gallery screens (designed 2026-11-09, owner chose all four: Settings, Controls + Help, Info, Theme)
+
+**Base that stays:** `ui/helios` (beam-aware dirty regions), `cores/view_core.h` (view table with enter, exit, input, draw), `ui/regions.h`, `ui/theme*` with `cores/theme_core.h` and `colour_core.h`, `cores/help_core.h`, `controls_core.h`, `menupages_core.h`, `configure_core.h`, `counters_core.h`, `about_core.h`, and the kept views `settings_view`, `controls_view`, `help_view`, `configure_view`, `appearance`. **What they still include and must lose:** `transport/mp3play.h` (player state), `aout/aout.h`, `meter.h`, `meter_registry.h`, `nowplaying.h`, `xfade.h`, `meterlist_thumb.h`, `halcyon_view.h`, `transport/browser.h` (all deleted). `ui/views.c` is the player's view table and is rewritten for the gallery: views GRID, VIEWER, MENU, SETTINGS, CONTROLS, HELP, INFO.
+
+**Proposed shape (change any of it before M1.6 starts):**
+1. Start opens a menu from the grid (the viewer keeps B = back, Left/Right = previous/next). Menu entries: Settings, Controls, Help, Info. Select-Start combos stay free.
+2. **Controls and Help** are static text pages (no persistence): the grid and viewer key map and what the status lines mean. Low risk, first.
+3. **Info** shows what the firmware already knows: core and CORE_VERSION, ROM build, picture count, index build, the card read counters (`counters_core`), the last open time. First after Controls and Help.
+4. **Theme** (colour roles and font of the grid and status lines) reuses `theme_core`; the choice has to persist, so it waits on item 5.
+5. **Settings need a persistence design (owner decision).** The kept `settings/settings.c` and `cores/settings_core.h` are the APF register file (`interact_persist.json`) and every field in `sf_table` is a music field (volume, meters, tunes, last played); the Gallery packages declare no persist words (`add_library_slot(persist_words=False)`). A gallery table (theme, font, last picture, sort, slideshow interval) needs its own field list, a layout version of its own, `core.json`/`interact.json` persist words for it, and a package change; the mechanism (publish only when nothing is streaming, never a file write) stays. Persistence is the one item that touches the package and needs a run on a Pocket to prove.
+6. Tests per screen, in the style of M1.3: host test of the cores (existing), and the real firmware against the hardware model for each page, with mutants.
+
+**Order:** Controls + Help, then Info, then the settings table and Settings, then Theme. Each slice is one commit and one DEV build.
