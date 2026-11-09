@@ -117,6 +117,7 @@ static void select_to(uint32_t n)
 /* Lands the picture's fit canvas in the viewer plane. Returns 0 when it is there, else a code for the status line. */
 static uint8_t h4[4096]; static gt_info_t pic;                                    /* the first 4 KB of the open picture (its header and level table) and what gt_parse found in it */
 /* The loader: a slim bar (160 x 4) in the middle of the screen, a track in DIM and the done part in ACC, so a picture that takes a second or two to open shows it is moving. */
+static uint32_t zb_on, zb_px;                       /* the zoom's loader bar is drawn in the fit plane (below); its pixels saved */
 #define LDR_X 120u
 #define LDR_Y 178u
 #define LDR_W 160u
@@ -202,10 +203,48 @@ static void zoom_off(int k, int32_t *ox, int32_t *oy)                           
     if (k < 0) { *ox = (int32_t)pic.rx; *oy = (int32_t)pic.ry; } else if (zs[k].layout == 0u) { *ox = (int32_t)zs[k].rx; *oy = (int32_t)zs[k].ry; } else { *ox = 0; *oy = 0; }
 }
 static uint32_t zoom_scale(int k) { return k < 0 ? (uint32_t)(((uint64_t)pic.rw * 65536u + pic.width / 2u) / pic.width) : zs[k].scale_q16; }
-static void zoom_shown_now(void) { if (z_first) { z_first = 0u; info.zoom_ms = (cycles() - z_t0) / (CLK_HZ / 1000u); } }       /* the first zoomed view is on screen */
+/* The loader bar of a zoom: the viewer plane has no overlay, so while the fit view stays up and the zoom's first view loads, a bar of the same look (160 x 2, a dark track and an ACC fill) is written into the middle of the fit plane (rows 358 and 359) and the picture's own pixels there are saved first and copied back as soon as the first view is on screen or the zoom is left. */
+#define ZB_Y 358u
+#define ZB_HW0 480u                              /* pixel 320 of a plane row: 320 x 3 / 2 halfwords */
+#define ZB_HW 240u                               /* 160 pixels */
+#define GAL_BARSAVE (GAL_STAGE + 0x8000u)        /* the saved pixels of the two rows, past the staging tile */
+static uint32_t zb_row(uint32_t r) { return GAL_PLANE_BASE + (ZB_Y + r) * GAL_LINE_WORDS16 + ZB_HW0; }
+static uint16_t zb_half(uint32_t h, uint32_t fillpx)       /* halfword h of the bar's row: two bytes of the R, G, B stream */
+{
+    const uint16_t tr = LDR_TRACK, ac = ACC; uint32_t v = 0;
+    for (uint32_t b = 0; b < 2u; b++) {
+        const uint32_t j = h * 2u + b, px = j / 3u, comp = j % 3u; const uint16_t c = px < fillpx ? ac : tr;
+        const uint32_t byte = comp == 0u ? ((c >> 11) & 31u) << 3 : comp == 1u ? ((c >> 5) & 63u) << 2 : (c & 31u) << 3;
+        v |= byte << (8u * b);
+    }
+    return (uint16_t)v;
+}
+static void zb_write(uint32_t from_px, uint32_t to_px, uint32_t fillpx)     /* the halfword pairs that cover pixels from_px to to_px, written with the fill up to fillpx */
+{
+    uint32_t h0 = (from_px * 3u / 2u) & ~1u, h1 = ((to_px * 3u + 1u) / 2u + 1u) & ~1u; if (h1 > ZB_HW) h1 = ZB_HW;
+    for (uint32_t r = 0; r < 2u; r++) for (uint32_t h = h0; h < h1; h += 2u) gfx_mb_write(zb_row(r) + h, (uint32_t)zb_half(h, fillpx) | ((uint32_t)zb_half(h + 1u, fillpx) << 16));
+}
+static void zb_copy(int back)                              /* the two rows to the save area (back = 0) or from it */
+{
+    for (uint32_t r = 0; r < 2u; r++) for (uint32_t k = 0; k < 2u; k++) {
+        const uint32_t o = k * (ZB_HW / 2u), save = GAL_BARSAVE + r * ZB_HW;
+        if (back) gfx_blit_raw(save, zb_row(r), o, o, ZB_HW / 2u); else gfx_blit_raw(zb_row(r), save, o, o, ZB_HW / 2u);
+    }
+    gfx_fence();
+}
+static void zb_begin(void) { if (zb_on) return; zb_copy(0); zb_on = 1u; zb_px = 0u; zb_write(0u, 160u, 0u); }
+static void zb_set(uint32_t done, uint32_t total)
+{
+    if (!zb_on) return;
+    const uint32_t px = total ? (done > total ? 160u : (uint32_t)((uint64_t)done * 160u / total)) : 0u;
+    if (px > zb_px) { zb_write(zb_px, px, px); zb_px = px; }
+}
+static void zb_end(void) { if (!zb_on) return; zb_on = 0u; zb_copy(1); }
+static void zoom_shown_now(void) { zb_end(); if (z_first) { z_first = 0u; info.zoom_ms = (cycles() - z_t0) / (CLK_HZ / 1000u); } }       /* the first zoomed view is on screen */
 static void zoom_leave(void)
 {
     if (t_job) gfx_fence();                                                                  /* Talos commands of an abandoned copy retire before anything reuses their memory */
+    zb_end();                                                                                /* the fit plane's own pixels back under the loader bar */
     REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16); REG_WR(R_VIEW_BASE, GAL_PLANE_BASE);              /* the fit plane is still in SDRAM: back in one write */
     z_shown = 0u; t_job = 0u; t_recentre = 0u; zk = -1;
 }
@@ -223,6 +262,7 @@ static void zoom_goto(int k)
     z_wx = nx; z_wy = ny; z_sx = -1; z_sy = -1; z_shown = 0u; z_t0 = cycles(); z_first = 1u;
     if (zl.layout == 0u) { z_stride_hw = zl.stride / 2u; z_nch = gv_nchunks((zl.len + 4095u) & ~4095u); z_lo = 0u; z_hi = 0u; }
     else { t_front = 0u; gv_window_for(&z_stop, z_wx, z_wy, &t_wx[0], &t_wy[0]); res_clear(0u); }
+    zb_begin();
 }
 /* ---- option A ---- */
 /* Lands chunk c of the level (a read of the file's own bytes, at the same offset of the zoom plane), once more on a failure. 1 when it landed with every word counted. */
@@ -246,6 +286,7 @@ static int raster_pass(int dirx, int diry, uint32_t held, int moving, int tick)
     if (gv_next_chunk(zl.stride, zl.len, z_nch, z_lo, z_hi, (uint32_t)z_wy, diry, &c)) {
         if (!zoom_land(c)) return 1;
         if (z_hi <= z_lo) { z_lo = c; z_hi = c + 1u; } else if (c + 1u == z_lo) z_lo = c; else z_hi++;
+        if (!z_shown) { uint32_t need = (GV_SCREEN_H * zl.stride + GV_CHUNK - 1u) / GV_CHUNK + 1u; if (need > z_nch) need = z_nch; zb_set(z_hi - z_lo, need); }
     }
     uint32_t rlo, rhi; int32_t y;
     gv_rows_loaded(zl.stride, zl.len, z_lo, z_hi, &rlo, &rhi);
@@ -324,6 +365,11 @@ static int tile_pass(int dx, int dy, uint32_t held, int moving, int tick)
     }
     const uint32_t b2 = 1u - t_front;
     if (t_recentre && !t_job && (z_shown ? gv_screen_ready(&z_stop, z_sx, z_sy, t_wx[b2], t_wy[b2], t_res[b2]) : gv_screen_ready(&z_stop, px, py, t_wx[b2], t_wy[b2], t_res[b2]))) { t_front = b2; t_recentre = 0u; info.flip_ms = (cycles() - t_rc_t0) / (CLK_HZ / 1000u); }      /* the new window has the view on screen whole: flip */
+    if (!z_shown && zb_on) {                                                                 /* the loader: the tiles of the first view that are whole */
+        gv_tile_t scr[GV_MAX_TILES]; const uint32_t ns = gv_tiles_needed(&z_stop, z_wx, z_wy, t_wx[t_front], t_wy[t_front], 0, 0, scr); uint32_t on = 0u, whole = 0u;
+        for (uint32_t i = 0; i < ns; i++) { if (scr[i].ring) continue; on++; int col, row; if (gv_win_tile(t_wx[t_front], t_wy[t_front], scr[i].tx, scr[i].ty, &col, &row) && t_res[t_front][row * GV_WIN_TX + col]) whole++; }
+        zb_set(whole, on);
+    }
     if (!z_shown) { if (gv_screen_ready(&z_stop, z_wx, z_wy, t_wx[t_front], t_wy[t_front], t_res[t_front])) tile_show(z_wx, z_wy); return 0; }
     if (t_front != t_shown_win) { tile_show(z_sx, z_sy); return 0; }                         /* the window flipped: the same view, from the new window */
     if (tick && (z_sx != z_wx || z_sy != z_wy)) {                                            /* follow the wanted corner: diagonal if its tiles are whole, else along one axis */

@@ -173,6 +173,18 @@ def mutants(setdir):
             ("gallery_app.c", "gv_window_lead(&z_stop, px, py, lx, ly, &t_wx[b], &t_wy[b]); res_clear(b); }", "gv_window_lead(&z_stop, px, py, 0, 0, &t_wx[b], &t_wy[b]); res_clear(b); }"),
             ("gallery_app.c", "const int lx = dx ? dx : (z_wx > px ? 1 : z_wx < px ? -1 : 0), ly = dy ? dy : (z_wy > py ? 1 : z_wy < py ? -1 : 0);", "const int lx = -dx, ly = -dy;"),
             ("gallery_app.c", "const int lx = dx ? dx : (z_wx > px ? 1 : z_wx < px ? -1 : 0), ly = dy ? dy : (z_wy > py ? 1 : z_wy < py ? -1 : 0);", "const int lx = dx, ly = dy;"),
+            ("gallery_app.c", "    zb_end();                                                                                /* the fit plane's own pixels back under the loader bar */\n", "\n"),
+            ("gallery_app.c", "static void zoom_shown_now(void) { zb_end(); if (z_first) {", "static void zoom_shown_now(void) { if (z_first) {"),
+            ("gallery_app.c", "    zb_begin();\n}", "}"),
+            ("gallery_app.c", "static void zb_begin(void) { if (zb_on) return; zb_copy(0); zb_on = 1u;", "static void zb_begin(void) { if (zb_on) return; zb_on = 1u;"),
+            ("gallery_app.c", "zb_write(0u, 160u, 0u); }", "}"),
+            ("gallery_app.c", "if (px > zb_px) { zb_write(zb_px, px, px); zb_px = px; }", "if (px > zb_px) { zb_px = px; }"),
+            ("gallery_app.c", "zb_set(whole, on);", "zb_set(0u, on);"),
+            ("gallery_app.c", "zb_set(z_hi - z_lo, need); }", "zb_set(0u, need); }"),
+            ("gallery_app.c", "#define ZB_Y 358u", "#define ZB_Y 300u"),
+            ("gallery_app.c", "#define ZB_HW0 480u ", "#define ZB_HW0 482u "),
+            ("gallery_app.c", "const uint32_t o = k * (ZB_HW / 2u), save = GAL_BARSAVE + r * ZB_HW;", "const uint32_t o = k * (ZB_HW / 2u), save = GAL_BARSAVE;"),
+            ("gallery_app.c", "const uint16_t c = px < fillpx ? ac : tr;", "const uint16_t c = px < fillpx ? tr : ac;") if False else ("gallery_app.c", "px < fillpx ? ac : tr;", "px < fillpx ? tr : tr;"),
             ("gallery_app.c", "info.flip_ms = (cycles() - t_rc_t0) / (CLK_HZ / 1000u);", "info.flip_ms = 0u;"),
             ("gallery_fmt.c", "return h->entries_off + i * GX_ENTRY_BYTES;" if False else "uint32_t gx_thumb_off(const gx_head_t *h, uint32_t thumb) { return h->atlas_off + thumb * GX_THUMB_BYTES; }", "uint32_t gx_thumb_off(const gx_head_t *h, uint32_t thumb) { return h->atlas_off + thumb * (GX_THUMB_BYTES - 2u); }")]
     bad = 0
