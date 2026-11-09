@@ -16,3 +16,13 @@ Repo `gallery/`, branch `main`. Detail in `docs/AUDIT_TRAIL.md` B-1010; the earl
 ## Rules that bit
 - A deletion pass must check what live code imports (tau_compat reads `meter_pack_core.h`; mpreset needs meter_desc). Test on a clean HEAD worktree for a baseline; a worktree lacks the untracked `dist/`, so copy it in.
 - Card writes and fits need the owner's yes; installs only through `tools/install_dev_core.py`.
+
+## Addendum (same day, later): the gallery screens are built (tip 5f7f3b3)
+M1.6 is built and host-tested, not packaged, not run on a Pocket: Start on the grid opens a menu with CONTROLS, HELP, INFO, SETTINGS (RESUME LAST PICTURE, saved) and THEME (theme, dark or light, accent; saved). Detail in `docs/AUDIT_TRAIL.md` B-1012 to B-1015 and `docs/M1_DESIGN.md` sections 5 and 6. Firmware 18,140 bytes. The owner said "Not yet" to packaging DEV 007; the card still holds DEV 005 and DEV 006.
+
+**Next, by value:**
+1. DEV 007 (package, dry run, install on TauV, owner's yes) and a Pocket run: the `1/5` counter, open time per picture, the settings round trip (Info shows LOADED and SAVED), Light mode legibility, the grid on OCEAN. The default accent is now white (was orange).
+2. Remove the dead music UI: `ui/` appearance, browser_view, configure_view, controls_view, fullscreen_view, help_view, settings_view, views, theme_file, `settings/`, `cores/settings_core.h`, five `diagnostics/` pages and the tests of them (`test_p2_*` for those); first check what live code imports (see the rules below).
+3. `test_check_qsf_files`: list `tau_scanout_v`, `tau_vidmode` (and `tau_land`) in `ap_core.qsf`; needs a VM fit and the owner's yes.
+4. Small: one retry on a failed picture read if it recurs without a screenshot; the last picture is recorded when its landing succeeds even if the viewer did not start; no font selector (3 bits reserved in word 1).
+5. Open owner items: dock run, 565 dither, 150 MHz SDRAM, real folders of hundreds of photos, ICC, then M2 (pan and zoom).
