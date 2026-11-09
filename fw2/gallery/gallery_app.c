@@ -7,6 +7,7 @@
 #include "../stream/slot.h"
 #include "gallery_hw.h"
 #include "gallery_fmt.h"
+#include "gallery_pages.h"
 
 #define BG   RGB565(0, 0, 0)
 #define FG   RGB565(255, 255, 255)
@@ -158,6 +159,64 @@ static void open_from_grid(void)
     viewer();
 }
 
+/* ---- the menu and its pages (gallery_pages.h): Start on the grid opens them, B or Start closes the menu and the grid is drawn again ---- */
+#define LINE_H 20u
+#define PAGE_Y0 26u
+static void page_clear(const char *title) { gfx_rect(0, 0, GFX_W, GFX_H, BG); gfx_text(6, 2, title, ACC, BG); }
+static void page_foot(const char *left, uint32_t n, uint32_t of)
+{
+    char b[24], *q = put_u(b, n); q = put_s(q, "/"); q = put_u(q, of); *q = 0;
+    gfx_rect(0, 336, GFX_W, 24, BG); gfx_text(6, 338, left, DIM, BG);
+    if (of) gfx_text(GFX_W - 16u - gfx_text_width(b), 338, b, DIM, BG);
+}
+static void draw_menu(const gm_t *m)
+{
+    page_clear("TAU GALLERY");
+    for (uint32_t i = 0; i < GM_COUNT; i++) {
+        gfx_text(6, PAGE_Y0 + i * LINE_H, gm_names[i], i == m->sel ? FG : DIM, BG);
+        if (i == m->sel) gfx_text(GFX_W - 32u, PAGE_Y0 + i * LINE_H, "<", ACC, BG);
+    }
+    page_foot("A OPEN   B CLOSE", 0, 0);
+}
+static void draw_controls(const gc_t *c)
+{
+    page_clear("CONTROLS");
+    for (uint32_t r = 0; r < GC_VIS && c->top + r < GC_N; r++) {
+        const gc_row_t *w = &gc_rows[c->top + r]; const uint32_t y = PAGE_Y0 + r * (LINE_H - 2u);
+        if (!w->what[0]) { gfx_text(6, y, w->key, ACC, BG); continue; }
+        gfx_text(14, y, w->key, c->top + r == c->sel ? ACC : FG, BG); gfx_text(190, y, w->what, DIM, BG);
+    }
+    page_foot("UP DOWN SCROLL   B BACK", c->sel + 1u, GC_N);
+}
+static void draw_help(const gh_t *h)
+{
+    const gh_page_t *pg = &gh_pages[h->page];
+    page_clear(pg->title);
+    for (uint32_t i = 0; i < pg->n; i++) {
+        const gh_line_t *l = &pg->lines[i];
+        if (l->style != GS_GAP) gfx_text(6, PAGE_Y0 + i * (LINE_H - 2u), l->s, l->style == GS_ACCENT ? ACC : l->style == GS_DIM ? DIM : FG, BG);
+    }
+    page_foot("UP DOWN PAGE   B BACK", h->page + 1u, GH_PAGES);
+}
+/* Waits for the next key press (an edge) and returns it. */
+static uint32_t next_edge(uint32_t *prev)
+{
+    for (;;) { const uint32_t keys = REG_RD(R_INPUT) & 0xFFFFu, edge = keys & ~*prev; *prev = keys; if (edge) return edge; }
+}
+static void run_pages(void)
+{
+    uint32_t prev = REG_RD(R_INPUT) & 0xFFFFu;
+    gm_t m; gm_open(&m); draw_menu(&m);
+    for (;;) {
+        const uint32_t edge = next_edge(&prev); const int r = gm_input(&m, edge);
+        if (r == GP_CLOSE) return;
+        if (r == GP_STAY) { draw_menu(&m); continue; }
+        if (r == GP_OPEN_CONTROLS) { gc_t c; gc_open(&c); draw_controls(&c); while (!gc_input(&c, next_edge(&prev))) draw_controls(&c); }
+        else { gh_t h; gh_open(&h); draw_help(&h); while (!gh_input(&h, next_edge(&prev))) draw_help(&h); }
+        draw_menu(&m);
+    }
+}
+
 int main(void)
 {
     if (!platform_version_ok()) platform_halt_pattern();
@@ -180,5 +239,6 @@ int main(void)
         else if (edge & KEY_L1) { select_to(sel >= PER_PAGE ? sel - PER_PAGE : 0u); }
         else if (edge & KEY_R1) { select_to(sel + PER_PAGE < head.count ? sel + PER_PAGE : head.count - 1u); }
         else if (edge & KEY_A) open_from_grid();
+        else if (edge & KEY_START) { run_pages(); draw_page(); prev = REG_RD(R_INPUT) & 0xFFFFu; }
     }
 }

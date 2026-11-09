@@ -1,0 +1,127 @@
+/* fw2/gallery/gallery_pages.h -- Tau Gallery M1.6 slice 1 (docs/M1_DESIGN.md section 5): the menu, the Controls list and the Help pages. Pure: no drawing, no registers. Host-tested (sim/test_gallery_pages.py).
+ * Start on the grid opens the menu; Up/Down move, A opens an entry, B or Start closes. Controls is a read-only list (Up/Down scroll, wrapping, Helios's rule); Help is three pages of text (Up/Down turn the
+ * page, wrapping). B or Left leaves a page for the menu. Lines are at most GP_MAXCH characters so they fit the 400 px screen. Info and Settings join the menu in later slices. */
+#ifndef GALLERY_PAGES_H
+#define GALLERY_PAGES_H
+#include <stdint.h>
+#include "../cores/helios_core.h"
+#ifndef BUG
+#define BUG 0
+#endif
+#define GP_MAXCH 36u
+#define GP_KEY_UP    (1u << 0)
+#define GP_KEY_DOWN  (1u << 1)
+#define GP_KEY_LEFT  (1u << 2)
+#define GP_KEY_A     (1u << 4)
+#define GP_KEY_B     (1u << 5)
+#define GP_KEY_START (1u << 15)
+
+/* ---- the menu ---- */
+enum { GM_CONTROLS = 0, GM_HELP, GM_COUNT };
+static const char *const gm_names[GM_COUNT] = { "CONTROLS", "HELP" };
+enum { GP_STAY = 0, GP_CLOSE, GP_OPEN_CONTROLS, GP_OPEN_HELP };      /* what a key edge asks of the caller */
+typedef struct { uint8_t sel; } gm_t;
+static inline void gm_open(gm_t *m) { m->sel = 0; }
+static inline int gm_input(gm_t *m, uint32_t edge)
+{
+    if (edge & (GP_KEY_UP | GP_KEY_DOWN)) {
+#if BUG == 1
+        m->sel = (uint8_t)((edge & GP_KEY_UP) ? (m->sel ? m->sel - 1u : 0u) : (m->sel + 1u < GM_COUNT ? m->sel + 1u : GM_COUNT - 1u));      /* clamps instead of wrapping */
+#else
+        m->sel = (uint8_t)hl_wrap(m->sel, GM_COUNT, (edge & GP_KEY_UP) != 0);
+#endif
+        return GP_STAY;
+    }
+    if (edge & GP_KEY_A) {
+#if BUG == 2
+        return m->sel == GM_CONTROLS ? GP_OPEN_HELP : GP_OPEN_CONTROLS;               /* the entries swapped */
+#else
+        return m->sel == GM_CONTROLS ? GP_OPEN_CONTROLS : GP_OPEN_HELP;
+#endif
+    }
+    return (edge & (GP_KEY_B | GP_KEY_START)) ? GP_CLOSE : GP_STAY;
+}
+
+/* ---- Controls: every button the gallery uses, as the code reads them (gallery_app.c main loop and viewer) ---- */
+typedef struct { const char *key, *what; } gc_row_t;
+static const gc_row_t gc_rows[] = {
+    { "GRID",           ""                    },
+    { "LEFT / RIGHT",   "PREVIOUS / NEXT"     },
+    { "UP / DOWN",      "ONE ROW UP / DOWN"   },
+    { "L1 / R1",        "PAGE BACK / ON"      },
+    { "A",              "OPEN THE PICTURE"    },
+    { "START",          "MENU"                },
+    { "PICTURE",        ""                    },
+    { "LEFT / RIGHT",   "PREVIOUS / NEXT"     },
+    { "B",              "BACK TO THE GRID"    },
+    { "MENU AND PAGES", ""                    },
+    { "UP / DOWN",      "MOVE / SCROLL / PAGE"},
+    { "A",              "OPEN"                },
+    { "B / LEFT",       "BACK"                },
+    { "START",          "CLOSE THE MENU"      },
+};
+#define GC_N ((uint8_t)(sizeof(gc_rows) / sizeof(gc_rows[0])))
+#define GC_VIS 12u                                                   /* rows on the screen at once */
+typedef struct { uint8_t sel, top; } gc_t;
+static inline void gc_open(gc_t *c) { c->sel = 0; c->top = 0; }
+static inline void gc_fix(gc_t *c)
+{
+    uint32_t sel = c->sel, top = c->top;
+    if (sel < top) top = sel;
+    if (sel >= top + GC_VIS) top = sel + 1u - GC_VIS;
+    c->top = (uint8_t)top;
+}
+/* One key edge: returns 1 when the page should close (back to the menu). */
+static inline int gc_input(gc_t *c, uint32_t edge)
+{
+    if (edge & (GP_KEY_UP | GP_KEY_DOWN)) {
+#if BUG == 3
+        c->sel = (uint8_t)((edge & GP_KEY_UP) ? (c->sel ? c->sel - 1u : 0u) : (c->sel + 1u < GC_N ? c->sel + 1u : GC_N - 1u));      /* clamps instead of wrapping */
+#else
+        c->sel = (uint8_t)hl_wrap(c->sel, GC_N, (edge & GP_KEY_UP) != 0);
+#endif
+        gc_fix(c); return 0;
+    }
+    return (edge & (GP_KEY_LEFT | GP_KEY_B)) != 0;
+}
+
+/* ---- Help: three pages of text ---- */
+enum { GS_TEXT = 0, GS_ACCENT, GS_DIM, GS_GAP };                      /* a line's style; GS_GAP is an empty line */
+typedef struct { uint8_t style; const char *s; } gh_line_t;
+typedef struct { const char *title; const gh_line_t *lines; uint8_t n; } gh_page_t;
+static const gh_line_t gh_p1[] = {
+    { GS_TEXT, "Convert pictures on a computer:" }, { GS_GAP, "" },
+    { GS_ACCENT, "python3 tools/gallery/tgy_convert.py" }, { GS_TEXT, "  PHOTOS_DIR OUT_DIR" }, { GS_GAP, "" },
+    { GS_TEXT, "It writes one .tgy file for each" }, { GS_TEXT, "picture and the index" }, { GS_ACCENT, "tau-library.tdb" }, { GS_GAP, "" },
+    { GS_DIM, "Or: package_dev_build.py --variant" }, { GS_DIM, "galleryapp --photos DIR" } };
+static const gh_line_t gh_p2[] = {
+    { GS_TEXT, "On the card:" }, { GS_GAP, "" },
+    { GS_ACCENT, "Assets/tau_gallery/common/photos/" }, { GS_TEXT, "  the .tgy pictures" },
+    { GS_ACCENT, "Assets/tau_gallery/common/" }, { GS_TEXT, "  tau-library.tdb, the index" },
+    { GS_ACCENT, "Memories/Screenshots/" }, { GS_TEXT, "  Menu + Start screenshots" }, { GS_GAP, "" },
+    { GS_DIM, "The index lists every picture and" }, { GS_DIM, "its thumbnail; convert to change it." } };
+static const gh_line_t gh_p3[] = {
+    { GS_TEXT, "A red line at the bottom says why a" }, { GS_TEXT, "picture did not open:" }, { GS_GAP, "" },
+    { GS_ACCENT, "OPEN FAILED" }, { GS_TEXT, "  the .tgy file is not on the card" },
+    { GS_ACCENT, "NOT A TGY PICTURE" }, { GS_TEXT, "  the file is damaged or other" },
+    { GS_ACCENT, "PICTURE READ FAILED" }, { GS_TEXT, "  the card did not answer" },
+    { GS_ACCENT, "DAMAGED IN TRANSFER" }, { GS_TEXT, "  a word was lost: try again" } };
+#define GH_N(a) ((uint8_t)(sizeof(a) / sizeof((a)[0])))
+static const gh_page_t gh_pages[] = { { "ADD PHOTOS", gh_p1, GH_N(gh_p1) }, { "WHERE THINGS ARE", gh_p2, GH_N(gh_p2) }, { "IF A PICTURE FAILS", gh_p3, GH_N(gh_p3) } };
+#define GH_PAGES ((uint8_t)(sizeof(gh_pages) / sizeof(gh_pages[0])))
+typedef struct { uint8_t page; } gh_t;
+static inline void gh_open(gh_t *h) { h->page = 0; }
+/* One key edge: returns 1 when Help should close (back to the menu). */
+static inline int gh_input(gh_t *h, uint32_t edge)
+{
+    if (edge & (GP_KEY_UP | GP_KEY_DOWN)) {
+#if BUG == 4
+        h->page = (uint8_t)((edge & GP_KEY_UP) ? (h->page ? h->page - 1u : 0u) : (h->page + 1u < GH_PAGES ? h->page + 1u : GH_PAGES - 1u));      /* clamps instead of wrapping */
+#else
+        h->page = (uint8_t)hl_wrap(h->page, GH_PAGES, (edge & GP_KEY_UP) != 0);
+#endif
+        return 0;
+    }
+    return (edge & (GP_KEY_LEFT | GP_KEY_B)) != 0;
+}
+#endif

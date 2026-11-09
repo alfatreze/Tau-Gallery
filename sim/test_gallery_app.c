@@ -150,6 +150,12 @@ static void checkpoint(int n)
     case 13: snprintf(want, sizeof want, "%u/%u", count, count); chk(21, !strcmp(last_text(), want)); break;                       /* R1 from picture 3: fewer than a page ahead, so the last picture */
     case 14: chk(22, said("PICTURE DAMAGED IN TRANSFER") && vid_bus == 0u); force_short = 0; viewer_dead = 1; clear_texts(); break;     /* a lost word without an overflow is damage too */
     case 15: chk(23, said("VIEWER DID NOT START")); break;
+    case 16: chk(24, said("CONTROLS") && said("HELP") && said("A OPEN") && !thumbs_on_screen(0, count < 16u ? count : 16u)); clear_texts(); break;           /* Start: the menu replaces the grid */
+    case 17: chk(25, said("OPEN THE PICTURE") && said("1/14") && !said("HELP")); clear_texts(); break;                                                           /* A on Controls: the list, its first row of 14 */
+    case 18: chk(26, said("CONTROLS") && said("HELP") && !said("OPEN THE PICTURE")); clear_texts(); break;                                                       /* B: back in the menu */
+    case 19: chk(27, said("ADD PHOTOS") && said("1/3") && !said("MENU")); clear_texts(); break;                                                                  /* Down, A: Help page 1 of 3 */
+    case 20: chk(28, said("WHERE THINGS ARE") && said("2/3") && !said("ADD PHOTOS")); clear_texts(); break;                                                      /* Down turns the page */
+    case 21: snprintf(want, sizeof want, "1/%u", count); chk(29, thumbs_on_screen(0, count < 16u ? count : 16u) && said(want) && said("TAU GALLERY")); break;   /* B, B: the grid again, thumbnails and footer redrawn */
     default: break;
     }
 }
@@ -159,7 +165,7 @@ int main(int argc, char **argv)
     snprintf(dir, sizeof dir, "%s", argv[1]); char f[600]; snprintf(f, sizeof f, "%s/tau-library.tdb", dir);
     idx_data = slurp(f, &idx_len); if (!idx_data) return 2;
     count = (uint32_t)idx_data[8] | (uint32_t)idx_data[9] << 8;
-    const uint32_t S[] = { CP(1), KEY_RIGHT, 0, KEY_RIGHT, 0, CP(2), KEY_A, 0, CP(3), KEY_RIGHT, 0, CP(4), KEY_LEFT, 0, KEY_LEFT, 0, CP(5), KEY_LEFT, 0, KEY_LEFT, 0, CP(6), KEY_B, 0, CP(7),
+    const uint32_t S[] = { CP(1), KEY_START, 0, CP(16), KEY_A, 0, CP(17), KEY_B, 0, CP(18), KEY_DOWN, 0, KEY_A, 0, CP(19), KEY_DOWN, 0, CP(20), KEY_B, 0, KEY_B, 0, CP(21), KEY_RIGHT, 0, KEY_RIGHT, 0, CP(2), KEY_A, 0, CP(3), KEY_RIGHT, 0, CP(4), KEY_LEFT, 0, KEY_LEFT, 0, CP(5), KEY_LEFT, 0, KEY_LEFT, 0, CP(6), KEY_B, 0, CP(7),
                           KEY_L1, 0, CP(8), KEY_R1, 0, CP(9), KEY_L1, 0, KEY_RIGHT, 0, KEY_R1, 0, CP(13), KEY_L1, 0, CP(10), KEY_A, 0, CP(11), KEY_RIGHT, 0, KEY_A, 0, CP(12),
                           KEY_RIGHT, 0, KEY_A, 0, CP(14), KEY_A, 0, CP(15), END };
     nscript = (int)(sizeof S / sizeof S[0]); memcpy(script, S, sizeof S);
