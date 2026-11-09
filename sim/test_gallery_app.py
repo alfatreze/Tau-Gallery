@@ -185,6 +185,8 @@ def mutants(setdir):
             ("gallery_app.c", "#define ZB_HW0 480u ", "#define ZB_HW0 482u "),
             ("gallery_app.c", "const uint32_t o = k * (ZB_HW / 2u), save = GAL_BARSAVE + r * ZB_HW;", "const uint32_t o = k * (ZB_HW / 2u), save = GAL_BARSAVE;"),
             ("gallery_app.c", "const uint16_t c = px < fillpx ? ac : tr;", "const uint16_t c = px < fillpx ? tr : ac;") if False else ("gallery_app.c", "px < fillpx ? ac : tr;", "px < fillpx ? tr : tr;"),
+            ("gallery_app.c", "gv_tiles_needed(&z_stop, cx, cy, t_wx[tw], t_wy[tw], lx, ly, need)", "gv_tiles_needed(&z_stop, cx, cy, t_wx[tw], t_wy[tw], 0, 0, need)"),
+            ("gallery_app.c", "gv_tiles_needed(&z_stop, cx, cy, t_wx[tw], t_wy[tw], lx, ly, need)", "gv_tiles_needed(&z_stop, cx, cy, t_wx[tw], t_wy[tw], dx, dy, need)"),
             ("gallery_app.c", "info.flip_ms = (cycles() - t_rc_t0) / (CLK_HZ / 1000u);", "info.flip_ms = 0u;"),
             ("gallery_fmt.c", "return h->entries_off + i * GX_ENTRY_BYTES;" if False else "uint32_t gx_thumb_off(const gx_head_t *h, uint32_t thumb) { return h->atlas_off + thumb * GX_THUMB_BYTES; }", "uint32_t gx_thumb_off(const gx_head_t *h, uint32_t thumb) { return h->atlas_off + thumb * (GX_THUMB_BYTES - 2u); }")]
     bad = 0

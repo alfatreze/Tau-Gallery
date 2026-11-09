@@ -104,12 +104,13 @@ static inline void gv_zoom_map(const gv_stop_t *from, const gv_stop_t *to, int32
 }
 
 /* ---- pan speed and movement ---- */
+/* The card delivers about one 128 px column of tiles in 270 ms (7 tiles of 38 ms), so a pan faster than 480 px/s only waits for it in bursts: the pan is capped at 8 pixels a frame. */
 static inline int32_t gv_speed(uint32_t held_frames)
 {
 #if BUG == 5
-    return held_frames < 8u ? 4 : held_frames < 24u ? 8 : 18;                                /* a final speed that is not a multiple of 4 pixels */
+    return held_frames < 8u ? 4 : 10;                                                        /* a final speed that is not a multiple of 4 pixels */
 #else
-    return held_frames < 8u ? 4 : held_frames < 24u ? 8 : 16;
+    return held_frames < 8u ? 4 : 8;
 #endif
 }
 /* One frame of a held direction (dirx, diry in -1, 0, 1). */
@@ -183,8 +184,25 @@ static inline uint32_t gv_tiles_needed(const gv_stop_t *s, int32_t vx, int32_t v
             const int on = x0 < vx + GV_SCREEN_W && x0 + GV_TILE > vx && y0 < vy + GV_SCREEN_H && y0 + GV_TILE > vy;
 #endif
             const int32_t mx = x0 + GV_TILE / 2 - cx, my = y0 + GV_TILE / 2 - cy;
-            /* screen tiles: by distance to the screen centre; ring tiles: by how far ahead they lie (the larger the dot product with the direction, the earlier) */
-            int32_t k = on ? (mx * mx + my * my) / 16 : 0x40000000 - (mx * dx + my * dy) / 16 + (mx * mx + my * my) / 4096;
+            /* screen tiles: by distance to the screen centre. Ring tiles, three tiers: the strip the pan will bring on screen next (ahead along a travelling axis, within the screen's band on the other axis: the visible columns and rows, nearest first), then the corners ahead (nearest first), then the rest by distance. */
+            int32_t k;
+            if (on) k = (mx * mx + my * my) / 16;
+            else {
+                const int32_t vr = vx + GV_SCREEN_W, vb = vy + GV_SCREEN_H;
+                const int aheadx = dx > 0 ? x0 >= vr : dx < 0 ? x0 + GV_TILE <= vx : 0, aheady = dy > 0 ? y0 >= vb : dy < 0 ? y0 + GV_TILE <= vy : 0;
+                const int overx = x0 < vr && x0 + GV_TILE > vx, overy = y0 < vb && y0 + GV_TILE > vy;
+                const int32_t gapx = x0 >= vr ? x0 - vr : x0 + GV_TILE <= vx ? vx - (x0 + GV_TILE) : 0, gapy = y0 >= vb ? y0 - vb : y0 + GV_TILE <= vy ? vy - (y0 + GV_TILE) : 0;
+#if BUG == 20
+                k = 0x30000000 + (gapx * gapx + gapy * gapy) / 16;                         /* no strip tier */
+#else
+                if ((aheadx && overy) || (aheady && overx)) k = 0x10000000 + ((aheadx && overy) ? gapx : gapy);
+                else if (aheadx || aheady) k = 0x20000000 + gapx + gapy;
+                else k = 0x30000000 + (gapx * gapx + gapy * gapy) / 16;
+#endif
+#if BUG == 21
+                if (k < 0x20000000) k = 0x10000000 + 0xFFFFF - (k - 0x10000000);          /* the strip farthest first */
+#endif
+            }
             uint32_t i = n++;
             while (i > 0u && key[i - 1u] > k) { key[i] = key[i - 1u]; out[i] = out[i - 1u]; i--; }
             key[i] = k; out[i].tx = (int16_t)tx; out[i].ty = (int16_t)ty; out[i].ring = on ? 0u : 1u;

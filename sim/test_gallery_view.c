@@ -69,11 +69,11 @@ int main(void)
     chk("zoom out at the far corner lands inside the half stop (aligned, clamped to its edge): the view moves toward the middle", nx == 1200 && ny == 780);
 
     /* ---- pan speed and movement ---- */
-    chk("pan speed: 4 for 8 frames, then 8 for 16, then 16", gv_speed(0) == 4 && gv_speed(7) == 4 && gv_speed(8) == 8 && gv_speed(23) == 8 && gv_speed(24) == 16 && gv_speed(5000) == 16);
+    chk("pan speed: 4 for 8 frames, then 8 (480 px/s, the card's pace) however long the hold", gv_speed(0) == 4 && gv_speed(7) == 4 && gv_speed(8) == 8 && gv_speed(23) == 8 && gv_speed(24) == 8 && gv_speed(5000) == 8);
     s = gv_make_stop(4000, 3000, Q16); x = 0; y = 0; int okm = 1;
-    for (int f = 0; f < 400; f++) { gv_move(&s, &x, &y, 1, 1, (uint32_t)f); if ((x & 3) || x > 3200 || y > 2280) okm = 0; }
-    chk("a held diagonal for 400 frames stays aligned and clamps at the far corner", okm && x == 3200 && y == 2280);
-    for (int f = 0; f < 400; f++) gv_move(&s, &x, &y, -1, 0, (uint32_t)f);
+    for (int f = 0; f < 600; f++) { gv_move(&s, &x, &y, 1, 1, (uint32_t)f); if ((x & 3) || x > 3200 || y > 2280) okm = 0; }
+    chk("a held diagonal for 600 frames stays aligned and clamps at the far corner", okm && x == 3200 && y == 2280);
+    for (int f = 0; f < 600; f++) gv_move(&s, &x, &y, -1, 0, (uint32_t)f);
     chk("then a held Left returns to 0 and stops", x == 0 && y == 2280);
 
     /* ---- the window ---- */
@@ -144,6 +144,28 @@ int main(void)
     chk("tiles: exactly the tiles the screen touches come first (count = rows x columns)", okcount && okfirst);
     chk("tiles: the screen tiles are ordered nearest the centre first", okord);
     chk("tiles: no tile twice, all inside the window and the stored stop", okdup && okwin);
+    { int okr = 1; uint32_t strips = 0;                                                     /* the ring: the strip the pan brings on screen first (nearest first), then the corners ahead, then the rest */
+      s = gv_make_stop(4000, 3000, Q16);
+      for (int i = 0; i < 600; i++) {
+          x = 400 + (int32_t)(rnd() % 2400u); y = 300 + (int32_t)(rnd() % 1500u); gv_clamp(&s, &x, &y); gv_window_for(&s, x, y, &wx, &wy);
+          const int dx = (int)(rnd() % 3) - 1, dy = (int)(rnd() % 3) - 1; const uint32_t n = gv_tiles_needed(&s, x, y, wx, wy, dx, dy, need);
+          int last_cls = 0; int32_t last_gap = -1, last_corner = -1;
+          for (uint32_t j = 0; j < n; j++) {
+              if (!need[j].ring) continue;
+              const int32_t x0 = need[j].tx * GV_TILE, y0 = need[j].ty * GV_TILE, vr = x + GV_SCREEN_W, vb = y + GV_SCREEN_H;
+              const int ax = dx > 0 ? x0 >= vr : dx < 0 ? x0 + GV_TILE <= x : 0, ay = dy > 0 ? y0 >= vb : dy < 0 ? y0 + GV_TILE <= y : 0;
+              const int ox = x0 < vr && x0 + GV_TILE > x, oy = y0 < vb && y0 + GV_TILE > y;
+              const int cls = ((ax && oy) || (ay && ox)) ? 0 : (ax || ay) ? 1 : 2;
+              const int32_t gx = x0 >= vr ? x0 - vr : x0 + GV_TILE <= x ? x - (x0 + GV_TILE) : 0, gy = y0 >= vb ? y0 - vb : y0 + GV_TILE <= y ? y - (y0 + GV_TILE) : 0;
+              const int32_t gap = (ax && oy) ? gx : gy;
+              if (cls < last_cls) okr = 0;
+              if (cls == 0) { strips++; if (cls == last_cls && gap < last_gap) okr = 0; last_gap = gap; } else last_gap = -1;
+              if (cls == 1) { if (cls == last_cls && gx + gy < last_corner) okr = 0; last_corner = gx + gy; } else last_corner = -1;
+              last_cls = cls;
+          }
+      }
+      chk("tiles: the ring comes in three tiers (the strip ahead in the screen's band, the corners ahead, the rest) and the strip nearest first (600 viewports, any direction)", okr && strips > 500u); }
+
     x = 1600; y = 1200; gv_window_for(&s, x, y, &wx, &wy);
     { gv_tile_t a[GV_MAX_TILES]; uint32_t n = gv_tiles_needed(&s, x, y, wx, wy, 1, 0, a), first = 0; while (first < n && !a[first].ring) first++;
       chk("tiles: moving right, the first ring tile is on the right of the screen", first < n && a[first].tx * GV_TILE >= x + GV_SCREEN_W - GV_TILE); }

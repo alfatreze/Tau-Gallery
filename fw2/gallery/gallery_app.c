@@ -356,7 +356,7 @@ static int tile_pass(int dx, int dy, uint32_t held, int moving, int tick)
     if (t_job) tile_copy_step();
     else {
         const int32_t cx = (t_recentre && z_shown) ? z_sx : px, cy = (t_recentre && z_shown) ? z_sy : py;                      /* while composing, the tiles of the view on screen first: they let the flip happen at once */
-        gv_tile_t need[GV_MAX_TILES]; const uint32_t n = gv_tiles_needed(&z_stop, cx, cy, t_wx[tw], t_wy[tw], dx, dy, need);
+        gv_tile_t need[GV_MAX_TILES]; const uint32_t n = gv_tiles_needed(&z_stop, cx, cy, t_wx[tw], t_wy[tw], lx, ly, need);
         for (uint32_t i = 0; i < n; i++) {
             int col, row; if (!gv_win_tile(t_wx[tw], t_wy[tw], need[i].tx, need[i].ty, &col, &row) || t_res[tw][row * GV_WIN_TX + col]) continue;
             if (tile_job_start(tw, col, row, need[i].tx, need[i].ty)) return 1;

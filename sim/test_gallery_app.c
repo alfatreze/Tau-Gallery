@@ -17,9 +17,11 @@ static uint16_t mem[HW_N];                         /* SDRAM, halfwords: the plan
 static uint16_t fb[512u * 1024u];                  /* the UI framebuffer, halfwords, stride 512 */
 static uint32_t clk, irq_pend, vid_req, vid_bus, vid_sw, vid_due, vbase, vstride, land_base, land_words, land_ovf, input_n;
 static int force_ovf, force_short, viewer_dead, fail_pic_reads, pass_pic_reads;
+static int zb_ok_phase = 0;
 static uint32_t rc_lead_n, rc_lead_bad; static uint32_t rc_prev, rc_starts, rc_retarget; static int32_t rc_bx, rc_by;
 static void ldr_lead_probe(void);
 static void ldr_probe(uint32_t dst);
+static void tile_read_probe(uint32_t off);
 static void zb_probe(void);
 static void pass_hook(void);                                                                  /* called once per pass of the firmware's loop (a read of the keys): defined after the firmware, which it looks into */
 static uint32_t blits_since_input, blit_max_pass; static uint32_t blit_cmds, blit_visible, blit_bad, blit_from_win, tile_reads, win_flips, last_win = 9u; static uint32_t clk_step = 50u, zoom_max_len, zoom_max_rs, reads_since_input; static int zoom_phase;      /* the zoom scenario: a frame a clock read, the longest card command and the most commands between two key polls */ static uint32_t text_mode;
@@ -82,7 +84,7 @@ static uint32_t ldr_chunks, ldr_max, ldr_prev, ldr_first_ok = 1u, ldr_mono = 1u,
 int slot_read_blocking(uint32_t slot, uint32_t off, uint32_t dst, uint32_t len, uint32_t to)
 {
     (void)to; reads++;
-    if (zoom_phase && slot == 2u && len == 49152u) tile_reads++;
+    if (zoom_phase && slot == 2u && len == 49152u) { tile_reads++; tile_read_probe(off); }
     if (!zoom_phase && slot == 2u && len == 131072u && dst >= 0x40000000u) ldr_probe(dst);
     if (zoom_phase && slot == 2u) { if (len > zoom_max_len) zoom_max_len = len; if (++reads_since_input > zoom_max_rs) zoom_max_rs = reads_since_input; }
     if (slot == 2u) { if (pass_pic_reads > 0) pass_pic_reads--; else if (fail_pic_reads > 0) { fail_pic_reads--; return 0; } }      /* a transient card error: after `pass` good reads the next `fail` reads of a picture fail */
@@ -130,6 +132,7 @@ static jmp_buf done;
 static int fails;
 static void chk(int n, int ok) { printf("GALLERY APP %s %d\n", ok ? "ok" : "FAIL", n); if (!ok) fails++; }
 static void checkpoint(int n);
+static uint32_t last_key;
 static uint32_t next_input(void)
 {
     for (;;) {
@@ -137,6 +140,7 @@ static uint32_t next_input(void)
         const uint32_t t = script[input_n++];
         if (t == END) longjmp(done, 1);
         if (t & 0x10000u) { checkpoint((int)(t & 0xFFFFu)); continue; }
+        last_key = t;
         return t;
     }
 }
@@ -189,11 +193,13 @@ static void ldr_probe(uint32_t dst)      /* a chunk of a picture landing: what t
     if (fill > 0u && (fb[180u * 512u + 120u] == th_role[TR_ACCENT] || fb[177u * 512u + 120u] == th_role[TR_ACCENT] || fb[179u * 512u + 120u] != th_role[TR_ACCENT])) ldr_mono = 0u;      /* the bar is two rows: 178 and 179, no more */
     ldr_prev = fill; if (fill > ldr_max) ldr_max = fill; ldr_chunks++;
 }
-static void ldr_lead_probe(void)      /* a re-centre has just started: the window being composed leaves the pan's slack ahead, GV_BEHIND to GV_BEHIND + 127 behind the view (a little more for the pixels moved since), unless it sits at an edge of the level */
+static void ldr_lead_probe(void)      /* a window has just been placed (a re-centre started, or the one being composed was aimed again): on an axis where the wanted corner is more than the follow slack (96) from the shown view, the window is placed for a pan one way or the other (the keys' way, else toward the wanted corner): GV_BEHIND to GV_BEHIND + 127 behind the view the firmware aimed at on one side, plus a little for the pixels the shown view has moved since. Not judged at an edge of the level */
 {
     const uint32_t b = 1u - t_front; const int32_t sw = (int32_t)zl.ntx * 128, sh = (int32_t)zl.nty * 128;
-    if (z_wx != z_sx) { const int32_t ahead = z_wx > z_sx ? 1 : -1, behind = ahead > 0 ? z_sx - t_wx[b] : (t_wx[b] + GV_WIN_W) - (z_sx + 800); if (t_wx[b] > 0 && t_wx[b] + GV_WIN_W < sw) { rc_lead_n++; if (behind < GV_BEHIND - 112 || behind > GV_BEHIND + 127 + 16) rc_lead_bad++; } }
-    if (z_wy != z_sy) { const int32_t ahead = z_wy > z_sy ? 1 : -1, behind = ahead > 0 ? z_sy - t_wy[b] : (t_wy[b] + GV_WIN_H) - (z_sy + 720); if (t_wy[b] > 0 && t_wy[b] + GV_WIN_H < sh) { rc_lead_n++; if (behind < GV_BEHIND - 112 || behind > GV_BEHIND + 127 + 16) rc_lead_bad++; } }
+    int32_t px = z_sx + (z_wx - z_sx < -96 ? -96 : z_wx - z_sx > 96 ? 96 : z_wx - z_sx), py = z_sy + (z_wy - z_sy < -96 ? -96 : z_wy - z_sy > 96 ? 96 : z_wy - z_sy);
+    gv_clamp(&z_stop, &px, &py);
+    if (z_wx - z_sx > 96 || z_sx - z_wx > 96) { const int32_t b1 = px - t_wx[b], b2 = (t_wx[b] + GV_WIN_W) - (px + 800); const int ok1 = b1 >= GV_BEHIND - 16 && b1 <= GV_BEHIND + 127 + 16, ok2 = b2 >= GV_BEHIND - 16 && b2 <= GV_BEHIND + 127 + 16; if (t_wx[b] > 0 && t_wx[b] + GV_WIN_W < sw) { rc_lead_n++; if (!ok1 && !ok2) rc_lead_bad++; } }
+    if (z_wy - z_sy > 96 || z_sy - z_wy > 96) { const int32_t b1 = py - t_wy[b], b2 = (t_wy[b] + GV_WIN_H) - (py + 720); const int ok1 = b1 >= GV_BEHIND - 16 && b1 <= GV_BEHIND + 127 + 16, ok2 = b2 >= GV_BEHIND - 16 && b2 <= GV_BEHIND + 127 + 16; if (t_wy[b] > 0 && t_wy[b] + GV_WIN_H < sh) { rc_lead_n++; if (!ok1 && !ok2) rc_lead_bad++; } }
 }
 static uint32_t zbp_n, zbp_max, zbp_prev, zbp_bad, zbp_rmax;
 static void zb_probe(void)      /* the zoom's loader bar in the fit plane (rows 358 and 359, pixels 320 to 479): a prefix of ACC pixels on a dark track, a prefix that only grows, the same in both rows */
@@ -214,6 +220,23 @@ static void zb_probe(void)      /* the zoom's loader bar in the fit plane (rows 
     }
     if (fill[0] != fill[1] || fill[0] < zbp_prev) zbp_bad++;
     zbp_prev = fill[0]; if (fill[0] > zbp_max) zbp_max = fill[0]; if (zl.layout == 0u && fill[0] > zbp_rmax) zbp_rmax = fill[0]; zbp_n++;
+}
+static uint32_t to_n, to_bad;
+static void tile_read_probe(uint32_t off)      /* a tile of a tile level is about to be read: it is the first tile of the list for the pan's direction (the keys' way, else toward the wanted corner) that is not whole yet, in the window being filled. The direction is worked out here from the keys the script gave, not from the firmware's variables */
+{
+    if (zl.layout != 1u || zk < 0 || !zb_ok_phase) return;
+    const int dxk = (last_key & KEY_RIGHT) ? 1 : (last_key & KEY_LEFT) ? -1 : 0, dyk = (last_key & KEY_DOWN) ? 1 : (last_key & KEY_UP) ? -1 : 0;
+    int32_t px = z_wx, py = z_wy;
+    if (z_shown) { px = z_sx + (z_wx - z_sx < -96 ? -96 : z_wx - z_sx > 96 ? 96 : z_wx - z_sx); py = z_sy + (z_wy - z_sy < -96 ? -96 : z_wy - z_sy > 96 ? 96 : z_wy - z_sy); gv_clamp(&z_stop, &px, &py); }
+    const int lxk = dxk ? dxk : (z_wx > px ? 1 : z_wx < px ? -1 : 0), lyk = dyk ? dyk : (z_wy > py ? 1 : z_wy < py ? -1 : 0);
+    const uint32_t tw = t_recentre ? 1u - t_front : t_front, idx = (off - zl.off) / 49152u; const int32_t tx = (int32_t)(idx % zl.ntx), ty = (int32_t)(idx / zl.ntx);
+    const int32_t cx = (t_recentre && z_shown) ? z_sx : px, cy = (t_recentre && z_shown) ? z_sy : py;
+    gv_tile_t need[GV_MAX_TILES]; const uint32_t n = gv_tiles_needed(&z_stop, cx, cy, t_wx[tw], t_wy[tw], lxk, lyk, need);
+    for (uint32_t i = 0; i < n; i++) {
+        int col, row; if (!gv_win_tile(t_wx[tw], t_wy[tw], need[i].tx, need[i].ty, &col, &row) || t_res[tw][row * GV_WIN_TX + col]) continue;
+        to_n++; if (need[i].tx != tx || need[i].ty != ty) to_bad++; return;
+    }
+    to_bad++;
 }
 static void pass_hook(void)                                                                  /* a tile zoom: how far the shown view moved since the last pass, and for how many passes in a row it stood still while the wanted corner was elsewhere */
 {
@@ -366,8 +389,8 @@ static void checkpoint(int n)
     case 117: { int32_t x = -1, y = -1; const uint32_t f0 = win_flips; (void)f0; chk(110, tile_view_matches("z05.tgy", &x, &y) && x == 1500 && t_recentre == 0u); chk(111, win_flips >= 1u && blit_from_win > 0u && blit_visible == 0u && blit_bad == 0u); chk(122, ph_jump_max <= 16u && ph_stall_max <= 300u); chk(123, info.flip_ms != GI_NONE && info.flip_ms > 0u && info.flip_ms < 20000u); } break;      /* a long held pan: the shown view never moves more than 16 pixels in a pass and never stands still for more than a window's worth of tile copies (about 250 passes, bound 300) while the keys are ahead of it: it follows at the card's pace instead of freezing until the whole way is loaded */   /* panned to the right edge across window re-centres: exact, flipped windows, tiles reused by Talos copies, nothing written into the screen */
     case 129: chk(124, ph_axx > 0u && ph_axy > 0u && ph_jump_max <= 16u); break;      /* a held diagonal pan: when the diagonal step's tiles are not whole the view still steps along one axis, each way */
     case 130: chk(126, rc_retarget >= 1u && ph_jump_max <= 16u); chk(127, rc_lead_bad == 0u); break;      /* right to a window edge, then down while the new window is composing: it is aimed again at where the view is now */
-    case 131: rc_lead_n = rc_lead_bad = 0u; zbp_n = zbp_max = zbp_prev = zbp_bad = 0u; break;
-    case 132: chk(135, plane_is_f("z06.tgy")); chk(128, rc_lead_n >= 2u && rc_lead_bad == 0u && blit_visible == 0u); break;      /* z06: the windows composed for a pan lie where the pan needs them */
+    case 131: zb_ok_phase = 1; to_n = to_bad = 0u; rc_lead_n = rc_lead_bad = 0u; zbp_n = zbp_max = zbp_prev = zbp_bad = 0u; break;
+    case 132: chk(136, to_n > 100u && to_bad == 0u); chk(135, plane_is_f("z06.tgy")); chk(128, rc_lead_n >= 2u && rc_lead_bad == 0u && blit_visible == 0u); break;      /* z06: the windows composed for a pan lie where the pan needs them */
     case 133: chk(134, plane_is_f("z06.tgy")); chk(129, zk == -1 && vbase == GAL_PLANE_BASE && plane_is_f("z06.tgy") && zbp_n >= 1u && zbp_bad == 0u && zbp_max >= 1u); break;      /* the zoom's loader bar was on the fit plane while the first view loaded, and the plane is the picture again */
     case 136: chk(130, zk == -1 && vbase == GAL_PLANE_BASE && plane_is_f("z06.tgy")); break;
     case 134: chk(131, sel == 5u && zk == -1); break;
@@ -396,7 +419,7 @@ int main(int argc, char **argv)
         HOLD(KEY_RIGHT, 20); HOLD(0, 3); S4[k++] = CP(84); HOLD(KEY_RIGHT, 100); HOLD(0, 3); S4[k++] = CP(85);
         HOLD(KEY_DOWN, 20); S4[k++] = CP(108); HOLD(KEY_DOWN, 40); HOLD(0, 3); S4[k++] = CP(86); HOLD(KEY_DOWN, 150); HOLD(0, 250); S4[k++] = CP(87);
         HOLD(KEY_UP, 40); HOLD(0, 2); S4[k++] = CP(90); HOLD(KEY_UP, 400); HOLD(0, 300); S4[k++] = CP(91);
-        HOLD(KEY_LEFT, 150); HOLD(0, 5); S4[k++] = CP(92);
+        HOLD(KEY_LEFT, 200); HOLD(0, 5); S4[k++] = CP(92);
         S4[k++] = CP(109); HOLD(KEY_RIGHT, 20); S4[k++] = CP(110); S4[k++] = CP(111);
         S4[k++] = KEY_A; S4[k++] = 0; S4[k++] = CP(93);
         S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 130); S4[k++] = KEY_B; S4[k++] = 0; S4[k++] = CP(94); S4[k++] = KEY_B; S4[k++] = 0; S4[k++] = CP(95);
@@ -420,7 +443,9 @@ int main(int argc, char **argv)
         S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 3); S4[k++] = CP(123); S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 450); S4[k++] = CP(124);
         S4[k++] = KEY_A; S4[k++] = 0; S4[k++] = CP(101); S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 12); S4[k++] = CP(102);
         S4[k++] = KEY_RIGHT; S4[k++] = 0; S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 3); S4[k++] = CP(131); S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 450);
-        HOLD(KEY_RIGHT, 150); HOLD(0, 800); HOLD(KEY_DOWN, 150); HOLD(0, 800); HOLD(KEY_LEFT, 200); HOLD(0, 800); HOLD(KEY_RIGHT, 70); HOLD(0, 900); HOLD(KEY_DOWN, 70); HOLD(0, 900); S4[k++] = CP(132);
+        HOLD(KEY_RIGHT, 150); HOLD(0, 800); HOLD(KEY_DOWN, 150); HOLD(0, 800); HOLD(KEY_LEFT, 200); HOLD(0, 800); HOLD(KEY_RIGHT, 70); HOLD(0, 900); HOLD(KEY_DOWN, 70); HOLD(0, 900);
+        HOLD(KEY_LEFT, 200); HOLD(KEY_UP, 200); HOLD(KEY_LEFT, 200); HOLD(0, 1200); HOLD(KEY_RIGHT, 200); HOLD(KEY_DOWN, 200); HOLD(KEY_RIGHT, 200); HOLD(0, 1200); HOLD(KEY_UP, 150); HOLD(KEY_LEFT, 150); HOLD(KEY_UP, 150); HOLD(0, 1200);
+        S4[k++] = CP(132);
         S4[k++] = KEY_B; S4[k++] = 0; HOLD(0, 5); S4[k++] = CP(133);
         S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 2); S4[k++] = KEY_B; S4[k++] = 0; HOLD(0, 3); S4[k++] = CP(136);      /* the zoom is left while its first view is loading: the loader bar is taken out of the fit plane */
         S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 2); S4[k++] = KEY_SELECT | KEY_LEFT; S4[k++] = 0; HOLD(0, 3); S4[k++] = CP(134); S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 700); S4[k++] = KEY_B; S4[k++] = 0; HOLD(0, 5); S4[k++] = CP(135);      /* another picture is opened while the zoom loads: its plane is its own, and the next zoom starts a fresh bar */      /* z06 3,600 x 2,400: windows that the level's edges do not clamp */

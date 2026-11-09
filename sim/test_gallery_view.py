@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Host test of fw2/gallery/gallery_view.h (sim/test_gallery_view.c): the viewport rules of M2 (ladder, clamp and 4-pixel alignment, zoom mapping, pan speed, the resident window, the tiles a viewport needs, the tile
-queue, the 48 KB command limit). The unmodified build must pass; the nineteen built-in mutants (-DBUG=1..19) and the source mutants must each fail."""
+queue, the 48 KB command limit). The unmodified build must pass; the twenty-one built-in mutants (-DBUG=1..21) and the source mutants must each fail."""
 import os, subprocess, sys, tempfile
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
@@ -22,13 +22,16 @@ if __name__ == "__main__":
     if rc: sys.exit(1)
     if "--mutants" in sys.argv:
         bad = 0
-        for n in range(1, 20):
+        for n in range(1, 22):
             w = build([f"-DBUG={n}"]); rc, _ = run(w) if w else (1, ""); print("killed  " if rc else "SURVIVED", f"BUG={n}"); bad += rc == 0
         src = (ROOT / "fw2/gallery/gallery_view.h").read_text()
         for a, b in (("if (v < 0) v = 0;\n    if (align) v = gv_floor4(v);", "if (v < 0) v = 0;"),
                      ("if (align) hi = (hi + 3) & ~3;", "if (align) hi = hi & ~3;"),
                      ("return -(o & ~1);", "return -o;"),
-                     ("return held_frames < 8u ? 4 : held_frames < 24u ? 8 : 16;", "return held_frames < 8u ? 4 : held_frames < 24u ? 16 : 16;"),
+                     ("return held_frames < 8u ? 4 : 8;", "return held_frames < 8u ? 4 : 16;"),
+                     ("return held_frames < 8u ? 4 : 8;", "return held_frames < 8u ? 8 : 8;"),
+                     ("if ((aheadx && overy) || (aheady && overx)) k = 0x10000000 + ((aheadx && overy) ? gapx : gapy);", "if ((aheadx && overy) || (aheady && overx)) k = 0x10000000 + ((aheadx && overy) ? gapy : gapx);"),
+                     ("else if (aheadx || aheady) k = 0x20000000 + gapx + gapy;", "else if (aheadx || aheady) k = 0x20000000 - gapx - gapy;"),
                      ("if (wx > 0 && vx - wx < GV_MARGIN) return 0;", ""),
                      ("if (wy + GV_WIN_H < sh && (wy + GV_WIN_H) - (vy + GV_SCREEN_H) < GV_MARGIN) return 0;", ""),
                      ("static inline uint32_t gv_toggle(const gv_ladder_t *l, uint32_t cur) { return cur == 0u ? l->n - 1u : 0u; }", "static inline uint32_t gv_toggle(const gv_ladder_t *l, uint32_t cur) { return cur == 0u ? 1u : 0u; }"),
