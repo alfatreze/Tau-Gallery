@@ -22,6 +22,7 @@ def make_folder(src, n):
         name = f"IMG_{i:04d}"
         if i % 40 == 0 and i: name = f"IMG_{i:04d}_中文"                    # not Latin-1: the display name gets '?'
         im.save(src / f"{name}.jpg", quality=80); good.append(name)
+    for nm in ("caf\u00e9", "\u4e2d\u6587", "\u65e5\u672c"): Image.new("RGB", (40, 30), (3, 3, 3)).save(src / (nm + ".jpg")); good.append(nm)                  # accented (Latin-1) and two different names with no ASCII at all
     rot = Image.new("RGB", (600, 400), (10, 200, 30)); ex = Image.Exif(); ex[0x0112] = 6; rot.save(src / "ROTATED.jpg", exif=ex.tobytes()); good.append("ROTATED")      # EXIF orientation 6: shown as 400 x 600
     Image.new("RGB", (50, 50), (1, 2, 3)).save(src / "PIC.jpg"); Image.new("RGB", (60, 40), (4, 5, 6)).save(src / "pic.png"); good += ["PIC", "pic"]                  # the same name but for the case and the extension (a case-insensitive disk would merge two files that differ only by case): both must survive
     (src / "notes.txt").write_text("not a picture"); (src / "empty.jpg").write_bytes(b""); (src / "._IMG_0000.jpg").write_bytes(b"\0\5\x16\7" + bytes(60))
@@ -61,11 +62,16 @@ def verify(conv, n, report=True):
     idx = (out / "tau-library.tdb").read_bytes(); ents = tgy.parse_index(idx)
     check(len(ents) == len(good), "the index lists every good picture once", (len(ents), len(good)))
     paths = [e["path"] for e in ents]
+    check(all(b < 0x80 for p in paths for b in p.encode("utf-8")), "every card path is ASCII only (KB-041: the Pocket cannot open a path with a byte of 0x80 or more)", [p for p in paths if any(b >= 0x80 for b in p.encode())][:2])
+    byname = {e["name"]: e["path"] for e in ents}
+    check(byname.get("caf\u00e9", "").startswith("Assets/tau_gallery/common/photos/caf_") and "caf\u00e9" in byname, "an accented name keeps its Latin-1 display name and gets an ASCII file name", byname.get("caf\u00e9"))
+    zz = [e["path"] for e in ents if e["name"] in ("??", "\u4e2d\u6587", "\u65e5\u672c")]
+    check(len(zz) == 2 and len(set(zz)) == 2, "two different names with no ASCII at all get two different file names", zz)
     check(len(set(paths)) == len(paths) and all(len(p.encode()) < tgy.PATH_BYTES for p in paths), "paths are unique and each fits the 95-byte limit")
     check(len({p.lower() for p in paths}) == len(paths), "no two paths are the same once case is ignored (FAT has no case)")
     src_order = sorted(p.stem for p in (src).iterdir() if p.suffix.lower() in tgy_convert_ext() and p.is_file() and p.stat().st_size and not p.name.startswith("._") and p.stem != LONG)
-    ent_stems = [Path(e["path"]).stem for e in ents]
-    check(ent_stems[0] == src_order[0] and ent_stems[-1].startswith(src_order[-1][:4]), "the index follows the file name order (first and last)", (ent_stems[0], src_order[0], ent_stems[-1], src_order[-1]))
+    disp = lambda s: "".join(c if ord(c) < 256 else "?" for c in s)[:39]
+    check(ents[0]["name"] == disp(src_order[0]) and ents[-1]["name"] == disp(src_order[-1]) and [e["name"] for e in ents[:5]] == [disp(s) for s in src_order[:5]], "the index follows the file name order (by display name: first five and the last)", ([e["name"] for e in ents[:2]], ents[-1]["name"], src_order[-1]))
     bad = 0
     for i, e in enumerate(ents):
         d = (out / (Path(e["path"]).name)).read_bytes()
@@ -76,7 +82,7 @@ def verify(conv, n, report=True):
     cn = sorted(e["name"] for e in ents if e["name"].lower().startswith("pic"))
     check(cn == ["PIC", "pic_2"], "PIC.jpg and pic.png both survive, the second as pic_2", cn)
     zh = [e for e in ents if "?" in e["name"]]
-    check(all(e["name"].startswith("IMG_") for e in zh) and (n < 41 or len(zh) >= 1), "a name that is not Latin-1 shows '?' and is not cut at the wrong place", [e["name"] for e in zh][:2])
+    check(all(e["name"].startswith("IMG_") or set(e["name"]) == {"?"} for e in zh) and (n < 41 or len(zh) >= 1), "a name that is not Latin-1 shows '?' and is not cut at the wrong place", [e["name"] for e in zh][:2])
     size_ok = len(idx) >= 32 + len(ents) * 160 + len(ents) * tgy.THUMB_BYTES
     check(size_ok, f"the index holds all entries and thumbnails ({len(idx) / 1e6:.2f} MB)")
     r2, ev2, _, _ = run_conv(conv, src, out2 := w / "out2")
@@ -91,14 +97,16 @@ def tgy_convert_ext():
 
 def mutants():
     src = (ROOT / "tools/gallery/tgy_convert.py").read_text()
-    muts = [("if len(path.encode(\"utf-8\")) >= tgy.PATH_BYTES:", "if False:"),
-            ("while stem.lower() in used: n += 1; stem = f\"{p.stem}_{n}\"", "pass"),
+    muts = [("base = ascii_stem(p.stem); stem = base;", "base = p.stem; stem = base;"),
+            ("if s != stem: s += \"_%04x\" % (zlib.crc32(stem.encode(\"utf-8\")) & 0xFFFF)", "pass"),
+            ("if len(path.encode(\"utf-8\")) >= tgy.PATH_BYTES:", "if False:"),
+            ("while stem.lower() in used: n += 1; stem = f\"{base}_{n}\"", "pass"),
             ("used.add(stem.lower())", "pass"),
             ("print(json.dumps({\"event\": \"skip\", \"file\": p.name, \"error\": str(e)})); skipped += 1; continue", "raise"),
             ("files = sorted(p for p in a.src.iterdir()", "files = sorted((p for p in a.src.iterdir()"),
             ("os.replace(tmp, path)", "tmp.rename(path.with_name(path.name + '.part'))"),
             ("\"skipped\": skipped", "\"skipped\": 0"),
-            ("name=name_of(stem)", "name=name_of(stem)[:5]")]
+            ("name=name_of(shown)", "name=name_of(shown)[:5]")]
     bad = 0
     for i, (a, b) in enumerate(muts):
         if a not in src: print("MISSING mutant text", i, a[:50]); bad += 1; continue
