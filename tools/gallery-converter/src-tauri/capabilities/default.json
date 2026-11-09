@@ -1,0 +1,1 @@
+{"identifier":"default","description":"Main window: file and folder pickers, drag and drop","windows":["main"],"permissions":["core:default","dialog:allow-open"]}

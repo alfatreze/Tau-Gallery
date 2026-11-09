@@ -963,4 +963,6 @@ test-tgy-levels:
 test-tgy:
 	$(PYTHON) sim/test_tgy.py
 	$(PYTHON) sim/test_tgy.py --mutants
+	$(PYTHON) sim/test_tgy_convert_modes.py
+	$(PYTHON) sim/test_tgy_convert_modes.py --mutants
 

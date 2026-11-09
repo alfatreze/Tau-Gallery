@@ -79,7 +79,7 @@ class T(unittest.TestCase):
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf): tgy_convert.main([str(src), str(out), "--card-dir", "Assets/tau_gallery/common/photos/"])
             ev = [json.loads(l) for l in buf.getvalue().splitlines()]
-            self.assertEqual([e["event"] for e in ev].count("converted"), 3); self.assertEqual([e["event"] for e in ev].count("skip"), 1); self.assertEqual(ev[-1], {"event": "done", "pictures": 3, "skipped": 1})
+            self.assertEqual([e["event"] for e in ev].count("converted"), 3); self.assertEqual([e["event"] for e in ev].count("skip"), 1); self.assertEqual((ev[-1]["event"], ev[-1]["pictures"], ev[-1]["skipped"], ev[-1]["converted"]), ("done", 3, 1, 3))
             idx = tgy.parse_index((out / "tau-library.tdb").read_bytes()); self.assertEqual(len(idx), 3)
             names = sorted(p.name for p in out.iterdir()); self.assertFalse(any(n.endswith(".part") for n in names)); self.assertEqual(len([n for n in names if n.endswith(".tgy")]), 3)
             self.assertEqual(len({e["path"].lower() for e in idx}), 3)                                 # b.png and b.jpg (the same name) did not collide
