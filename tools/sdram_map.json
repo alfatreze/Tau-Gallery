@@ -89,8 +89,8 @@
       ],
       "const": [
         "fw2/diagnostics/check_page.c",
-        "icon_check y0",
-        600
+        "retired: the Check page was removed",
+        null
       ]
     },
     {

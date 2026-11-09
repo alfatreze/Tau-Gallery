@@ -22,7 +22,7 @@ M1.6 is built and host-tested, not packaged, not run on a Pocket: Start on the g
 
 **Next, by value:**
 1. DEV 007 (package, dry run, install on TauV, owner's yes) and a Pocket run: the `1/5` counter, open time per picture, the settings round trip (Info shows LOADED and SAVED), Light mode legibility, the grid on OCEAN. The default accent is now white (was orange).
-2. Remove the dead music UI: `ui/` appearance, browser_view, configure_view, controls_view, fullscreen_view, help_view, settings_view, views, theme_file, `settings/`, `cores/settings_core.h`, five `diagnostics/` pages and the tests of them (`test_p2_*` for those); first check what live code imports (see the rules below).
+2. ~~Remove the dead music UI~~ **done** (B-1016, 80 files; helios, view_core, gfx fonts and icons, marquee and the clock cores kept as generic).
 3. `test_check_qsf_files`: list `tau_scanout_v`, `tau_vidmode` (and `tau_land`) in `ap_core.qsf`; needs a VM fit and the owner's yes.
 4. Small: one retry on a failed picture read if it recurs without a screenshot; the last picture is recorded when its landing succeeds even if the viewer did not start; no font selector (3 bits reserved in word 1).
 5. Open owner items: dock run, 565 dither, 150 MHz SDRAM, real folders of hundreds of photos, ICC, then M2 (pan and zoom).

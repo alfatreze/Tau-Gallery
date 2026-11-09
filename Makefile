@@ -77,9 +77,7 @@ test-host:
 	$(PYTHON) sim/test_track_details.py
 	$(PYTHON) sim/test_sdram_map_fw2.py
 	$(PYTHON) sim/test_p2_blit_check.py
-	$(PYTHON) sim/test_report_capacity.py
 	$(PYTHON) sim/test_p2_marquee.py
-	$(PYTHON) sim/test_p2_about.py
 	$(PYTHON) sim/test_lab_drop.py
 	$(PYTHON) sim/test_cold_fw.py
 	$(PYTHON) sim/test_suite.py
@@ -96,24 +94,14 @@ test-host:
 	$(PYTHON) sim/test_tpg.py
 	$(PYTHON) sim/test_tpg_fw.py
 	$(PYTHON) sim/test_pcm_burst.py
-	$(PYTHON) sim/test_p2_counters.py
 	$(PYTHON) sim/test_p2_monoclock.py
 	$(PYTHON) sim/test_p2_rtc.py
-	$(PYTHON) sim/test_p2_report.py
 	$(PYTHON) sim/test_p2_stream.py
 	$(PYTHON) sim/test_p2_stream_idle.py
 	$(PYTHON) sim/test_p2_gfx_touch.py
-	$(PYTHON) sim/test_p2_lastplayed.py
-	$(PYTHON) sim/test_p2_settings_service.py
-	$(PYTHON) sim/test_p2_settings_boot.py
-	$(PYTHON) sim/test_persist_layout.py
 	$(PYTHON) sim/test_tau_packs_info.py
 	$(PYTHON) sim/test_p2_meter_budget.py
-	$(PYTHON) sim/test_p2_configure.py
-	$(PYTHON) sim/test_p2_help.py
-	$(PYTHON) sim/test_p2_colour.py
 	$(PYTHON) sim/test_font_atlases.py
-	$(PYTHON) sim/test_font_fit.py
 	$(PYTHON) sim/test_icons.py
 	$(PYTHON) sim/test_p2_font.py
 	$(PYTHON) sim/test_p2_icon.py
@@ -126,17 +114,12 @@ test-host:
 	$(PYTHON) sim/test_release_factory_presets.py
 	$(PYTHON) sim/test_toolchain.py
 	$(PYTHON) sim/test_p2_name_paths.py
-	$(PYTHON) sim/test_name_matrix.py
 	$(PYTHON) sim/test_cp437_names.py
 	$(PYTHON) sim/test_name_sidecar.py
-	$(PYTHON) sim/test_p2_names_reader.py
 	$(PYTHON) sim/test_p2_sdram_soak.py
 	$(PYTHON) sim/test_p2_helios.py
 	$(PYTHON) sim/test_p2_views.py
-	$(PYTHON) sim/test_p2_menupages.py
 	$(PYTHON) sim/test_p2_theme.py
-	$(PYTHON) sim/test_p2_browse.py
-	$(PYTHON) sim/test_p2_settings.py
 	$(PYTHON) sim/test_check_deps.py
 	$(PYTHON) tools/check_deps.py
 	$(PYTHON) sim/test_key_repeat.py

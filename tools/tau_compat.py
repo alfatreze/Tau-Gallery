@@ -17,8 +17,8 @@ SHA256SUMS.txt; the zips themselves are unchanged. Every field is derived, never
   assets_sections           every as_find(..., "XXXX") the firmware does
   assets_read_limit_bytes   AS_MAX_FILE in fw/assets_core.h
   report_tags_max           the last SR_T_* tag in fw/suite_core.h
-  persist_layout            GS_LAYOUT_VERSION in fw2/gallery/gallery_settings.h (the gallery table; the player's SF_LAYOUT_VERSION in fw2/cores/settings_core.h before M1.6): the version of the persisted-settings layout this release writes
-                            (a file of the legacy layout has none, see tools/persist_layout.py); Omega must read it to decode or edit settings
+  persist_layout            GS_LAYOUT_VERSION in fw2/gallery/gallery_settings.h (the gallery table; the player's SF_LAYOUT_VERSION was in fw2/cores/settings_core.h, removed with the music UI): the version of the persisted-settings layout this release writes
+                            (a file of the player's legacy layout has none); Omega must read it to decode or edit settings
   packs_abi                 MTR_PACK_ABI_MAJOR in fw2/cores/meter_pack_core.h: the ABI of the meter pack bundle (tau-packs.bin); a tool that
                             only leaves the file alone does not need it
   persist_ids_changed       persisted interact.json ids whose name/type/default/range changed or that were removed, against
