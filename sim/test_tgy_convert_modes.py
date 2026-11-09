@@ -76,10 +76,21 @@ def checks(conv):
     # a custom card dir with the card layout
     rc, ev = run(conv, src, d / "o5", "--card-layout", "--card-dir", "Assets/x/y/pics")
     check((d / "o5/Assets/x/y/pics/a.tgy").is_file() and (d / "o5/Assets/x/y/tau-library.tdb").is_file(), "--card-dir moves the pictures and the index with it")
+    # events arrive while the run is still going (the app's progress bar), not all at the end
+    big = d / "big"; big.mkdir()
+    import random
+    rnd = random.Random(3)
+    for i in range(3): Image.frombytes("RGB", (4000, 3000), rnd.randbytes(4000 * 3000 * 3)).save(big / f"n{i}.png")
+    pr = subprocess.Popen([sys.executable, str(conv), str(big), str(d / "o6"), "--levels"], stdout=subprocess.PIPE, text=True)
+    import time
+    first = pr.stdout.readline(); t_first = time.time()
+    pr.stdout.read(); pr.wait(); t_end = time.time(); still = t_end - t_first >= 0.3                  # the rest of the run took a while after the first event arrived
+    check(json.loads(first).get("event") == "plan" and still, "the first event is on the pipe while the converter is still working (output is line-buffered)")
     shutil.rmtree(d)
     return bad
 
-MUT = [("if (photos / Path(e[\"path\"]).name).is_file(): old[", "if True: old["),
+MUT = [("sys.stdout.reconfigure(line_buffering=True)", "pass"),
+       ("if (photos / Path(e[\"path\"]).name).is_file(): old[", "if True: old["),
        ("old.pop((stem + \".tgy\").lower(), None)", "pass"),
        ("key=lambda x: x[0])", "key=lambda x: x[1][\"width\"])"),
        ("index_dir = a.out / str(Path(card_dir).parent) if a.card_layout else a.out", "index_dir = a.out"),

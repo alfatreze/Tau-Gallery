@@ -8,12 +8,15 @@ export const inTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in
 export type Ev = { event: string; [k: string]: unknown };
 export type PyStatus = { ok: boolean; path: string; version: string; pillow: string; message: string };
 export type Scan = { kind: 'file' | 'folder' | 'unsupported' | 'missing'; name: string; pictures: number };
+export type Volume = { name: string; path: string; free_gb: number };
 export type Summary = { pictures: number; converted: number; skipped: number; out: string };
 
 const handlers: ((e: Ev) => void)[] = [];
 let mockRun = 0;
 async function mockInvoke(cmd: string, args: Record<string, unknown> = {}): Promise<unknown> {
   if (cmd === 'python_status') return { ok: true, path: '/usr/bin/python3', version: '3.11.5', pillow: '12.3.0', message: '' } satisfies PyStatus;
+  if (cmd === 'list_volumes') return [{ name: 'TauV', path: '/Volumes/TauV', free_gb: 59.8 }, { name: 'BACKUP', path: '/Volumes/BACKUP', free_gb: 410.2 }] satisfies Volume[];
+  if (cmd === 'normalized') { const p = String(args.path).replace(/\/+$/, ''); const i = p.indexOf('/Assets/tau_gallery'); return i >= 0 ? p.slice(0, i) : p; }
   if (cmd === 'default_output') return '/Users/you/Documents/Tau Gallery';
   if (cmd === 'scan') { const p = String(args.path); return { kind: p.endsWith('/') || !p.includes('.') ? 'folder' : 'file', name: p.split('/').filter(Boolean).pop() ?? p, pictures: p.includes('.') ? 1 : 12 } satisfies Scan; }
   if (cmd === 'convert') {

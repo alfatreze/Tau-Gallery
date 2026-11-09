@@ -75,6 +75,53 @@ fn default_output() -> String {
     Path::new(&home).join("Documents").join("Tau Gallery").to_string_lossy().into_owned()
 }
 
+/// The converter writes the card's own tree (Assets/tau_gallery/common/...) under the output folder, so an output that is already inside that tree
+/// (the user picked .../Assets/tau_gallery/common) means its root: the tree is never written inside itself.
+fn normalize_output(path: &str) -> String {
+    let p = path.trim_end_matches(['/', '\\']);
+    let parts: Vec<&str> = p.split(['/', '\\']).collect();
+    for i in 0..parts.len().saturating_sub(1) {
+        if parts[i] == "Assets" && parts[i + 1] == "tau_gallery" {
+            let root = parts[..i].join("/");
+            return if root.is_empty() { "/".to_string() } else { root };
+        }
+    }
+    p.to_string()
+}
+
+#[derive(Serialize, Debug)]
+struct Volume { name: String, path: String, free_gb: f64 }
+
+/// The disks mounted under /Volumes (or /media, /run/media) other than the system disk, with their free space.
+fn volumes_in(roots: &[&str]) -> Vec<Volume> {
+    let mut out = Vec::new();
+    for root in roots {
+        let Ok(rd) = std::fs::read_dir(root) else { continue };
+        let mut names: Vec<PathBuf> = rd.filter_map(|e| e.ok()).map(|e| e.path()).collect();
+        names.sort();
+        for p in names {
+            if !p.is_dir() { continue }
+            if std::fs::canonicalize(&p).map(|c| c == Path::new("/")).unwrap_or(false) { continue }          // the system disk is listed as a link to /
+            let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            if name.starts_with('.') { continue }
+            out.push(Volume { name, free_gb: free_gb(&p), path: p.to_string_lossy().into_owned() });
+        }
+    }
+    out
+}
+fn free_gb(p: &Path) -> f64 {
+    let Ok(o) = Command::new("df").args(["-k"]).arg(p).output() else { return -1.0 };
+    String::from_utf8_lossy(&o.stdout).lines().nth(1).and_then(|l| l.split_whitespace().nth(3)).and_then(|s| s.parse::<f64>().ok()).map(|k| (k / 1048576.0 * 10.0).round() / 10.0).unwrap_or(-1.0)
+}
+#[tauri::command]
+fn list_volumes() -> Vec<Volume> {
+    let user = std::env::var("USER").unwrap_or_default();
+    let media = format!("/media/{user}"); let run_media = format!("/run/media/{user}");
+    volumes_in(&["/Volumes", media.as_str(), run_media.as_str()])
+}
+#[tauri::command]
+fn normalized(path: String) -> String { normalize_output(&path) }
+
 fn converter_script(app: &AppHandle) -> Result<PathBuf, String> {
     let mut tries: Vec<PathBuf> = Vec::new();
     if let Ok(dir) = app.path().resource_dir() { tries.push(dir.join("resources").join("tgy_convert.py")); tries.push(dir.join("tgy_convert.py")); }
@@ -123,7 +170,7 @@ async fn convert(app: AppHandle, input: String, output: String, levels: bool, up
     let py = python_status(python);
     if !py.ok { return Err(py.message); }
     let script = converter_script(&app)?;
-    let mut args: Vec<String> = vec![script.to_string_lossy().into_owned(), input, output, "--card-layout".into()];
+    let mut args: Vec<String> = vec!["-u".into(), script.to_string_lossy().into_owned(), input, normalize_output(&output), "--card-layout".into()];
     if levels { args.push("--levels".into()); }
     if upscale { args.push("--upscale".into()); }
     if merge { args.push("--merge".into()); }
@@ -152,7 +199,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(Job::default())
-        .invoke_handler(tauri::generate_handler![python_status, scan, default_output, convert, cancel, reveal])
+        .invoke_handler(tauri::generate_handler![python_status, scan, default_output, list_volumes, normalized, convert, cancel, reveal])
         .run(tauri::generate_context!())
         .expect("error while running Tau Gallery Converter");
 }
@@ -230,5 +277,23 @@ mod tests {
         assert!(kill_job(&job));
         assert_eq!(t.join().unwrap().unwrap_err(), "Stopped.");
         assert!(!kill_job(&job), "nothing left to stop");
+    }
+
+    #[test]
+    fn an_output_inside_the_cards_tree_means_the_cards_root() {
+        assert_eq!(normalize_output("/Volumes/TauV/Assets/tau_gallery/common"), "/Volumes/TauV");
+        assert_eq!(normalize_output("/Volumes/TauV/Assets/tau_gallery/common/"), "/Volumes/TauV");
+        assert_eq!(normalize_output("/Volumes/TauV/Assets/tau_gallery/common/photos"), "/Volumes/TauV");
+        assert_eq!(normalize_output("/Volumes/TauV/Assets"), "/Volumes/TauV/Assets", "an Assets folder alone is left as it is");
+        assert_eq!(normalize_output("/Volumes/TauV/"), "/Volumes/TauV");
+        assert_eq!(normalize_output("/Users/me/Documents/Tau Gallery"), "/Users/me/Documents/Tau Gallery");
+        assert_eq!(normalize_output("/Assets/tau_gallery"), "/");
+    }
+
+    #[test]
+    fn volumes_lists_folders_but_not_hidden_ones_or_files_and_reads_free_space() {
+        let d = tmp("vols"); std::fs::create_dir(d.join("CARD")).unwrap(); std::fs::create_dir(d.join(".hidden")).unwrap(); std::fs::write(d.join("file.txt"), "x").unwrap();
+        let v = volumes_in(&[d.to_str().unwrap(), "/no/such/root"]);
+        assert_eq!(v.len(), 1); assert_eq!(v[0].name, "CARD"); assert!(v[0].free_gb > 0.0, "free space {}", v[0].free_gb);
     }
 }

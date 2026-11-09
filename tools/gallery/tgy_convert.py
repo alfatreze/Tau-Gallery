@@ -41,6 +41,7 @@ def main(argv=None):
     ap.add_argument("--card-layout", action="store_true", help="write OUT as the card's tree: the pictures in OUT/<card-dir>, the index in the folder above it")
     ap.add_argument("--merge", action="store_true", help="keep the pictures the output library already has; a picture with the same name is replaced")
     a = ap.parse_args(argv)
+    if hasattr(sys.stdout, "reconfigure"): sys.stdout.reconfigure(line_buffering=True)        # an event reaches a reader the moment it is printed, not when the run ends (the app shows progress from them)
     from PIL import Image
     if a.src.is_file():
         if a.src.suffix.lower() not in EXT: print(json.dumps({"event": "error", "error": "not a picture this tool reads: " + a.src.name})); return 2

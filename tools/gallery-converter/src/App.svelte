@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { invoke, onConvertEvent, onDrop, pick, pickOutput, type Ev, type PyStatus, type Scan, type Summary } from './tauri';
+  import { invoke, onConvertEvent, onDrop, pick, pickOutput, type Ev, type PyStatus, type Scan, type Summary, type Volume } from './tauri';
 
   const KEY = 'tau-gallery-converter';
   const saved = (() => { try { return JSON.parse(localStorage.getItem(KEY) ?? '{}'); } catch { return {}; } })();
@@ -14,6 +14,8 @@
   let pythonPath = $state<string>(saved.python ?? '');
   let py = $state<PyStatus | null>(null);
   let over = $state(false);
+  let volumes = $state<Volume[]>([]);
+  let usedRoot = $state('');          // set when a folder inside the card's tree was changed to the card's root
 
   let busy = $state(false);
   let total = $state(0);
@@ -33,17 +35,31 @@
     source = path; summary = null; error = '';
     scanInfo = await invoke<Scan>('scan', { path });
   }
+  async function setOutput(path: string) {
+    const root = await invoke<string>('normalized', { path });
+    usedRoot = root !== path.replace(/\/+$/, '') ? root : '';
+    output = root;
+  }
+  async function refreshVolumes() {
+    volumes = await invoke<Volume[]>('list_volumes');
+    const here = volumes.find((v) => output === v.path);
+    if (!here && output.startsWith('/Volumes/') && !volumes.some((v) => output.startsWith(v.path))) output = '';      // the card that was chosen is gone
+    if (!output && volumes.length === 1) await setOutput(volumes[0].path);                                              // one card in: it is the one
+  }
   async function checkPython() { py = await invoke<PyStatus>('python_status', { user: pythonPath || null }); }
 
   onMount(() => {
     void (async () => {
+      await refreshVolumes();
       if (!output) output = await invoke<string>('default_output');
       await checkPython();
     })();
     let offDrop = () => {}; let offEv = () => {};
     void onDrop((paths) => { if (!busy && paths.length) void setSource(paths[0]); }, (on) => (over = on && !busy)).then((f) => (offDrop = f));
     void onConvertEvent(onEvent).then((f) => (offEv = f));
-    return () => { offDrop(); offEv(); };
+    const onFocus = () => { if (!busy) void refreshVolumes(); };
+    window.addEventListener('focus', onFocus);
+    return () => { offDrop(); offEv(); window.removeEventListener('focus', onFocus); };
   });
 
   function mb(n: unknown) { return (Number(n) / 1048576).toFixed(1) + ' MB'; }
@@ -92,12 +108,19 @@
   </section>
 
   <section aria-label="Output">
-    <h2>2 · Output folder</h2>
+    <h2>2 · Where to put it</h2>
     <div class="pick">
-      <input type="text" bind:value={output} placeholder="Where to put the result" aria-label="Output folder" disabled={busy} />
-      <button type="button" disabled={busy} onclick={async () => { const r = await pickOutput(); if (r) output = r; }}>Choose…</button>
+      <select aria-label="Card or disk" disabled={busy} value={volumes.find((v) => v.path === output)?.path ?? ''} onchange={(e) => { const v = (e.currentTarget as HTMLSelectElement).value; if (v) void setOutput(v); }}>
+        <option value="">{volumes.length ? 'Choose the card…' : 'No card found'}</option>
+        {#each volumes as v}<option value={v.path}>{v.name}{v.free_gb >= 0 ? ` · ${v.free_gb} GB free` : ''}</option>{/each}
+      </select>
+      <button type="button" disabled={busy} title="Look for the card again" aria-label="Look for the card again" onclick={refreshVolumes}>↻</button>
     </div>
-    <p class="note">The folder gets the card's own tree: <b>Assets/tau_gallery/common/</b> with the pictures and <b>tau-library.tdb</b>. Copy the <b>Assets</b> folder to the root of the card.</p>
+    <div class="pick" style="margin-top:8px">
+      <input type="text" value={output} onchange={(e) => void setOutput((e.currentTarget as HTMLInputElement).value)} placeholder="or any folder" aria-label="Output folder" disabled={busy} />
+      <button type="button" disabled={busy} onclick={async () => { const r = await pickOutput(); if (r) await setOutput(r); }}>Folder…</button>
+    </div>
+    {#if output}<p class="note">The pictures go to <b>{output}/Assets/tau_gallery/common/</b>{usedRoot ? ' (the folder you chose was inside that tree, so its root is used)' : ''}. For a card that is all there is to do: eject it and put it in the Pocket. For another folder, copy its <b>Assets</b> folder to the root of the card.</p>{/if}
     <label class="opt"><input type="checkbox" bind:checked={merge} disabled={busy} /><span>Add to the library already in this folder<small>Keeps the pictures converted before; a picture with the same name is replaced. Turn off to start a new library.</small></span></label>
     <label class="opt"><input type="checkbox" bind:checked={levels} disabled={busy} /><span>Zoom levels (pan and zoom)<small>Large pictures keep their detail for zooming. About 45 MB more on the card for each large picture; small ones add nothing.</small></span></label>
     <label class="opt"><input type="checkbox" bind:checked={upscale} disabled={busy} /><span>Enlarge small pictures to fill the screen<small>Off: pictures smaller than the screen show at their own size.</small></span></label>
