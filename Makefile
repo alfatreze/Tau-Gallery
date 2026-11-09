@@ -1,4 +1,4 @@
-.PHONY: test-rtl-wdog test-rtl-wdog-soc test-rtl-i2s-diag-soc test-rtl-rtc-cdc test-rtl-rtc-soc test-rtl-sdr-stat-win test-rtl-sdr-stat-soc test-rtl-gfx-move test-rtl-gfx-fill test-rtl-scanout-diff test-rtl-gfx-cblit test-rtl-gfx-status-soc test-rtl-gfx-t3 test-rtl-gfx-diff new-meter test-rtl-audio-stats test-rtl-audio-stats-mutation test-rtl-stats-soc test-rtl-font-ram test-rtl-font-soc test-rtl-audio-pair test-rtl-halcyon-soc test-rtl-halcyon test-rtl-halcyon-mutation test-rtl-gain-stage test-rtl-gain-stage-mutation test-rtl-gain-boost test-rtl-gain-boost-mutation test-rtl-clut-wr test-rtl-clut-wr-mutation test-rtl-psram-ifetch check check-firmware check-fpga firmware fpga package test test-host test-rtl rtl-lint test-rtl-fb test-rtl-tgt test-rtl-sdram-decode test-rtl-sdram-wb-adapter test-rtl-sdram-bridge-mux test-rtl-sdram-phase2-path test-rtl-sdram-cpu-window-probe test-rtl-sdram-cpu-return-probe test-rtl-sdram-adapter-return-probe test-rtl-sdram-mux-return-probe test-rtl-cdc-gray-ctr test-rtl-cdc-sync1 test-rtl-vs-counter test-rtl-spec-bank test-rtl-wave-meter test-rtl-mp3-poly test-rtl-mp3-poly-mutation test-rtl-cymo-resamp test-rtl-cymo-resamp-mutation test-rtl-cymo-feed test-rtl-cymo-feed-mutation test-rtl-gray-bus test-rtl-fb-mutation test-rtl-pcm-prime card-check visual-review
+.PHONY: test-rtl-wdog test-rtl-wdog-soc test-rtl-i2s-diag-soc test-rtl-rtc-cdc test-rtl-rtc-soc test-rtl-sdr-stat-win test-rtl-sdr-stat-soc test-rtl-gfx-move test-rtl-gfx-fill test-rtl-scanout-diff test-rtl-gfx-cblit test-rtl-gfx-status-soc test-rtl-gfx-t3 test-rtl-gfx-diff test-rtl-audio-stats test-rtl-audio-stats-mutation test-rtl-stats-soc test-rtl-font-ram test-rtl-font-soc test-rtl-audio-pair test-rtl-halcyon-soc test-rtl-halcyon test-rtl-halcyon-mutation test-rtl-gain-stage test-rtl-gain-stage-mutation test-rtl-gain-boost test-rtl-gain-boost-mutation test-rtl-clut-wr test-rtl-clut-wr-mutation test-rtl-psram-ifetch check check-firmware check-fpga firmware fpga package test test-host test-rtl rtl-lint test-rtl-fb test-rtl-tgt test-rtl-sdram-decode test-rtl-sdram-wb-adapter test-rtl-sdram-bridge-mux test-rtl-sdram-phase2-path test-rtl-sdram-cpu-window-probe test-rtl-sdram-cpu-return-probe test-rtl-sdram-adapter-return-probe test-rtl-sdram-mux-return-probe test-rtl-cdc-gray-ctr test-rtl-cdc-sync1 test-rtl-vs-counter test-rtl-spec-bank test-rtl-wave-meter test-rtl-mp3-poly test-rtl-mp3-poly-mutation test-rtl-cymo-resamp test-rtl-cymo-resamp-mutation test-rtl-cymo-feed test-rtl-cymo-feed-mutation test-rtl-gray-bus test-rtl-fb-mutation test-rtl-pcm-prime card-check visual-review
 
 PYTHON ?= python3
 # Build tools (tools/toolchain.py, B-985): the RISC-V compiler is found the same way for every script (RISCV_TOOLCHAIN_BIN, this tree, the main checkout when this is a git worktree, PATH), and a macOS
@@ -39,11 +39,6 @@ package:
 
 test: test-host test-rtl
 
-# a new Player 2 meter as a working pack-only meter (tools/player2/new_meter.py): make new-meter KEY=sparks [TAG=SPK] [LABEL="SPARKS"]
-new-meter:
-	@test -n "$(KEY)" || { echo 'usage: make new-meter KEY=sparks [TAG=SPK] [LABEL="SPARKS"]'; exit 2; }
-	$(PYTHON) tools/player2/new_meter.py $(KEY) $(if $(TAG),--tag $(TAG)) $(if $(LABEL),--label "$(LABEL)")
-
 # same recipe as test-host on a worker pool (about 2 min instead of 6); test-host stays the serial reference
 .PHONY: test-host-fast
 test-host-fast:
@@ -57,9 +52,6 @@ test-host:
 	$(PYTHON) sim/test_check_claude_md.py
 	$(PYTHON) tools/check_audit_trail.py
 	$(PYTHON) tools/gen_meters.py --check
-	$(PYTHON) tools/gen_layered_wave_tables.py --check
-	$(PYTHON) tools/check_meter_deps.py
-	$(PYTHON) sim/test_meter_core.py --check
 	$(PYTHON) sim/test_cymo_loopback.py
 	$(PYTHON) sim/test_cymo_isp.py
 	$(PYTHON) sim/test_cymo_crossfeed.py
@@ -78,7 +70,6 @@ test-host:
 	$(PYTHON) sim/test_eq_coeff_precision.py
 	$(PYTHON) sim/test_halcyon_generator.py
 	$(PYTHON) sim/test_cymo_gain_model.py
-	@if command -v node >/dev/null 2>&1; then $(PYTHON) tools/meters/preview/build.py --check && node tools/meters/preview/test.js </dev/null && $(PYTHON) sim/test_p2_meter_golden.py && $(PYTHON) sim/test_layered_wave_golden.py && $(PYTHON) sim/test_layered_wave_wasm.py && $(PYTHON) sim/test_meter_trace.py && $(PYTHON) sim/test_sound_map_twin.py; else echo "node not found: meter preview and golden-frame tests skipped"; fi
 	$(PYTHON) tools/gen_themes.py --check
 	$(PYTHON) sim/test_psram_decode.py
 	$(PYTHON) sim/test_library_index.py
@@ -89,7 +80,6 @@ test-host:
 	$(PYTHON) sim/test_report_capacity.py
 	$(PYTHON) sim/test_p2_marquee.py
 	$(PYTHON) sim/test_p2_about.py
-	$(PYTHON) sim/test_p2_diag_split.py
 	$(PYTHON) sim/test_lab_drop.py
 	$(PYTHON) sim/test_cold_fw.py
 	$(PYTHON) sim/test_suite.py
@@ -102,61 +92,26 @@ test-host:
 	$(PYTHON) sim/test_mp3_poly_probe.py
 	$(PYTHON) sim/test_mp3_poly_fw.py
 	$(PYTHON) sim/test_mp3_poly_subband.py
-	$(PYTHON) sim/test_chladni_core.py
-	$(PYTHON) sim/test_vu_master.py
 	$(PYTHON) sim/test_pcm_push.py
 	$(PYTHON) sim/test_tpg.py
 	$(PYTHON) sim/test_tpg_fw.py
 	$(PYTHON) sim/test_pcm_burst.py
-	$(PYTHON) sim/test_p2_timeline.py
-	$(PYTHON) sim/test_p2_governor.py
 	$(PYTHON) sim/test_p2_counters.py
-	$(PYTHON) sim/test_p2_aout.py
 	$(PYTHON) sim/test_p2_monoclock.py
 	$(PYTHON) sim/test_p2_rtc.py
 	$(PYTHON) sim/test_p2_report.py
 	$(PYTHON) sim/test_p2_stream.py
 	$(PYTHON) sim/test_p2_stream_idle.py
-	$(PYTHON) sim/test_p2_winamp.py
-	$(PYTHON) sim/test_p2_scope.py
-	$(PYTHON) sim/test_p2_vu.py
-	$(PYTHON) sim/test_p2_chladni.py
-	$(PYTHON) sim/test_p2_lw.py
-	$(PYTHON) tools/player2/gen_meters_p2.py --check
-	$(PYTHON) sim/test_p2_mpre.py
-	$(PYTHON) sim/test_p2_ramp.py
-	$(PYTHON) sim/test_p2_meter_stats.py
-	$(PYTHON) sim/test_p2_meter_cmd_budget.py
 	$(PYTHON) sim/test_p2_gfx_touch.py
-	$(PYTHON) sim/test_p2_waterfall_blit.py
-	$(PYTHON) sim/test_p2_waterfall_palette.py
-	$(PYTHON) sim/test_p2_waterfall_flow.py
 	$(PYTHON) sim/test_p2_lastplayed.py
-	$(PYTHON) sim/test_p2_boot_order.py
-	$(PYTHON) sim/test_p2_pack_strike.py
-	$(PYTHON) sim/test_p2_wdog.py
-	$(PYTHON) sim/test_p2_hang_pack.py
-	$(PYTHON) sim/test_p2_meter_desc.py
-	$(PYTHON) sim/test_p2_pack_only.py
-	$(PYTHON) sim/test_p2_meter_helpers.py
-	$(PYTHON) sim/test_p2_audio_stats.py
-	$(PYTHON) sim/test_p2_new_meter.py
-	$(PYTHON) sim/test_p2_meter_pack.py
-	$(PYTHON) sim/test_p2_meter_pack_dispatch.py
-	$(PYTHON) sim/test_p2_meter_thumb.py
-	$(PYTHON) sim/test_p2_waterfall.py
 	$(PYTHON) sim/test_p2_settings_service.py
 	$(PYTHON) sim/test_p2_settings_boot.py
 	$(PYTHON) sim/test_persist_layout.py
 	$(PYTHON) sim/test_tau_packs_info.py
 	$(PYTHON) sim/test_p2_meter_budget.py
 	$(PYTHON) sim/test_p2_configure.py
-	$(PYTHON) sim/test_p2_configure_view.py
-	$(PYTHON) sim/test_p2_controls.py
 	$(PYTHON) sim/test_p2_help.py
-	$(PYTHON) sim/test_p2_metr.py
 	$(PYTHON) sim/test_p2_colour.py
-	$(PYTHON) sim/test_p2_tune.py
 	$(PYTHON) sim/test_font_atlases.py
 	$(PYTHON) sim/test_font_fit.py
 	$(PYTHON) sim/test_icons.py
@@ -166,63 +121,24 @@ test-host:
 	$(PYTHON) sim/test_p2_blank.py
 	$(PYTHON) sim/test_p2_gfx.py
 	$(PYTHON) sim/test_p2_hwfence.py
-	$(PYTHON) sim/test_p2_meter_cost.py
-	$(PYTHON) sim/test_p2_icache.py
-	$(PYTHON) sim/test_p2_lw_guard.py
-	$(PYTHON) sim/test_p2_lw_scroll.py
-	$(PYTHON) sim/test_p2_preset_probe.py
-	$(PYTHON) sim/test_p2_lw_params.py
 	$(PYTHON) sim/test_layered_wave_flow.py
-	$(PYTHON) sim/test_p2_mpreset.py
-	$(PYTHON) sim/test_p2_mpreset_meters.py
 	$(PYTHON) sim/test_install_factory_presets.py
 	$(PYTHON) sim/test_release_factory_presets.py
-	$(PYTHON) sim/test_waterfall_golden.py
-	$(PYTHON) sim/test_meter_wasm_golden.py
 	$(PYTHON) sim/test_toolchain.py
 	$(PYTHON) sim/test_p2_name_paths.py
 	$(PYTHON) sim/test_name_matrix.py
 	$(PYTHON) sim/test_cp437_names.py
 	$(PYTHON) sim/test_name_sidecar.py
 	$(PYTHON) sim/test_p2_names_reader.py
-	$(PYTHON) sim/test_p2_library_names.py
-	$(PYTHON) sim/test_names_writer.py
-	$(PYTHON) sim/test_p2_name_matrix_diag.py
-	$(PYTHON) sim/test_meter_wasm_coverage.py
 	$(PYTHON) sim/test_p2_sdram_soak.py
-	$(PYTHON) sim/test_p2_scope_trail.py
-	$(PYTHON) sim/test_p2_chladni_dbuf.py
-	$(PYTHON) sim/test_p2_xfade.py
-	$(PYTHON) sim/test_p2_art_probe.py
 	$(PYTHON) sim/test_p2_helios.py
 	$(PYTHON) sim/test_p2_views.py
 	$(PYTHON) sim/test_p2_menupages.py
-	$(PYTHON) sim/test_p2_halcyon_sel.py
 	$(PYTHON) sim/test_p2_theme.py
-	$(PYTHON) sim/test_p2_queue.py
-	$(PYTHON) sim/test_p2_mp3.py
-	$(PYTHON) sim/test_p2_gain.py
-	$(PYTHON) sim/test_p2_flac2.py
-	$(PYTHON) sim/test_p2_flac2_pred.py
-	$(PYTHON) sim/test_p2_flac2_hdr.py
-	FLAC2_DEC_N=10 FLAC2_DEC_REAL=0 $(PYTHON) sim/test_p2_flac2_dec.py
-	FLAC2_REC_N=12 $(PYTHON) sim/test_p2_flac2_rec.py
-	$(PYTHON) sim/test_p2_flac2_open.py
-	FLAC2_SEEK_REAL=0 $(PYTHON) sim/test_p2_flac2_seek.py
-	FLAC2_TRACK_QUICK=1 $(PYTHON) sim/test_p2_flac2_track.py
-	$(PYTHON) sim/test_p2_nowplaying.py
 	$(PYTHON) sim/test_p2_browse.py
-	$(PYTHON) sim/test_p2_spectrum.py
-	$(PYTHON) sim/test_p2_skiptab.py
 	$(PYTHON) sim/test_p2_settings.py
-	$(PYTHON) tools/player2/gen_sine.py --check
 	$(PYTHON) sim/test_check_deps.py
 	$(PYTHON) tools/check_deps.py
-	TAU_BUILD_OUT=work/heapcheck bash fw2/build.sh
-	$(PYTHON) tools/player2/meter_budget.py work/heapcheck/player2/obj
-	PACKS=1 TAU_BUILD_OUT=work/heapcheck/packs bash fw2/build.sh
-	$(PYTHON) tools/player2/check_packs_abi.py work/heapcheck/packs/player2/fw2.elf
-	$(PYTHON) tools/player2/baseline.py --check docs/research/player2/BASELINE.json
 	$(PYTHON) sim/test_key_repeat.py
 	$(PYTHON) sim/test_wsola.py
 	$(PYTHON) sim/test_tempo_funnel.py

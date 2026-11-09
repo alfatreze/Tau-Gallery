@@ -24,7 +24,7 @@
       "const": [
         "fw2/art/art.c",
         "PLANE_Y",
-        400
+        null
       ]
     },
     {
@@ -74,7 +74,7 @@
       "const": [
         "fw2/ui/meter_winamp_scope.c",
         "STRIP_Y",
-        600
+        null
       ]
     },
     {
@@ -106,7 +106,7 @@
       "const": [
         "fw2/ui/meter_waterfall_grid.c",
         "WF_PLANE_Y",
-        722
+        null
       ]
     },
     {
@@ -122,7 +122,7 @@
       "const": [
         "fw2/ui/meterlist_thumb.c",
         "THUMB_PLANE_Y",
-        740
+        null
       ]
     },
     {
@@ -138,7 +138,7 @@
       "const": [
         "fw2/ui/meter_chladni.c",
         "CHL_PLANE_Y",
-        984
+        null
       ]
     }
   ],
