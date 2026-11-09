@@ -265,4 +265,72 @@ static inline uint32_t gv_plane_base(uint32_t plane_hw, uint32_t stride_hw, int3
     return plane_hw + (uint32_t)y * stride_hw + (uint32_t)(x >> 2) * 6u;
 #endif
 }
+
+/* ---- option B: tile levels copied by Talos into a resident window (docs/M2_DESIGN.md sections 3, 4 and 9) ---- */
+/* A window is 9 x 8 tiles at tile-aligned origin (wx, wy) of the level; its tile (col, row) sits at halfword col * 192 + row * 128 * 1,728 from the window's base. The Talos BLIT moves a tile in row pieces: a row is at
+ * most 127 words, the strides are 10 bits, so a 192-halfword tile row is two pieces of 96 and each command carries its own offsets (docs section 9, M2.0). */
+#define GV_TILE_HW 192u                      /* a tile row in halfwords: 128 pixels * 3 bytes / 2 */
+#define GV_PIECE_HW 96u                      /* halfwords in one BLIT command (at most 127) */
+#define GV_PIECES (GV_TILE * 2u)             /* BLIT commands that copy one tile: 128 rows x 2 pieces */
+#define GV_WIN_HW ((uint32_t)GV_WIN_W * GV_WIN_H * 3u / 2u)      /* halfwords in one window */
+/* Where tile (tx, ty) is in a window with origin (wx, wy): returns 1 and sets col and row, 0 when it lies outside. */
+static inline int gv_win_tile(int32_t wx, int32_t wy, int32_t tx, int32_t ty, int *col, int *row)
+{
+    const int32_t c = tx - wx / GV_TILE, r = ty - wy / GV_TILE;
+    if (c < 0 || r < 0 || c >= GV_WIN_TX || r >= GV_WIN_TY) return 0;
+    *col = (int)c; *row = (int)r; return 1;
+}
+/* The halfword offset of the top-left pixel of the tile at (col, row) of a window. */
+static inline uint32_t gv_tile_hw(int col, int row)
+{
+#if BUG == 15
+    return (uint32_t)row * GV_TILE * GV_WIN_STRIDE_WORDS + (uint32_t)col * 190u;                  /* a tile column is not 192 halfwords */
+#else
+    return (uint32_t)row * GV_TILE * GV_WIN_STRIDE_WORDS + (uint32_t)col * GV_TILE_HW;
+#endif
+}
+/* Command k (0 .. GV_PIECES - 1) of a tile copy: the source and destination offsets of its piece, relative to the tile's top-left in the source (rows src_stride halfwords apart) and in the window. */
+static inline void gv_piece(uint32_t k, uint32_t src_stride, uint32_t *src_off, uint32_t *dst_off)
+{
+    const uint32_t row = k / 2u, piece = k % 2u;
+#if BUG == 16
+    *src_off = row * src_stride + piece * GV_PIECE_HW; *dst_off = row * GV_TILE_HW + piece * GV_PIECE_HW;      /* the destination steps by a tile row, not a window line */
+#else
+    *src_off = row * src_stride + piece * GV_PIECE_HW; *dst_off = row * GV_WIN_STRIDE_WORDS + piece * GV_PIECE_HW;
+#endif
+}
+/* The halfword address of plane line 0 when the viewport (vx, vy) is shown from the window whose base is wbase and origin (wx, wy). vx - wx is a multiple of 4. */
+static inline uint32_t gv_win_base(uint32_t wbase, int32_t vx, int32_t vy, int32_t wx, int32_t wy)
+{
+    return wbase + (uint32_t)(vy - wy) * GV_WIN_STRIDE_WORDS + (uint32_t)((vx - wx) >> 2) * 6u;
+}
+/* 1 when the viewport (vx, vy) may be shown from a window: it lies inside the window and every tile the screen touches is resident (res[row * 9 + col] != 0). A stop smaller than the screen is not shown from a window. */
+static inline int gv_screen_ready(const gv_stop_t *s, int32_t vx, int32_t vy, int32_t wx, int32_t wy, const uint8_t *res)
+{
+    if (vx < wx || vy < wy || vx + GV_SCREEN_W > wx + GV_WIN_W || vy + GV_SCREEN_H > wy + GV_WIN_H) return 0;
+    const int32_t ntx = (int32_t)gv_storage(s->w) / GV_TILE, nty = (int32_t)gv_storage(s->h) / GV_TILE;
+    for (int32_t ty = vy / GV_TILE; ty <= (vy + GV_SCREEN_H - 1) / GV_TILE && ty < nty; ty++)
+        for (int32_t tx = vx / GV_TILE; tx <= (vx + GV_SCREEN_W - 1) / GV_TILE && tx < ntx; tx++) {
+            int col, row; if (!gv_win_tile(wx, wy, tx, ty, &col, &row)) return 0;
+#if BUG == 17
+            (void)res;                                                                           /* residency is not looked at */
+#else
+            if (!res[row * GV_WIN_TX + col]) return 0;
+#endif
+        }
+    return 1;
+}
+
+/* The corner of the screen in a new stop that keeps the screen centre on the same point of the picture. A canvas can carry the picture at an offset (a raster level padded to 800 x 720, the fit canvas): (ofx, ofy)
+ * is where the picture starts in the old canvas, (otx, oty) in the new one (0, 0 for a tile level). s_from and s_to are the stops' scales against the source (Q16). No clamp: the caller clamps in the new stop. */
+static inline void gv_map_corner(uint32_t s_from, int32_t ofx, int32_t ofy, uint32_t s_to, int32_t otx, int32_t oty, int32_t x, int32_t y, int32_t *nx, int32_t *ny)
+{
+#if BUG == 18
+    (void)ofx; (void)ofy; (void)otx; (void)oty; const int64_t cx = (int64_t)x + GV_SCREEN_W / 2, cy = (int64_t)y + GV_SCREEN_H / 2;      /* the padding of the canvases is ignored */
+    *nx = (int32_t)(cx * s_to / s_from - GV_SCREEN_W / 2); *ny = (int32_t)(cy * s_to / s_from - GV_SCREEN_H / 2);
+#else
+    const int64_t cx = (int64_t)x + GV_SCREEN_W / 2 - ofx, cy = (int64_t)y + GV_SCREEN_H / 2 - ofy;
+    *nx = (int32_t)(cx * s_to / s_from + otx - GV_SCREEN_W / 2); *ny = (int32_t)(cy * s_to / s_from + oty - GV_SCREEN_H / 2);
+#endif
+}
 #endif

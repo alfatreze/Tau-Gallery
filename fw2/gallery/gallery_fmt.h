@@ -28,6 +28,7 @@ typedef struct { uint32_t width, height, file_size, canvas_off, canvas_len, thum
 int gt_parse(const uint8_t *b, uint32_t n, gt_info_t *t);
 /* M2 zoom levels (docs/M2_DESIGN.md sections 3 and 6): after the fit canvas, kind-1 levels. Layout 0: full-width row strips on a canvas of at least 800 x 720 (stride = ceil(w * 3 / 4) * 4 bytes, a row's
  * offset is off + row * stride, rect = the picture on the canvas); layout 1: raw 128 x 128 tiles, a tile's offset is off + (row * tiles across + column) * 49,152; no index. */
+#define GT_RASTER_MAX_BYTES 9437184u            /* the most bytes of a raster zoom level: what the zoom plane holds (9 MiB) */
 #define GT_TILE 128u
 #define GT_TILE_BYTES 49152u
 typedef struct { uint32_t layout, w, h, off, len, stride, ntx, nty, scale_q16; uint16_t rx, ry, rw, rh; } gt_zoom_t;      /* layout 0: raster rows (option A); layout 1: tiles (option B). w and h are the stored size */      /* scale_q16: the level against the source (Q16), from the header's width */

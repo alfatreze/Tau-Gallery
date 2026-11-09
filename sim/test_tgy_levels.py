@@ -122,9 +122,17 @@ def verify():
     check(damage(put(2, 24, lv[2]["off"] + 4), 1) == "zoom 1 rc 6", "a tile offset that is not 4 KB aligned is refused")
     check(damage(put(2, 24, len(full) - 4096), 1) == "zoom 1 rc 6" and damage(put(2, 24, len(full) - 4096), 0).startswith("zoom 0 rc 0"), "a level that runs past the end of the file is refused (rc 6), the intact one before it still reads")
     check(damage(put(2, 0, 0), 1) == "zoom 1 rc 6" and damage(put(2, 0, 20000), 1) == "zoom 1 rc 6", "a tile level 0 or over 16,384 pixels wide is refused")
-    fake = tgy.pack_tgy(canvas, rect, thumb, (20000, 128), [(20000, 128, bytes(157 * tgy.TILE_BYTES))]); (d / "wide.tgy").write_bytes(fake)
+    def tiles_file(w, h): p = d / "tl.tgy"; p.write_bytes(tgy.pack_tgy(canvas, rect, thumb, (w, h), [(w, h, bytes(((w + 127) // 128) * ((h + 127) // 128) * tgy.TILE_BYTES))])); return runh(hb, "zoom", p)
+    check(tiles_file(799, 720) == ["zoom 0 rc 6"] and tiles_file(800, 719) == ["zoom 0 rc 6"] and tiles_file(800, 720)[0].startswith("zoom 0 rc 0 layout 1 w 800 h 720"), "a tile level (with its tiles all there) narrower than 800 or shorter than 720 is refused, 800 x 720 is accepted: a window cannot show a short axis")
+    big = tgy.pack_tgy(canvas, rect, thumb, (2049, 1536), [tgy.raster_level(grad(2049, 1536), 2049, 1536)]); (d / "big.tgy").write_bytes(big)
+    check(runh(hb, "zoom", d / "big.tgy") == ["zoom 0 rc 6"], "a raster level of more than 9 MiB (2,049 x 1,536 x 3 padded to 4) is refused: the zoom plane does not hold it")
+    ok9 = tgy.pack_tgy(canvas, rect, thumb, (2048, 1536), [tgy.raster_level(grad(2048, 1536), 2048, 1536)]); (d / "ok9.tgy").write_bytes(ok9)
+    check(runh(hb, "zoom", d / "ok9.tgy")[0].startswith("zoom 0 rc 0 layout 0 w 2048 h 1536"), "a raster level of exactly 9 MiB (2,048 x 1,536) is accepted")
+    kinds = lambda sz: [("tiles" if isinstance(l, tuple) else "raster", (l[0], l[1]) if isinstance(l, tuple) else (l["w"], l["h"])) for l in tgy.zoom_levels(Image.new("RGB", sz))]
+    check(kinds((4000, 600)) == [("raster", (2000, 720)), ("raster", (4000, 720))] and kinds((8000, 600)) == [("raster", (4000, 720))] and kinds((900, 3000)) == [("raster", (800, 1500)), ("raster", (900, 3000))] and kinds((2300, 1500)) == [("tiles", (2300, 1500))] and kinds((3000, 2200)) == [("raster", (1500, 1100)), ("tiles", (3000, 2200))], "which stops are raster, tiles or left out: a panorama is padded rasters, an 8,000-wide one loses the stop the plane cannot hold, a tall one is two rasters, a big one is a raster half and a tile 1:1", (kinds((4000, 600)), kinds((8000, 600))))
+    fake = tgy.pack_tgy(canvas, rect, thumb, (20000, 720), [(20000, 720, bytes(157 * 6 * tgy.TILE_BYTES))]); (d / "wide.tgy").write_bytes(fake)
     check(runh(hb, "zoom", d / "wide.tgy") == ["zoom 0 rc 6"], "a level 20,000 pixels wide whose length is consistent is still refused (the 16,384 limit, rc 6)")
-    fake = tgy.pack_tgy(canvas, rect, thumb, (3000, 2000), [(1003, 128, bytes(8 * tgy.TILE_BYTES))]); (d / "scale.tgy").write_bytes(fake)
+    fake = tgy.pack_tgy(canvas, rect, thumb, (3000, 2000), [(1003, 720, bytes(8 * 6 * tgy.TILE_BYTES))]); (d / "scale.tgy").write_bytes(fake)
     check(" scale 21911 " in runh(hb, "zoom", d / "scale.tgy")[0], "the scale of a level is rounded, not cut: 1003 of 3000 is 21,911, not 21,910 (Q16)", runh(hb, "zoom", d / "scale.tgy")[0])
     check(damage(put(1, 16, 2, "<B")).startswith("zoom 0 rc 0 layout 1 w 2400"), "a level of a layout the reader does not know (2) is skipped, the next zoom level is found")
     check(damage(lambda b: b.__setitem__(0, 0x58)) == "zoom 0 rc 2", "a file that is not a TGY file is refused (rc 2)")
@@ -166,7 +174,7 @@ def mutants():
           ("for ty in range(nty):\n        for tx in range(ntx):", "for tx in range(ntx):\n        for ty in range(nty):"),
           ("entries.append(struct.pack(\"<IIHHHHBBBBIIIIIII\", lw, lh, 0, 0, lw, lh, LAYOUT_TILE128", "entries.append(struct.pack(\"<IIHHHHBBBBIIIIIII\", lw, lh, 0, 0, lw, lh, LAYOUT_RASTER"),
           ("    return to_srgb(ImageOps.exif_transpose(img)).convert(\"RGB\")", "    return ImageOps.exif_transpose(img).convert(\"RGB\")")]
-    cc = [("|| (off & 4095u) ||", "||"), ("if (len != ntx * nty * GT_TILE_BYTES) return GF_RANGE;", ""), ("stride != GT_TILE * 3u", "0"), ("w > 16384u || h > 16384u", "0"),
+    cc = [("|| (off & 4095u) ||", "||"), ("if (len != ntx * nty * GT_TILE_BYTES) return GF_RANGE;", ""), ("stride != GT_TILE * 3u", "0"), ("w < GT_CANVAS_W || h < GT_CANVAS_H || w > 16384u || h > 16384u || stride != GT_TILE * 3u", "w > 16384u || h > 16384u || stride != GT_TILE * 3u"), (" || len > GT_RASTER_MAX_BYTES) return GF_RANGE;", ") return GF_RANGE;"), ("w > 16384u || h > 16384u", "0"),
           ("(uint32_t)(((uint64_t)cw * 65536u + width / 2u) / width)", "(uint32_t)(((uint64_t)cw * 65536u) / width)"), ("off + (ty * z->ntx + tx) * GT_TILE_BYTES", "off + (tx * z->nty + ty) * GT_TILE_BYTES"),
           ("(e[16] != 0u && e[16] != 1u) ||", ""), ("len > fsize - off) return GF_RANGE;\n        z->layout", ") return GF_RANGE;\n        z->layout"),
           ("stride != ((w * 3u + 3u) & ~3u) || len != stride * h", "0"), ("len != stride * h", "0"), ("rw == 0u || rh == 0u || rx + rw > w || ry + rh > h", "0"), ("w < GT_CANVAS_W || h < GT_CANVAS_H || ", ""), ("z->off + row * z->stride", "z->off + row * z->stride + 4")]

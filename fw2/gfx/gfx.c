@@ -191,6 +191,19 @@ static void blit_op(uint32_t sx, uint32_t sy, uint32_t dx, uint32_t dy, uint32_t
     color_shadow = 0xFFFFFFFFu;
     FB_GO(go);
 }
+/* M2 (docs/M2_DESIGN.md section 9, M2.0): one BLIT command of one row piece, outside the UI buffers: copies w halfwords (1 to 127, the engine's row buffer) from src_base + src_off to dst_base + dst_off. The bases are
+ * SDRAM halfword addresses (25 bits), the offsets are below 2^19 (a command's offset field). The sticky bases are read when a command EXECUTES: set_bases fences when the pair changes. Anything out of range is not issued. */
+void gfx_blit_raw(uint32_t src_base, uint32_t dst_base, uint32_t src_off, uint32_t dst_off, uint32_t w)
+{
+    if (!w || w > 127u || src_off >= (1u << 19) || dst_off >= (1u << 19)) return;
+    set_bases(src_base, dst_base);
+    wait_fifo();
+    REG_WR(R_FB_ADDR, dst_off);
+    REG_WR(R_FB_SIZE, (1u << 9) | w);
+    REG_WR(R_FB_COLOR, ((src_off >> 16) & 0x7u) | ((src_off & 0xFFFFu) << 16));      /* the source offset rides in the colour register */
+    color_shadow = 0xFFFFFFFFu;
+    FB_GO(OP_BLIT);
+}
 void gfx_cblit(uint32_t sx, uint32_t sy, uint32_t dx, uint32_t dy, uint32_t w, uint32_t h) { blit_op(sx, sy, dx, dy, w, h, OP_CBLIT, 0u, buf_base(cpu_buf)); }
 void gfx_cblit_abs(uint32_t sx, uint32_t sy, uint32_t dx, uint32_t dy, uint32_t w, uint32_t h) { blit_op(sx, sy, dx, dy, w, h, OP_CBLIT, 0u, 0u); }
 void gfx_blit(uint32_t sx, uint32_t sy, uint32_t dx, uint32_t dy, uint32_t w, uint32_t h) { blit_op(sx, sy, dx, dy, w, h, OP_BLIT, buf_base(cpu_buf), buf_base(cpu_buf)); }

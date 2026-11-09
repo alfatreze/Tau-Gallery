@@ -129,6 +129,31 @@ static void sc_wide(void)
     chk("a 300-pixel palette blit lands whole", ok);
     chk("... and again no command wider than 127", em_overwide == 0);
 }
+static void sc_raw(void)                                                                                    /* gfx_blit_raw: row pieces between SDRAM addresses far from the frame buffers (M2 zoom windows) */
+{
+    em_reset(); caps.dbuf = 0; em_has_dbuf = 0;
+    const uint32_t sb1 = 0x180000u, db1 = 0x120000u, sb2 = 0x1A0000u, db2 = 0x140000u, so = 0x70064u, dof = 0x7FF00u;
+    for (uint32_t i = 0; i < 400u; i += 2u) { gfx_mb_write(sb1 + so + i, ((uint32_t)(0x4001u + i) << 16) | (0x4000u + i)); gfx_mb_write(sb2 + 0x100u + i, ((uint32_t)(0x6001u + i) << 16) | (0x6000u + i)); }
+    gfx_blit_raw(sb1, db1, so, dof, 96u); gfx_fence();
+    int ok = 1; for (uint32_t i = 0; i < 96u; i++) if (em_mem[db1 + dof + i] != (uint16_t)(0x4000u + i)) ok = 0;
+    chk("one row piece copies 96 halfwords between bases above 1 MiB with offsets using bits 16, 17 and 18", ok && em_mem[db1 + dof + 96u] == 0u);
+    gfx_blit_raw(sb1, db1, so + 96u, dof + 96u, 96u); gfx_fence();
+    ok = 1; for (uint32_t i = 0; i < 192u; i++) if (em_mem[db1 + dof + i] != (uint16_t)(0x4000u + i)) ok = 0;
+    chk("a second piece continues the row: 192 halfwords, a tile row, in two commands", ok);
+    em_reset(); caps.dbuf = 0; em_has_dbuf = 0;                                                                /* (the layer's shadow of the bases survives the model's reset: this part uses a pair it has not seen) */
+    const uint32_t sb3 = 0x1C0000u, db3 = 0x160000u;
+    for (uint32_t i = 0; i < 400u; i += 2u) { gfx_mb_write(sb3 + so + i, ((uint32_t)(0x4001u + i) << 16) | (0x4000u + i)); gfx_mb_write(sb2 + 0x100u + i, ((uint32_t)(0x6001u + i) << 16) | (0x6000u + i)); }
+    gfx_blit_raw(sb3, db3, so, 0u, 96u);                                                                        /* queued, not yet executed ... */
+    gfx_blit_raw(sb2, db2, 0x100u, 0u, 96u);                                                                    /* ... when the bases change: the first must run against the old pair */
+    gfx_fence();
+    ok = 1; for (uint32_t i = 0; i < 96u; i++) if (em_mem[db3 + i] != (uint16_t)(0x4000u + i) || em_mem[db2 + i] != (uint16_t)(0x6000u + i)) ok = 0;
+    chk("changing the bases between two copies does not disturb the first (the pair is read when a command executes)", ok);
+    const uint32_t ex = em_executed;
+    gfx_blit_raw(sb1, db1, so, 0u, 128u); gfx_blit_raw(sb1, db1, so, 0u, 0u); gfx_blit_raw(sb1, db1, 0x80000u, 0u, 8u); gfx_blit_raw(sb1, db1, 0u, 0x80000u, 8u); gfx_fence();
+    chk("a width of 0 or over 127 and an offset of 2^19 or more are not issued", em_executed == ex && em_overwide == 0u);
+    gfx_rect(0, 0, 4, 1, 0x1234); gfx_fence(); gfx_blit_raw(sb1, db1, so, 0u, 8u); gfx_rect(10, 0, 4, 1, 0x1234); gfx_fence();
+    chk("a draw after a raw copy still gets its colour (the colour register held the source offset)", em_px(0, 10, 0) == 0x1234 && em_px(0, 13, 0) == 0x1234);
+}
 static void sc_mbbuf(void)
 {
     em_reset(); caps.dbuf = 1; fill_front(0x1111);
@@ -147,6 +172,6 @@ int main(int argc, char **argv)
 {
     const char *s = argc > 1 ? argv[1] : "bracket";
     if (!strcmp(s, "bracket")) sc_bracket(); else if (!strcmp(s, "blitmode")) sc_blitmode(); else if (!strcmp(s, "stash")) sc_stash();
-    else if (!strcmp(s, "compose")) sc_compose(); else if (!strcmp(s, "blend")) sc_blend(); else if (!strcmp(s, "noblend")) sc_noblend(); else if (!strcmp(s, "nodbuf")) sc_nodbuf(); else if (!strcmp(s, "wide")) sc_wide(); else if (!strcmp(s, "bar")) sc_bar(); else if (!strcmp(s, "mbbuf")) sc_mbbuf();
+    else if (!strcmp(s, "compose")) sc_compose(); else if (!strcmp(s, "blend")) sc_blend(); else if (!strcmp(s, "noblend")) sc_noblend(); else if (!strcmp(s, "nodbuf")) sc_nodbuf(); else if (!strcmp(s, "raw")) sc_raw(); else if (!strcmp(s, "wide")) sc_wide(); else if (!strcmp(s, "bar")) sc_bar(); else if (!strcmp(s, "mbbuf")) sc_mbbuf();
     return fails ? 1 : 0;
 }

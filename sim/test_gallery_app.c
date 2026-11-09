@@ -10,11 +10,14 @@
 #include <setjmp.h>
 #define P2_HOST 1
 #define HW_N (16u * 1024u * 1024u)
+#define T_WIN0 0x900000u                                       /* the resident windows and the staging area of the firmware (asserted equal to its own constants below) */
+#define T_WIN1 0xAB0000u
+#define T_STAGE 0xC60000u
 static uint16_t mem[HW_N];                         /* SDRAM, halfwords: the plane at 0x200000 */
 static uint16_t fb[512u * 1024u];                  /* the UI framebuffer, halfwords, stride 512 */
 static uint32_t clk, irq_pend, vid_req, vid_bus, vid_sw, vid_due, vbase, vstride, land_base, land_words, land_ovf, input_n;
 static int force_ovf, force_short, viewer_dead, fail_pic_reads, pass_pic_reads;
-static uint32_t clk_step = 50u, zoom_max_len, zoom_max_rs, reads_since_input; static int zoom_phase;      /* the zoom scenario: a frame a clock read, the longest card command and the most commands between two key polls */ static uint32_t text_mode;
+static uint32_t blits_since_input, blit_max_pass; static uint32_t blit_cmds, blit_visible, blit_bad, blit_from_win, tile_reads, win_flips, last_win = 9u; static uint32_t clk_step = 50u, zoom_max_len, zoom_max_rs, reads_since_input; static int zoom_phase;      /* the zoom scenario: a frame a clock read, the longest card command and the most commands between two key polls */ static uint32_t text_mode;
 static uint32_t setw[16], setidx; static int set_writes;                  /* the settings register file (R_SET_IDX / R_SET_DAT) and how many words were written */
 static void tick(void) { if (!viewer_dead && vid_req != vid_bus && vid_due && clk >= vid_due) { vid_bus = vid_req; vid_sw++; vid_due = 0; } }
 static uint32_t next_input(void);
@@ -32,7 +35,7 @@ static uint32_t rd(uint32_t a)
     case 0x800001F8u: return 0x80000003u;
     case 0x80000070u: return setw[setidx & 15u];
     case 0x80000114u: return 0x80000000u | text_mode;
-    case 0x8000003Cu: reads_since_input = 0; return next_input();
+    case 0x8000003Cu: reads_since_input = 0; blits_since_input = 0; return next_input();
     default: return 0;
     }
 }
@@ -44,7 +47,7 @@ static void wr(uint32_t a, uint32_t v)
     case 0x8000006Cu: setidx = v; break;
     case 0x80000070u: setw[setidx & 15u] = v; set_writes++; break;
     case 0x800001ECu: vid_req = v & 1u; vid_due = clk + 2u * 1111111u; break;
-    case 0x800001F0u: vbase = v & 0x1FFFFFFu; break;
+    case 0x800001F0u: vbase = v & 0x1FFFFFFu; { const uint32_t wn = (vbase >= T_WIN1 && vbase < T_STAGE) ? 1u : (vbase >= T_WIN0 && vbase < T_WIN1) ? 0u : 9u; if (wn != 9u && wn != last_win) { if (last_win != 9u) win_flips++; last_win = wn; } } break;
     case 0x800001F4u: vstride = v & 0xFFFFu; break;
     case 0x80000200u: land_base = v & 0x1FFFFFFu; break;
     case 0x80000204u: if (v & 1u) { land_words = 0; land_ovf = 0; } break;
@@ -72,6 +75,7 @@ uint32_t _tag_start[1024];
 int slot_read_blocking(uint32_t slot, uint32_t off, uint32_t dst, uint32_t len, uint32_t to)
 {
     (void)to; reads++;
+    if (zoom_phase && slot == 2u && len == 49152u) tile_reads++;
     if (zoom_phase && slot == 2u) { if (len > zoom_max_len) zoom_max_len = len; if (++reads_since_input > zoom_max_rs) zoom_max_rs = reads_since_input; }
     if (slot == 2u) { if (pass_pic_reads > 0) pass_pic_reads--; else if (fail_pic_reads > 0) { fail_pic_reads--; return 0; } }      /* a transient card error: after `pass` good reads the next `fail` reads of a picture fail */
     const uint8_t *src = slot == 5u ? idx_data : slot == 2u ? pic_data : 0; const uint32_t n = slot == 5u ? idx_len : pic_len;
@@ -91,6 +95,20 @@ static char texts[64][64]; static int ntext;
 uint32_t gfx_text(uint32_t x, uint32_t y, const char *s, uint16_t fg, uint16_t bg) { (void)x; (void)y; (void)fg; (void)bg; if (ntext == 64) ntext = 0; strncpy(texts[ntext], s, 63); texts[ntext++][63] = 0; return 0; }
 uint32_t gfx_text_width(const char *s) { return 8u * (uint32_t)strlen(s); }
 void irq_enable(uint32_t m) { (void)m; }
+/* the Talos BLIT as the RTL has it (docs/M2_DESIGN.md section 9, sim/tb_talos_tilecopy.v): bases 25 bits, offsets 19 bits, a row at most 127 halfwords; this model also counts copies that read a window and any write into the displayed screen area */
+void gfx_fence(void) { }
+void gfx_blit_raw(uint32_t sb, uint32_t db, uint32_t so, uint32_t dof, uint32_t w)
+{
+    if (!w || w > 127u || so >= (1u << 19) || dof >= (1u << 19) || sb >= (1u << 25) || db >= (1u << 25)) { blit_bad++; return; }
+    const uint32_t s = sb + so, d = db + dof; blit_cmds++; if (++blits_since_input > blit_max_pass) blit_max_pass = blits_since_input;
+    if (s >= T_WIN0 && s < T_STAGE) blit_from_win++;
+    if (vstride == 1728u && vbase >= T_WIN0 && vbase < T_STAGE && d >= vbase) {                  /* the visible rows of the window being displayed: 720 lines of 1,200 halfwords */
+        const uint32_t rel = d - vbase, row = rel / vstride, col = rel % vstride;
+        if ((row < 720u && col < 1200u) || (col + w > vstride && row + 1u < 720u)) blit_visible++;
+    }
+    if (d + w > HW_N || s + w > HW_N) { blit_bad++; return; }
+    for (uint32_t i = 0; i < w; i++) mem[d + i] = mem[s + i];
+}
 void irq_disable(void) { }
 int platform_version_ok(void) { return 1; }
 void platform_halt_pattern(void) { exit(3); }
@@ -99,7 +117,7 @@ void platform_probe(void) { }
 /* ---- the key script ---- */
 #define CP(n) (0x10000u | (n))
 #define END 0x20000u
-static uint32_t script[8192]; static int nscript;
+static uint32_t script[16384]; static int nscript;
 static jmp_buf done;
 static int fails;
 static void chk(int n, int ok) { printf("GALLERY APP %s %d\n", ok ? "ok" : "FAIL", n); if (!ok) fails++; }
@@ -123,6 +141,7 @@ static uint32_t next_input(void)
 #include "../fw2/ui/theme.c"
 #include "../fw2/gallery/gallery_app.c"
 #undef main
+_Static_assert(T_WIN0 == GAL_WIN0 && T_WIN1 == GAL_WIN1 && T_STAGE == GAL_STAGE, "the model's window addresses are the firmware's");
 
 static uint32_t count;
 static const uint8_t *thumb_of(uint32_t i) { uint32_t atlas = (uint32_t)idx_data[20] | (uint32_t)idx_data[21] << 8 | (uint32_t)idx_data[22] << 16; return idx_data + atlas + i * 13824u; }
@@ -167,6 +186,24 @@ static int view_matches(const char *fname, int32_t *ox, int32_t *oy)            
     }
     free(d); return ok;
 }
+static int tile_view_matches(const char *fname, int32_t *ox, int32_t *oy)                       /* the same for a tile level shown from a resident window: the base and stride decode to a window, a corner and 720 lines of 1,200 halfwords */
+{
+    char f[600]; snprintf(f, sizeof f, "%s/%s", dir, fname); uint32_t n; uint8_t *d = slurp(f, &n); if (!d) return 0;
+    gt_zoom_t z; int found = 0; for (uint32_t k = 0; k < 8u && !found; k++) { if (gt_zoom_level(d, n < 4096u ? n : 4096u, k, &z)) break; if (z.layout == 1u) found = 1; }
+    int ok = found && vstride == 1728u && vbase >= T_WIN0 && vbase < T_STAGE;
+    if (ok) {
+        const uint32_t w = vbase >= T_WIN1 ? 1u : 0u, rel = vbase - (w ? T_WIN1 : T_WIN0), row = rel / 1728u, cx = rel % 1728u;
+        const int32_t x = t_wx[w] + (int32_t)(cx / 6u * 4u), y = t_wy[w] + (int32_t)row;
+        if (cx % 6u || x != z_sx || y != z_sy || w != t_shown_win || x + 800 > (int32_t)(z.ntx * 128u) || y + 720 > (int32_t)(z.nty * 128u)) ok = 0;
+        else { *ox = x; *oy = y;
+            for (uint32_t r = 0; r < 720u && ok; r++) for (uint32_t i = 0; i < 1200u; i++) {
+                const uint32_t bc = (uint32_t)x * 3u + 2u * i, tx = bc / 384u, within = bc % 384u, ra = (uint32_t)y + r, ty = ra / 128u;
+                const uint32_t o = z.off + ((ty * z.ntx + tx) * 128u + ra % 128u) * 384u + within;
+                if (mem[vbase + r * 1728u + i] != (uint16_t)(d[o] | d[o + 1u] << 8)) { ok = 0; break; } } }
+    }
+    free(d); return ok;
+}
+static int fit_or_exact_tile(const char *fname) { int32_t x, y; return vbase == GAL_PLANE_BASE || tile_view_matches(fname, &x, &y); }
 static int fit_or_exact(const char *fname) { int32_t x, y; return vbase == GAL_PLANE_BASE || view_matches(fname, &x, &y); }      /* while loading, the fit plane may still be shown; once the zoom plane is shown it must be exact */
 static int big_grid_ok(void)                                                                      /* a large index: the page on screen is the page of the selection, with its thumbnails, its counter and its frame */
 {
@@ -195,7 +232,7 @@ static void checkpoint(int n)
     case 14: chk(22, said("PICTURE DAMAGED IN TRANSFER") && vid_bus == 0u); force_short = 0; viewer_dead = 1; clear_texts(); break;     /* a lost word without an overflow is damage too */
     case 15: chk(23, said("VIEWER DID NOT START")); break;
     case 16: chk(24, said("CONTROLS") && said("HELP") && said("INFO") && said("A OPEN") && !thumbs_on_screen(0, count < 16u ? count : 16u)); clear_texts(); break;           /* Start: the menu replaces the grid */
-    case 17: chk(25, said("OPEN THE PICTURE") && said("1/20") && !said("HELP")); clear_texts(); break;                                                           /* A on Controls: the list, its first row of 20 */
+    case 17: chk(25, said("OPEN THE PICTURE") && said("1/21") && !said("HELP")); clear_texts(); break;                                                           /* A on Controls: the list, its first row of 21 */
     case 18: chk(26, said("CONTROLS") && said("HELP") && !said("OPEN THE PICTURE")); clear_texts(); break;                                                       /* B: back in the menu */
     case 19: chk(27, said("ADD PHOTOS") && said("1/3") && !said("MENU")); clear_texts(); break;                                                                  /* Down, A: Help page 1 of 3 */
     case 20: chk(28, said("WHERE THINGS ARE") && said("2/3") && !said("ADD PHOTOS")); clear_texts(); break;                                                      /* Down turns the page */
@@ -251,7 +288,22 @@ static void checkpoint(int n)
     case 110: { int32_t x = -1, y = -1; chk(104, view_matches("z00.tgy", &x, &y) && x == 0 && y == 0); } break;                                                              /* 20 polls with Right held and no frame elapsed: the view has not moved (a step is a frame, not a pass) */
     case 111: clk_step = 1000000u; break;
     case 112: chk(105, fit_or_exact("z04.tgy")); break;                                                                                                                      /* Down held from the first instant, loading under way: fit plane or an exact zoom view, never unloaded rows */
-    case 103: chk(102, vid_bus == 1u && vbase == GAL_PLANE_BASE && plane_is_f("z05.tgy") && sel == 5u); break;                                                              /* a picture whose only zoom level is tiles: option A does not use it, A changes nothing */
+    case 103: { int32_t x = -1, y = -1; chk(102, sel == 5u && tile_view_matches("z05.tgy", &x, &y) && x == 748 && y == 390); chk(106, blit_visible == 0u && blit_bad == 0u && tile_reads >= 40u && zoom_max_len <= 49152u && zoom_max_rs <= 1u && blit_max_pass > 0u && blit_max_pass <= 64u);      /* and at most 64 Talos commands between two key polls */
+     } break;      /* a picture whose only zoom level is tiles: A enters it; 48 tiles landed, copied by Talos into the window, never into the displayed area, no command over 48 KB */
+    case 122: { int32_t x = -1, y = -1; chk(115, tile_view_matches("z04.tgy", &x, &y) && x == 1200 && y == 840); } break;                                                          /* A from the fit view takes the last stop: the tile 1:1 level, the centre kept (400, 300 of fit is 1,600, 1,200) */
+    case 123: fail_pic_reads = 1; pass_pic_reads = 0; break;                                                                                                                 /* one tile read fails once */
+    case 124: { int32_t x = -1, y = -1; chk(116, tile_view_matches("z05.tgy", &x, &y) && fail_pic_reads == 0); } break;                                                     /* the retry landed the tile: the view still comes up exact */
+    case 125: fail_pic_reads = 2; pass_pic_reads = 0; clear_texts(); break;
+    case 126: chk(117, said("PICTURE READ FAILED") && vid_bus == 0u && fail_pic_reads == 0); break;                                                                          /* a raster chunk that cannot be read: back to the grid with the message */
+    case 127: chk(118, t_recentre == 0u && t_front == 0u && win_flips == 0u && t_wx[0] == 512 && t_wy[0] == 256); break;                                                        /* a pan past the window margin and back: the re-centre that began was cancelled, the window stayed */
+    case 121: zoom_max_len = 0u; zoom_max_rs = 0u; tile_reads = 0u; blit_visible = 0u; blit_bad = 0u; blit_from_win = 0u; win_flips = 0u; blit_max_pass = 0u; break;                                          /* the picture has just been opened (its fit canvas landed in 128 KB commands): count the zoom's own commands from here */
+    case 113: { int32_t x = -1, y = -1; chk(107, tile_view_matches("z04.tgy", &x, &y) && x == 1200 && y == 1320); } break;                                                          /* R1 from the raster half: the tile 1:1 level, the screen centre kept (800, 840 becomes 1,600, 1,680) */
+    case 114: { int32_t x = -1, y = -1; chk(108, view_matches("z04.tgy", &x, &y) && x == 400 && y == 480); } break;                                                                /* L1: back to the raster half, the centre kept */
+    case 115: chk(109, zk == -1 && vbase == GAL_PLANE_BASE && plane_is_f("z04.tgy")); break;                                                                                  /* L1 again: the fit view */
+    case 117: { int32_t x = -1, y = -1; const uint32_t f0 = win_flips; (void)f0; chk(110, tile_view_matches("z05.tgy", &x, &y) && x == 1500 && t_recentre == 0u); chk(111, win_flips >= 1u && blit_from_win > 0u && blit_visible == 0u && blit_bad == 0u); } break;   /* panned to the right edge across window re-centres: exact, flipped windows, tiles reused by Talos copies, nothing written into the screen */
+    case 118: chk(112, fit_or_exact_tile("z05.tgy") && blit_visible == 0u); break;                                                                                           /* while loading under a held pan: the fit plane or an exact view, never an unloaded tile */
+    case 119: { int32_t x = -1, y = -1; chk(113, tile_view_matches("z05.tgy", &x, &y) && y == 780 && blit_visible == 0u); } break;                                          /* down to the bottom edge */
+    case 120: { int32_t x = -1, y = -1; chk(114, tile_view_matches("z05.tgy", &x, &y) && x == 0 && y == 0 && blit_visible == 0u && blit_bad == 0u); } break;                   /* back to the top-left corner */
     case 101: fail_pic_reads = 2; pass_pic_reads = 0; clear_texts(); break;
     case 102: chk(101, said("PICTURE READ FAILED") && vid_bus == 0u && fail_pic_reads == 0); break;                                                                          /* the level cannot be read: back to the grid with the message */
     case 21: snprintf(want, sizeof want, "1/%u", count); chk(29, thumbs_on_screen(0, count < 16u ? count : 16u) && said(want) && said("TAU GALLERY")); break;   /* B, B: the grid again, thumbnails and footer redrawn */
@@ -266,7 +318,7 @@ int main(int argc, char **argv)
     count = (uint32_t)idx_data[8] | (uint32_t)idx_data[9] << 8;
     setw[0] = 1u << 27; setw[1] = 0x40000001u; setw[2] = 0x4000005Eu; setw[5] = 0x40000000u; setw[6] = 0x40000000u;      /* the package's defaults of the inherited variables: layout 1, appearance, word 2 with bit 0 clear (resume on), the player's marks in words 5 and 6 */
     if (argc > 2 && !strcmp(argv[2], "zoom")) {                                                      /* the zoom (option A): pan, clamp, loading behind, the loop rules */
-        static uint32_t S4[8192]; int k = 0;
+        static uint32_t S4[16384]; int k = 0;
 #define HOLD(key, n) do { for (int _i = 0; _i < (n); _i++) S4[k++] = (key); } while (0)
         S4[k++] = CP(80); S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 3); S4[k++] = CP(81); S4[k++] = CP(82);
         S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 130); S4[k++] = CP(83);
@@ -280,10 +332,20 @@ int main(int argc, char **argv)
         S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 3); S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 130); S4[k++] = KEY_SELECT | KEY_RIGHT; S4[k++] = 0; HOLD(0, 3); S4[k++] = CP(96);
         S4[k++] = KEY_RIGHT; S4[k++] = 0; HOLD(0, 3); S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 30); S4[k++] = CP(97);
         S4[k++] = KEY_RIGHT; S4[k++] = 0; HOLD(0, 3); S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 130); S4[k++] = CP(98); HOLD(KEY_RIGHT, 30); HOLD(0, 3); S4[k++] = CP(99);
-        S4[k++] = KEY_A; S4[k++] = 0; S4[k++] = KEY_RIGHT; S4[k++] = 0; HOLD(0, 3); S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 110); S4[k++] = CP(100);
-        S4[k++] = KEY_A; S4[k++] = 0; S4[k++] = KEY_A; S4[k++] = 0; HOLD(KEY_DOWN, 45); for (int i = 0; i < 160; i++) { S4[k++] = 0; if (i % 8 == 7) S4[k++] = CP(112); }
-        S4[k++] = KEY_A; S4[k++] = 0; S4[k++] = KEY_RIGHT; S4[k++] = 0; HOLD(0, 3); S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 30); S4[k++] = CP(103);
-        S4[k++] = KEY_LEFT; S4[k++] = 0; HOLD(0, 3); S4[k++] = CP(101); S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 12); S4[k++] = CP(102); S4[k++] = END;
+        S4[k++] = KEY_A; S4[k++] = 0; S4[k++] = KEY_RIGHT; S4[k++] = 0; HOLD(0, 3); S4[k++] = KEY_R1; S4[k++] = 0; HOLD(0, 110); S4[k++] = CP(100);
+        S4[k++] = KEY_A; S4[k++] = 0; S4[k++] = KEY_R1; S4[k++] = 0; HOLD(KEY_DOWN, 45); for (int i = 0; i < 160; i++) { S4[k++] = 0; if (i % 8 == 7) S4[k++] = CP(112); }
+        S4[k++] = KEY_R1; S4[k++] = 0; HOLD(0, 700); S4[k++] = CP(113);                                              /* the stop above: the tile 1:1 level of z04 */
+        S4[k++] = KEY_L1; S4[k++] = 0; HOLD(0, 120); S4[k++] = CP(114); S4[k++] = KEY_L1; S4[k++] = 0; HOLD(0, 3); S4[k++] = CP(115);
+        S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 600); S4[k++] = CP(122); S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 3);
+        S4[k++] = CP(125); S4[k++] = KEY_R1; S4[k++] = 0; HOLD(0, 12); S4[k++] = CP(126);                          /* the raster half of z04 cannot be read: the grid */
+        S4[k++] = KEY_RIGHT; S4[k++] = 0; S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 3); S4[k++] = CP(121); S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 450); S4[k++] = CP(103);   /* z05: open it from the grid; A takes its only stop, a tile level */
+        HOLD(KEY_RIGHT, 14); HOLD(KEY_LEFT, 20); HOLD(0, 30); S4[k++] = CP(127);
+        HOLD(KEY_RIGHT, 300); HOLD(0, 800); S4[k++] = CP(117);
+        S4[k++] = KEY_A; S4[k++] = 0; S4[k++] = KEY_A; S4[k++] = 0; HOLD(KEY_DOWN, 60); for (int i = 0; i < 40; i++) { HOLD(0, 10); S4[k++] = CP(118); }
+        HOLD(KEY_DOWN, 200); HOLD(0, 900); S4[k++] = CP(119);
+        HOLD(KEY_UP, 400); HOLD(KEY_LEFT, 500); HOLD(0, 1200); S4[k++] = CP(120);
+        S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 3); S4[k++] = CP(123); S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 450); S4[k++] = CP(124);
+        S4[k++] = KEY_A; S4[k++] = 0; S4[k++] = CP(101); S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 12); S4[k++] = CP(102); S4[k++] = END;
         nscript = k; memcpy(script, S4, (size_t)k * sizeof S4[0]);
         if (!setjmp(done)) gallery_app_main();
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;

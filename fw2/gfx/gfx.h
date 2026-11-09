@@ -28,6 +28,7 @@ void gfx_blit(uint32_t sx, uint32_t sy, uint32_t dx, uint32_t dy, uint32_t w, ui
 void gfx_blit_stash(uint32_t sx, uint32_t sy, uint32_t dx, uint32_t dy, uint32_t w, uint32_t h);   /* from the shared stash rows (360 and below) into the buffer being drawn into */
 void gfx_blit_to_stash(uint32_t sx, uint32_t sy, uint32_t dx, uint32_t dy, uint32_t w, uint32_t h);   /* from the buffer being drawn into to the shared stash rows (the mirror of gfx_blit_stash) */
 void gfx_blit_abs(uint32_t sx, uint32_t sy, uint32_t dx, uint32_t dy, uint32_t w, uint32_t h);    /* stash to stash (self-tests): buffer 0 addresses, independent of the drawing target */
+void gfx_blit_raw(uint32_t src_base, uint32_t dst_base, uint32_t src_off, uint32_t dst_off, uint32_t w);   /* one BLIT row piece of w (1..127) halfwords between two SDRAM halfword bases plus offsets below 2^19 (the zoom windows of M2) */
 void gfx_sblit(uint32_t sx, uint32_t sy, uint32_t dx, uint32_t dy, uint32_t w, uint32_t h, uint32_t scale);   /* copy w x h SOURCE pixels (from the stash) scaled by 1, 2 or 3 into the drawing target (the engine clamps the output at 127) */
 /* Helios H2 double buffering: which buffer is drawn into, a full redraw into the idle one flipped in at vblank, and an off-screen compose copied onto the displayed buffer. */
 uint32_t gfx_cur_buf(void);

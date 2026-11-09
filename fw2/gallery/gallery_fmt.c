@@ -74,12 +74,12 @@ int gt_zoom_level(const uint8_t *b, uint32_t n, uint32_t k, gt_zoom_t *z)
         const uint32_t w = rd32(e), h = rd32(e + 4), stride = rd32(e + 20), off = rd32(e + 24), len = rd32(e + 28);
         uint32_t ntx = 0, nty = 0;
         if (e[16] == 1u) {
-            if (w == 0u || h == 0u || w > 16384u || h > 16384u || stride != GT_TILE * 3u) return GF_RANGE;
+            if (w < GT_CANVAS_W || h < GT_CANVAS_H || w > 16384u || h > 16384u || stride != GT_TILE * 3u) return GF_RANGE;      /* a window cannot show an axis shorter than the screen */
             ntx = (w + GT_TILE - 1u) / GT_TILE; nty = (h + GT_TILE - 1u) / GT_TILE;
             if (len != ntx * nty * GT_TILE_BYTES) return GF_RANGE;
         } else {
             const uint32_t rx = rd16(e + 8), ry = rd16(e + 10), rw = rd16(e + 12), rh = rd16(e + 14);
-            if (w < GT_CANVAS_W || h < GT_CANVAS_H || w > 16384u || h > 16384u || stride != ((w * 3u + 3u) & ~3u) || len != stride * h) return GF_RANGE;
+            if (w < GT_CANVAS_W || h < GT_CANVAS_H || w > 16384u || h > 16384u || stride != ((w * 3u + 3u) & ~3u) || len != stride * h || len > GT_RASTER_MAX_BYTES) return GF_RANGE;
             if (rw == 0u || rh == 0u || rx + rw > w || ry + rh > h) return GF_RANGE;
             z->rx = (uint16_t)rx; z->ry = (uint16_t)ry; z->rw = (uint16_t)rw; z->rh = (uint16_t)rh;
         }

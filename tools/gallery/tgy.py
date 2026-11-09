@@ -17,7 +17,7 @@ IDX_MAGIC, IDX_VERSION, IDX_HEADER, IDX_ENTRY = b"TGIX", 0, 32, 160
 LAYOUT_RASTER, MODE_RAW, PIX_RGB888, KIND_FIT = 0, 0, 0, 0
 LAYOUT_TILE128, KIND_ZOOM = 1, 1                       # M2 (docs/M2_DESIGN.md section 6): a zoom level of raw 128 x 128 tiles, row-major, 49,152 bytes each; ids 2 (compressed, band-major) and 3 (macro-tiles) are reserved
 TILE, TILE_BYTES, Q16 = 128, 128 * 128 * 3, 65536
-RASTER_MAX_W = 2048                                      # a zoom stop up to this wide is stored as full-width row strips (option A, docs/M2_DESIGN.md section 3); wider ones as tiles (option B)
+RASTER_MAX_BYTES = 9437184                               # a zoom stop whose padded canvas (at least 800 x 720) is at most 9 MiB is stored as full-width row strips (option A, docs/M2_DESIGN.md section 3: the zoom plane holds 9 MiB); a bigger one as tiles (option B), if both its sides are at least the screen's; else it is left out
 PATH_BYTES, NAME_BYTES = 96, 40
 
 def align(n, a=ALIGN): return (n + a - 1) // a * a
@@ -109,12 +109,14 @@ def raster_level(img, lw, lh):
     return dict(raster=True, w=sw, h=sh, rect=(px, py, lw, lh), stride=stride, data=data)
 
 def zoom_levels(img):
-    """The zoom levels of a prepared image for the ladder stops past fit. A stop up to RASTER_MAX_W wide is a raster level (option A, a dict), a wider one a list entry (width, height, tile bytes) (option B).
-    Each stop is resampled from the full-size picture (never from the fit canvas); the 1:1 stop is the picture itself."""
+    """The zoom levels of a prepared image for the ladder stops past fit. A stop whose padded canvas (at least 800 x 720) fits RASTER_MAX_BYTES is a raster level (option A, a dict); a bigger one is a tile level
+    (option B, a tuple (width, height, tile bytes)) when both its sides are at least the screen's, else it is left out (a window cannot show an axis shorter than the screen). Each stop is resampled from the full-size
+    picture (never from the fit canvas); the 1:1 stop is the picture itself."""
     from PIL import Image
     out = []
     for (lw, lh, sc) in ladder(img.width, img.height)[1:]:
-        if lw <= RASTER_MAX_W: out.append(raster_level(img, lw, lh)); continue
+        if max(lw, CANVAS_W) * max(lh, CANVAS_H) * 3 <= RASTER_MAX_BYTES: out.append(raster_level(img, lw, lh)); continue
+        if lw < CANVAS_W or lh < CANVAS_H: continue
         lv = img if (lw, lh) == img.size else img.resize((lw, lh), Image.LANCZOS)
         data, ntx, nty = tile_data(lv); out.append((lw, lh, data))
     return out

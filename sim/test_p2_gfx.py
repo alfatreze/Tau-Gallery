@@ -10,7 +10,7 @@ def check(name, ok):
     global fails
     print(("ok   " if ok else "FAIL ") + name)
     if not ok: fails += 1
-SCEN = ("bracket", "blitmode", "stash", "compose", "blend", "noblend", "nodbuf", "bar", "mbbuf", "wide")
+SCEN = ("bracket", "blitmode", "stash", "compose", "blend", "noblend", "nodbuf", "bar", "mbbuf", "wide", "raw")
 def build(td, mutant):
     d = Path(td)
     for sub in ("sim", "fw2/gfx", "fw2/platform"): (d / sub).mkdir(parents=True, exist_ok=True)
@@ -27,6 +27,10 @@ def build(td, mutant):
     if mutant == "present": m("buf_base(back), buf_base(front)); }", "buf_base(front), buf_base(back)); }")
     if mutant == "mbbuf": m("a + (cpu_buf && a < GFX_STRIDE * GFX_H ? DBUF_BASE1_W : 0u)", "a")
     if mutant == "wide": m("    if (w > 127u) {", "    if (0) {")
+    if mutant == "rawcolor": m("((src_off >> 16) & 0x7u) | ((src_off & 0xFFFFu) << 16));      /* the source offset rides", "((src_off >> 16) & 0x3u) | ((src_off & 0xFFFFu) << 16));      /* the source offset rides")
+    if mutant == "rawshadow": m("    color_shadow = 0xFFFFFFFFu;\n    FB_GO(OP_BLIT);\n}\n", "    FB_GO(OP_BLIT);\n}\n")
+    if mutant == "rawlimit": m("if (!w || w > 127u || src_off >= (1u << 19)", "if (!w || src_off >= (1u << 19)")
+    if mutant == "rawbases": m("    set_bases(src_base, dst_base);\n    wait_fifo();\n    REG_WR(R_FB_ADDR, dst_off);", "    wait_fifo();\n    REG_WR(R_FB_ADDR, dst_off);")
     if mutant == "barhi": m("(((lit >> 7) & 0x3u) << 15)", "0u")
     if mutant == "barclip": m("    if (lit > 511u) lit = 511u;\n", "")
     if mutant == "probe": m("    return gfx_blend_state == 1u;\n}\n/* Blend the w x h box", "    gfx_blend_state = 1u; return 1;\n}\n/* Blend the w x h box")
@@ -51,7 +55,7 @@ with tempfile.TemporaryDirectory() as td:
             if l.startswith("ok"): print(l)
             elif l: check(l, False)
         if rc: fails += 0
-for mut, scen in (("bases", "blitmode"), ("nofence", "bracket"), ("setfence", "blitmode"), ("nosync", "bracket"), ("composesync", "compose"), ("blendfence", "blend"), ("present", "compose"), ("probe", "noblend"), ("barhi", "bar"), ("mbbuf", "mbbuf"), ("wide", "wide")):
+for mut, scen in (("bases", "blitmode"), ("nofence", "bracket"), ("setfence", "blitmode"), ("nosync", "bracket"), ("composesync", "compose"), ("blendfence", "blend"), ("present", "compose"), ("probe", "noblend"), ("barhi", "bar"), ("mbbuf", "mbbuf"), ("wide", "wide"), ("rawcolor", "raw"), ("rawshadow", "raw"), ("rawlimit", "raw"), ("rawbases", "raw")):
     with tempfile.TemporaryDirectory() as td:
         out, rc = run(build(td, mut), scen); check(f"mutant {mut} is caught", rc != 0)
 print("PASSED" if not fails else f"FAILED ({fails})")

@@ -196,6 +196,47 @@ int main(void)
       for (int i = 0; i < 3000; i++) { const uint32_t sw = 800u + rnd() % 1249u, stride_b = (sw * 3u + 3u) & ~3u, plane = 0x400000u; const int32_t x = (int32_t)(rnd() % ((sw - 800u) / 4u + 1u)) * 4, y = (int32_t)(rnd() % 700u);
           const uint32_t base = gv_plane_base(plane, stride_b / 2u, x, y); if (base != plane + ((uint32_t)y * stride_b + (uint32_t)x * 3u) / 2u) okb = 0; }
       chk("plane base: the halfword address of pixel (x, y) for x a multiple of 4, against the byte formula (3,000 cases)", okb); }
+    /* ---- option B: the resident window and the row pieces of a tile copy ---- */
+    { int okw = 1; int col, row;
+      for (int ty = 0; ty < 30; ty++) for (int tx = 0; tx < 40; tx++) { const int in = gv_win_tile(256, 384, tx, ty, &col, &row); const int want = tx >= 2 && tx < 2 + GV_WIN_TX && ty >= 3 && ty < 3 + GV_WIN_TY; if (in != want || (in && (col != tx - 2 || row != ty - 3))) okw = 0; }
+      chk("window tile: a tile inside the window gets its column and row, any other is outside (window origin 256, 384)", okw); }
+    chk("tile offsets: (0,0) is 0, a column is 192 halfwords, a row is 128 window lines of 1,728", gv_tile_hw(0, 0) == 0u && gv_tile_hw(1, 0) == 192u && gv_tile_hw(0, 1) == 128u * 1728u && gv_tile_hw(8, 7) == 7u * 128u * 1728u + 8u * 192u);
+    chk("the last tile of the window ends inside it (1,769,472 halfwords)", gv_tile_hw(8, 7) + 127u * 1728u + 192u == GV_WIN_HW);
+    { int okp = 1; static uint8_t hit[128][192]; memset(hit, 0, sizeof hit); uint32_t so, doff;
+      for (uint32_t k = 0; k < GV_PIECES; k++) {
+          gv_piece(k, 192u, &so, &doff);
+          const uint32_t row = doff / 1728u, c0 = doff % 1728u;
+          if (so != (k / 2u) * 192u + (k % 2u) * 96u || row != k / 2u || c0 != (k % 2u) * 96u || GV_PIECE_HW > 127u || so >= 524288u || doff >= 524288u) okp = 0;
+          for (uint32_t i = 0; i < GV_PIECE_HW; i++) if (row < 128u && c0 + i < 192u) hit[row][c0 + i]++;
+      }
+      for (int r = 0; r < 128; r++) for (int c = 0; c < 192; c++) if (hit[r][c] != 1) okp = 0;
+      chk("tile copy: 256 pieces of 96 halfwords cover every halfword of the tile once, each offset within the 19-bit command offset and the width within 127", okp && GV_PIECES == 256u); }
+    { uint32_t so, doff; gv_piece(255u, 1728u, &so, &doff); chk("a window-to-window piece reads rows 1,728 apart: piece 255 is row 127, second half", so == 127u * 1728u + 96u && doff == 127u * 1728u + 96u); }
+    { int okb = 1;
+      for (int i = 0; i < 3000; i++) { const int32_t wx = (int32_t)(rnd() % 20u) * 128, wy = (int32_t)(rnd() % 20u) * 128, vx = wx + (int32_t)(rnd() % ((GV_WIN_W - 800) / 4u + 1u)) * 4, vy = wy + (int32_t)(rnd() % (GV_WIN_H - 720 + 1)); const uint32_t wb = 0x900000u;
+          const uint32_t base = gv_win_base(wb, vx, vy, wx, wy); if (base != wb + ((uint32_t)(vy - wy) * 1728u * 2u + (uint32_t)(vx - wx) * 3u) / 2u) okb = 0; }
+      chk("window base: the halfword address of the viewport's first pixel, against the byte formula (3,000 cases)", okb); }
+    { /* screen ready: every screen tile resident and the viewport inside the window */
+      gv_stop_t s = gv_make_stop(4000, 3000, Q16); uint8_t res[GV_WIN_TX * GV_WIN_TY]; int32_t wx = 1024, wy = 768, vx = 1200, vy = 900;
+      memset(res, 1, sizeof res); int allok = gv_screen_ready(&s, vx, vy, wx, wy, res);
+      int onemiss = 1;
+      for (int ty = vy / 128; ty <= (vy + 719) / 128; ty++) for (int tx = vx / 128; tx <= (vx + 799) / 128; tx++) { int col, row; gv_win_tile(wx, wy, tx, ty, &col, &row); memset(res, 1, sizeof res); res[row * GV_WIN_TX + col] = 0; if (gv_screen_ready(&s, vx, vy, wx, wy, res)) onemiss = 0; }
+      memset(res, 0, sizeof res); int ringonly = 1; for (int ty = vy / 128; ty <= (vy + 719) / 128; ty++) for (int tx = vx / 128; tx <= (vx + 799) / 128; tx++) { int col, row; gv_win_tile(wx, wy, tx, ty, &col, &row); res[row * GV_WIN_TX + col] = 1; }
+      ringonly = gv_screen_ready(&s, vx, vy, wx, wy, res);
+      memset(res, 1, sizeof res);
+      chk("screen ready: all tiles resident gives yes; any one screen tile missing gives no; the ring need not be resident", allok && onemiss && ringonly);
+      chk("screen ready: a viewport that leaves the window is never ready", !gv_screen_ready(&s, wx - 4, vy, wx, wy, res) && !gv_screen_ready(&s, vx, wy + GV_WIN_H - 719, wx, wy, res) && !gv_screen_ready(&s, wx + GV_WIN_W - 796, vy, wx, wy, res)); }
+    { int32_t mx, my;
+      gv_map_corner(13107u, 0, 60, 32768u, 0, 0, 0, 0, &mx, &my);
+      chk("map corner: fit (scale 0.2, picture 60 rows down) to half: the screen centre (400, 360) is (1,000, 750) of the half level, corner (600, 390)", mx == 600 && my == 390);
+      gv_map_corner(32768u, 50, 0, 65536u, 0, 0, 0, 100, &mx, &my);
+      chk("map corner: a padded canvas (picture at x 50) to a 1:1 tile level: the padding is taken off before scaling", mx == (400 - 50) * 2 - 400 && my == (100 + 360) * 2 - 360);
+      gv_map_corner(65536u, 0, 0, 32768u, 50, 0, 600, 300, &mx, &my);
+      chk("map corner: to a padded canvas: its offset is added after scaling", mx == (600 + 400) / 2 + 50 - 400 && my == (300 + 360) / 2 - 360);
+      int okm = 1;
+      for (int i = 0; i < 3000; i++) { const int32_t ox = (int32_t)(rnd() % 60) * 2, oy = (int32_t)(rnd() % 120); const int32_t x = 400 + (int32_t)(rnd() % 1500), y = 360 + (int32_t)(rnd() % 1200); int32_t bx, by;
+          gv_map_corner(65536u, 0, 0, 32768u, ox, oy, x, y, &mx, &my); gv_map_corner(32768u, ox, oy, 65536u, 0, 0, mx, my, &bx, &by); if (abs(bx - x) > 4 || abs(by - y) > 4) okm = 0; }
+      chk("map corner: 1:1 to a padded half and back stays within 4 pixels (3,000 cases)", okm); }
     printf(fails ? "FAILED %d\n" : "PASSED\n", fails);
     return fails != 0;
 }
