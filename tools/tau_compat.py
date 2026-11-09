@@ -351,7 +351,7 @@ def layout(pkg, root=ROOT, obsolete=()):
         else:
             raise CompatError(f"{pkg['zip']}: {path} has no layout role (not the core's folders, not a data-slot file, not Platforms/)")
         e = {"path": path, "role": role, "sha256": h, "slot": slot["id"] if slot else None,
-             "required": (slot is None and not path.startswith(common + "tau-presets/")) or bool(slot and slot.get("required"))}      # a file with no data slot (core.json, data.json, the bitstream...) is essential; only a data-slot file the core can run without (tau-cold.bin, tau-loading.bin, tau-packs.bin) is optional (R-011, B-876)
+             "required": (slot is None and not path.startswith(common + "tau-presets/") and role not in ("user", "generated")) or bool(slot and slot.get("required"))}      # a file with no data slot (core.json, data.json, the bitstream...) is essential; only a data-slot file the core can run without (tau-cold.bin, tau-loading.bin, tau-packs.bin) is optional (R-011, B-876)
         out.append(e)
     shipped = {e["path"] for e in out}
     # Where each slot's file lives on the card: parameter bit 1 (core folder) and bits [25:24] (which of platform_ids). Dev builds read
@@ -363,7 +363,7 @@ def layout(pkg, root=ROOT, obsolete=()):
     for sl in slots:
         fn = sl.get("filename")
         if fn:
-            if common + fn in shipped or mine + fn in shipped:
+            if any(m + fn in shipped for m in media_roots) or mine + fn in shipped:
                 continue
             if fn not in NOT_SHIPPED:
                 raise CompatError(f"{pkg['zip']}: data slot {sl['id']} names {fn}, which is neither shipped nor in tau_compat.NOT_SHIPPED")
