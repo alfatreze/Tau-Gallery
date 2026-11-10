@@ -57,3 +57,39 @@ The review of the VexRiscv plugins was done (plan 12.9 to 12.11: the generated c
 
 **Software PNG inflate (nice to have) is unmeasured.** A PNG decode on the CPU is inflate (Huffman) plus the five filters over the whole raw picture (12 MP is 36 MB). At the measured 31.6 cycles per adaptive decision the entropy cost of a Huffman inflate will be lower per symbol but the byte volume is large; a rough estimate is many seconds for a 12 MP picture, which the owner accepts for a nice-to-have, but the number is a guess. Measure it with the existing kit (`tools/cpubench`): add an inflate kernel and the filter loop on a real PNG, in the simulation of the real core, as was done for the range decoder, the IDCT and the colour conversion. The same kit gives the software JPEG numbers (plan: picojpeg 5.3 s for a 455 px cover). The results decide whether a PNG or JPEG path stays in software (with the clock and RAM options above as levers) or gets an RTL block after TGY and TGX.
 
+## 8. Main RAM budget: how small can the CPU's RAM be (2026-11-10, link numbers measured, saving estimated)
+
+**What a block costs (measured earlier in this project):** shrinking the main RAM from 256 to 192 KB freed exactly 64 M10K blocks in real fits (`docs/RAM_SHRINK_192K_PLAN.md`: 299 of 308 used became 235 of 308), so **one M10K block per KB**. The current stripped core therefore spends about 192 of its 264 blocks (73%) on the main RAM (derived, not read from a fit report: the VM was unreachable when this was written). The decoder will need tens of blocks, and everything else together is about 72.
+
+**What the gallery firmware needs (measured from today's `APP=gallery` link, `work/diagnostics/gallery-app/fw2.elf`):**
+
+| Item | Bytes |
+|---|---|
+| code, read-only data, initialised data (the ROM) | 35,904 (text 32,244, rodata 3,373, data 284) |
+| zero-initialised data (bss) | 14,060 |
+| image end (`_image_end` 0xC330) | 49,968 |
+| `_min_free` | 1,024 |
+| the 4 KB landing zone (`_tag_size`) | 4,096 |
+| stack (`_stack_size` 0x1400) | 5,120 |
+| compressed-audio ring (`_ring_size` 0x6000), **reserved by `link.ld` but unused by the gallery** | 24,576 |
+| **needed without the ring** | **60,208 (58.8 KB)** |
+
+The linker still reserves the 24 KB ring that only the audio player used; dropping it is free.
+
+**Options (one block per KB):**
+
+| Main RAM | Spare after the needs above | Blocks freed (of 192) | Blocks used afterwards | Notes |
+|---|---|---|---|---|
+| 192 KB (today) | 132 KB | 0 | about 264 (86%) | |
+| 128 KB (one 32,768-word region) | 68 KB | 64 | about 200 (65%) | simplest, no split |
+| **96 KB (16,384 + 8,192 words)** | **about 37 KB** | **96** | **about 168 (55%)** | the same 2:1 split shape as the proven 192 KB (32,768 + 16,384); room for the decoder's driver code, TGX tables and growth |
+| 64 KB (one 16,384-word region) | about 5 KB | 128 | about 136 (44%) | fits today's firmware but leaves no room to grow |
+
+**Recommendation (revised 2026-11-10 after the owner asked "why not 128"): 128 KB.** It frees 64 blocks (about 200 of 308 used, 108 free) against 96 KB's 96 (about 168 used, 140 free), but it is **one power-of-two array** (`WORDS_B=0`, the structure the original core always used), so it avoids the two-region inference risk of KB-058 altogether, needs no new split logic and no new address-select path, and leaves 68 KB of RAM for software work: the Huffman and window tables of a software PNG or JPEG path, line buffers, the decoder's driver and TGX tables. The plan's TGY decoder is estimated at 30 to 50 M10K blocks (a 70-block candidate was the one rejected as too big), so 108 free blocks cover it with room for the sampler or overlay; 96 KB is the fallback only if the decoder's measured block count turns out well above 70, and 64 KB stays a trap. Because the main RAM is one parameter, the choice can be revised after the first decoder fit.
+
+**What has to change (none of it done):** a macro beside `TAU_RAM_192K` in `tau_soc.v` (for example `TAU_RAM_96K`, parameters `WORDS_A=16384`, `WORDS_B=8192`, `RAM_AW`), a new `CORE_VERSION` revision so firmware linked for another size refuses it (the pairing rule B-245: a firmware linked for more RAM than the core has corrupts silently), a `link.ld` variant (RAM length 0x18000, ring size 0 for the gallery) and the matching `P2_CORE_VERSION` in the firmware build, the `tau_main_ram` testbench with the new split, a Quartus **synthesis** check first (the documented risk in `tau_main_ram.sv`: a different restructuring once made Quartus fall back from M10K to logic; a 2:1 split like the proven one should be safe but must be checked), then a two-seed fit (about 1h10m, the owner's yes) and a Pocket boot.
+
+**Unchecked:** anything else that assumes the RAM size (the loader's size check for `tau.rom`, the SoC simulation's RAM model in `sim/make_soc_sim.py`, the 0xC0000000 uncached alias and address decoding, the watchdog's jump buffer), and whether the fitter packs the smaller array as one block per KB again.
+
+**The size rule, checked 2026-11-10 (the "modulus"):** each RAM array must have a power-of-two depth. The source says so (`tau_soc.v` line 41 and `tau_main_ram.sv`: a single 49,152-word array once pushed the Fitter into logic instead of M10K, "Fitter requires 3621 LABs ... device contains only 1848"), which is why 192 KB is two arrays of 32,768 and 16,384 words per byte lane. 96 KB (24,576 words) is not a power of two either, so it is built the same way: **16,384 + 8,192 words**, both powers of two, region B no larger than region A (the module's precondition), and one address bit (bit 14) tells the regions apart with no subtractor. That is the 192 KB shape halved, and `tau_main_ram` already takes it as parameters (`WORDS_A=16384, WORDS_B=8192`, `AW` of at least 15; `RAM_AW` is 16 today). The instantiation in `tau_soc.v` hard-codes the 192 KB numbers, so a new macro branch is needed, and the address decode, the loader address and the version interlock around line 1027 need the same branch. The real risk is inference, not the arithmetic: the same file's history (B-225 to B-227) and skill entry KB-058 record that a two-region split can make Quartus fall back from M10K to registers when the read is written as a ternary across two multi-array concatenations; the shipped module avoids that shape (a plain registered read per region, then a byte mux), and the 192 KB version of it is fit-proven, so a 2:1 split with half the depth should infer the same way, but only a synthesis run proves it. Skill entries consulted: KB-143 (M10K is 10,240 bits, 308 on this device; check the fitter's RAM summary for block type, width and depth), KB-058, KB-052.
+
