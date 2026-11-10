@@ -1,6 +1,6 @@
 # Gallery UI wishlist (owner ideas, not specified yet)
 
-Raised 2026-11-10: a **histogram** and **more visual menus**. Not decisions and not scheduled; the order of work stays TGY and TGX hardware first (`docs/M3_STREAMING_NOTE.md` section 0). All of this is firmware or host-tool work unless marked, so it can be done between Pocket runs and Quartus fits.
+Raised 2026-11-10: a **histogram** and **more visual menus**. **Owner decision (same day): these come at the end of the plan; until then the work follows what is already defined** (TGY and TGX hardware first, `docs/M3_STREAMING_NOTE.md` section 0). Nothing here is scheduled before that. All of this is firmware or host-tool work unless marked, so it can be done between Pocket runs and Quartus fits.
 
 ## Histogram
 | Step | What | Cost | Notes |
