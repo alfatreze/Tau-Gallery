@@ -979,3 +979,8 @@ test-jpegcoef:
 	$(PYTHON) sim/test_jpegcoef.py
 	$(PYTHON) sim/test_jpegcoef.py --mutants
 
+# The TGY symbol layer of the model measurement (tools/gallery/tgymodel.py): round trips through the real TVC encoder and decoder. The measurement itself: tools/gallery/model_measure.py.
+.PHONY: test-tgymodel
+test-tgymodel:
+	$(PYTHON) sim/test_tgymodel.py
+

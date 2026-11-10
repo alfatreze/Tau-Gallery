@@ -27,6 +27,12 @@ class Encoder:
         if bit: self.low += bound; self.range -= bound
         else: self.range = bound
         probs[ctx] = update(p, bit); self._normalize()
+    def bit_p(self, p, bit):
+        """Encode one bin with an explicit 15-bit probability of a 0 (no adaptation here: the caller's engine owns it). bit_p(probs[c], b) followed by the TVC update equals bit(probs, c, b)."""
+        bound = (self.range >> 15) * p
+        if bit: self.low += bound; self.range -= bound
+        else: self.range = bound
+        self._normalize()
     def bypass(self, bit):
         self.range >>= 1
         if bit: self.low += self.range
@@ -50,6 +56,11 @@ class Decoder:
         if self.code >= bound: self.code -= bound; self.range -= bound; b = 1
         else: self.range = bound; b = 0
         probs[ctx] = update(p, b); self._normalize(); return b
+    def bit_p(self, p):
+        bound = (self.range >> 15) * p
+        if self.code >= bound: self.code -= bound; self.range -= bound; b = 1
+        else: self.range = bound; b = 0
+        self._normalize(); return b
     def bypass(self):
         self.range >>= 1
         if self.code >= self.range: self.code -= self.range; b = 1
