@@ -151,3 +151,26 @@ Work order now: the coefficient reader, then the model measurement (D2), then th
 4. **Not measured and not excluded:** the richer modelling that gives Lepton its size: the count of nonzero coefficients coded first and used as the context of the significance flags, DC prediction from pixel gradients across block edges (not possible across tile edges, but possible inside a tile), prediction of the first row and column of each block from the neighbours' pixels. These are the next measurements; they cost decoder state, which is the trade-off to evaluate (each is a context or a small predictor, not a mixer).
 5. **Hardware throughput (measured decision counts, count-based variant):** per tile 24,000 to 89,000 context-coded decisions (mean 42,000) and 7,000 to 33,000 bypass bins (mean 14,000), 2.8 to 11.7 KB (mean 5.5 KB) of compressed data, 0.61 to 0.79 bits per decision. At 3 clock cycles per decision (an estimate) a mean tile takes 1.3 ms at 100 MHz (the densest 2.7 ms plus bypass bins), so a screen of 36 tiles is about 50 to 100 ms in one lane: the entropy decoder is not the bottleneck of the pan, the card and the Talos copy are.
 
+## 14. Richer contexts, measured (2026-11-10): small gains, and where the bits go
+`tgymodel.code_block2` adds, as options, the count of nonzero AC coefficients coded first and used as the context of the significance flags (`nz`; the remaining count also makes the last flags implicit), the magnitudes of the two already-coded neighbouring coefficients inside the same block as context (`local`), the median of left, upper and left + upper - upper-left as the DC predictor (`dcmed`), and the neighbouring blocks' nonzero counts as context of the count (`nznb`). `make test-tgymodel`: 14 tests, **all 16 option combinations round-trip bit for bit through the real TVC encoder and decoder** on synthetic, extreme and real tiles. Same five lossless crops (320 tiles), count-based rate, `tools/gallery/model_measure2.py`; bytes over the five crops, ratio to the progressive Huffman crops (1,857,387 bytes):
+
+| Variant | Bytes | Ratio |
+|---|---|---|
+| old model (last index tree, left/above DC) | 1,746,393 | 0.940 |
+| **+ local (neighbouring coefficients in the block)** | **1,732,402** | **0.933** |
+| + dcmed | 1,743,679 | 0.939 |
+| nz count | 1,745,434 | 0.940 |
+| nz + neighbour counts | 1,746,492 | 0.940 |
+| nz + local | 1,743,405 | 0.939 |
+| nz + local + neighbour counts | 1,744,465 | 0.939 |
+| nz + local + dcmed | 1,740,691 | 0.937 |
+| nz + local + dcmed + neighbour counts | 1,741,751 | 0.938 |
+
+**Where the bits go** (the `+ local` model, 1,730,805 bytes; measured): magnitude exponent 22.4%, significance flags 18.9%, greater-than-1 flags 9.0%, magnitude top mantissa bit 8.4%, last-index tree 3.9%, DC (all four symbols) 4.1%, and **33.3% raw bypass bits: the AC signs 16.1% and the lower mantissa bits 17.2%**.
+
+**What it says:**
+1. The best variant is `+ local` alone at **0.933** (6.7% smaller than the progressive Huffman originals). The nonzero-count scheme, the DC median predictor and the neighbouring-block counts add nothing on top (the nz count even loses 0.1 to 0.2% to the last-index tree here), so the **simplest model wins: the last-index tree, left/above DC, the local-energy context, the count-based rate, no priors, no neighbour-block contexts**. In hardware it needs only the 64 coefficients of the block being decoded (which the dequantiser and IDCT hold anyway): no line buffers, no tables.
+2. **The ceiling of context modelling on this data is low:** one third of the stream is raw bits that no context removes (signs and the lower mantissa bits), DC is only 4%, and the flags and exponents already sit near the static limit. The remaining lever known from the literature (recalled, not measured here) is predicting the **signs and magnitudes of the first row and column of each block from the neighbouring blocks' edge pixels** (Lepton's edge prediction); it needs the neighbour block's decoded pixels (the IDCT's last row and column) and is not possible across tile edges. Its gain is unknown here and probably a few percent; it is the one remaining experiment, and its hardware cost (an extra row and column buffer per block row) must be weighed against that.
+3. **The 20 to 22% figure is therefore out of reach for a tile-independent, mixing-free design** on these photos; the realistic expectation for JPEG sources is **6 to 7% smaller than a progressive Huffman original (measured), about 3% smaller than arithmetic JPEG**, with random access and a hardware-decodable stream as the real gain. For pixel sources the same coder and model are applied to coefficients our own encoder quantises, where the lever is the encoder (quantisation matrices, dead zone, rate-distortion optimised quantisation), not the entropy model.
+4. Recommended **TGY v0 symbol layer**: the `+ local` variant of `tgymodel.py`. Decisions D1 (count-based rate kept, priors dropped) and D3 (expectation 6 to 7%) are confirmed by measurement; the symbol layer is frozen only after the edge-prediction experiment, or after the owner decides it is not worth it.
+

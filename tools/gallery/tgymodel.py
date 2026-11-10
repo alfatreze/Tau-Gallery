@@ -100,13 +100,68 @@ def code_block(io, cc, blk, pred, left, above, nbr):
         out[k] = -a if neg else a
     return out
 
+ZZN = [0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63]
+ZZI = [0] * 64
+for _i, _n in enumerate(ZZN): ZZI[_n] = _i                                                         # natural (row-major) index to zigzag index
+LN = [(ZZI[ZZN[k] - 1] if ZZN[k] % 8 else -1, ZZI[ZZN[k] - 8] if ZZN[k] >= 8 else -1) for k in range(64)]   # the zigzag indices of the left and the upper coefficient of the same block (always coded earlier), or -1
+def _lbk(x): return 0 if x == 0 else (1 if x == 1 else (2 if x == 2 else (3 if x <= 4 else 4)))
+def _remb(r): return 0 if r <= 0 else (r if r <= 4 else (4 if r <= 6 else (5 if r <= 9 else (6 if r <= 14 else (7 if r <= 22 else 8)))))
+def _nzb(x): return 0 if x == 0 else (1 if x <= 3 else (2 if x <= 8 else (3 if x <= 16 else (4 if x <= 32 else 5))))
+def _med(a, b, c): return max(min(a, b), min(max(a, b), c))
+def _nz_of(blk):
+    return 0 if blk is None else sum(1 for k in range(1, 64) if blk[k])
+
+def code_block2(io, cc, blk, left, above, aleft, opt):
+    """The richer variant. opt (a dict of booleans): nz = code the count of nonzero AC first and use the remaining count as the context of the significance flags (no last-index tree), local = the magnitudes of the two
+    already-coded neighbouring coefficients inside the block (left and upper in natural order) as context, dcmed = DC predicted by the median of left, upper and left + upper - upper-left, nznb = the neighbouring blocks'
+    nonzero counts as context of the count. Returns the block."""
+    enc = blk is not None; out = [0] * 64
+    if opt.get("dcmed") and left is not None and above is not None and aleft is not None: pred = _med(left[0], above[0], left[0] + above[0] - aleft[0])
+    else: pred = left[0] if left is not None else (above[0] if above is not None else 0)
+    d = (blk[0] - pred) if enc else None
+    if io.bit(("d0", cc), (1 if d != 0 else 0) if enc else None):
+        sg = io.bit(("ds", cc), (1 if d < 0 else 0) if enc else None)
+        a = _eg0(io, ("dx", cc), ("dm", cc), abs(d) - 1 if enc else None) + 1; d = -a if sg else a
+    else: d = 0
+    out[0] = pred + d
+    use_nz = opt.get("nz"); local = opt.get("local")
+    if use_nz:
+        nzv = _nz_of(blk) if enc else 0
+        nbn = _nzb((_nz_of(left) + _nz_of(above) + 1) // 2) if opt.get("nznb") else 0
+        node = 1
+        for i in range(5, -1, -1):
+            node = node * 2 + io.bit(("nzt", cc, nbn, node), ((nzv >> i) & 1) if enc else None)
+        rem = node - 64; last = 63
+    else:
+        last = 0
+        if enc:
+            for k in range(63, 0, -1):
+                if blk[k]: last = k; break
+        node = 1
+        for i in range(5, -1, -1):
+            node = node * 2 + io.bit(("lt", cc, 0, node), ((last >> i) & 1) if enc else None)
+        last = node - 64; rem = 1 << 30
+    for k in range(1, last + 1):
+        if use_nz and rem == 0: break
+        li, ui = LN[k]; lc = (_lbk(abs(out[li]) + abs(out[ui]) if li >= 0 and ui >= 0 else abs(out[li] if li >= 0 else (out[ui] if ui >= 0 else 0)))) if local else 0
+        forced = use_nz and rem == 64 - k
+        if not forced and not (not use_nz and k == last):
+            sg = io.bit(("sg", cc, KG[k], _remb(rem) if use_nz else 0, lc), (1 if blk[k] else 0) if enc else None)
+            if not sg: continue
+        a = abs(blk[k]) if enc else None
+        if io.bit(("g1", cc, KG[k], lc), (1 if a > 1 else 0) if enc else None): a = _eg0(io, ("mx", cc, min(KG[k], 7), lc), ("mm", cc), a - 2 if enc else None) + 2
+        else: a = 1
+        neg = io.bypass((1 if blk[k] < 0 else 0) if enc else None); out[k] = -a if neg else a
+        if use_nz: rem -= 1
+    return out
+
 def _last_of(blk):
     if blk is None: return 0
     for k in range(63, 0, -1):
         if blk[k]: return k
     return 0
 
-def code_tile(io, grids, shapes, nbr):
+def code_tile(io, grids, shapes, nbr, opt=None):
     """One tile: grids = list of [rows][cols] lists of 64-coefficient lists per component (None when decoding), shapes = [(rows, cols)] per component. Returns the grids."""
     out = []
     for ci, (rows, cols) in enumerate(shapes):
@@ -114,6 +169,8 @@ def code_tile(io, grids, shapes, nbr):
         for y in range(rows):
             for x in range(cols):
                 left = g[y][x - 1] if x else None; above = g[y - 1][x] if y else None
+                if opt is not None:
+                    g[y][x] = code_block2(io, cc, grids[ci][y][x] if grids is not None else None, left, above, g[y - 1][x - 1] if (x and y) else None, opt); continue
                 pred = (left[0] if left is not None else (above[0] if above is not None else 0))
                 g[y][x] = code_block(io, cc, grids[ci][y][x] if grids is not None else None, pred, left, above, nbr)
         out.append(g)

@@ -23,9 +23,9 @@ def synth_tile(seed, rows=(4, 2), cols=(4, 2)):
             g.append(row)
         grids.append(g)
     return grids, list(zip(rows, cols))
-def run(grids, shapes, mode, nbr, priors=None):
-    e = M.EncIO(M.Engine(mode, priors)); M.code_tile(e, grids, shapes, nbr); data = e.finish()
-    back = M.code_tile(M.DecIO(M.Engine(mode, priors), data), None, shapes, nbr); c = M.CostIO(M.Engine(mode, priors)); M.code_tile(c, grids, shapes, nbr)
+def run(grids, shapes, mode, nbr, priors=None, opt=None):
+    e = M.EncIO(M.Engine(mode, priors)); M.code_tile(e, grids, shapes, nbr, opt); data = e.finish()
+    back = M.code_tile(M.DecIO(M.Engine(mode, priors), data), None, shapes, nbr, opt); c = M.CostIO(M.Engine(mode, priors)); M.code_tile(c, grids, shapes, nbr, opt)
     return data, back, c
 
 class T(unittest.TestCase):
@@ -58,6 +58,28 @@ class T(unittest.TestCase):
             self.assertEqual(shapes, [(16, 16), (8, 8), (8, 8)]); n += 1
             for mode, nbr in (("fixed", False), ("count", True)): self.assertEqual(run(grids, shapes, mode, nbr)[1], grids)
         self.assertEqual(n, 4)
+    OPTS = [dict(zip(("nz", "local", "dcmed", "nznb"), c)) for c in __import__("itertools").product([False, True], repeat=4)]
+    def test_rich_options_roundtrip(self):
+        for seed in range(5):
+            grids, shapes = synth_tile(40 + seed, rows=(5, 3), cols=(5, 3))
+            for opt in self.OPTS: self.assertEqual(run(grids, shapes, "count", False, None, opt)[1], grids, (seed, opt))
+    def test_rich_options_extremes_and_real_tiles(self):
+        z = [0] * 64; full = [5] + [1] * 63; big = [2047] + [1023 if k % 2 else -1023 for k in range(1, 64)]; one = [0] * 63 + [-1]
+        grids = [[[z, full, big], [one, z, full], [big, one, z]]]
+        for opt in self.OPTS: self.assertEqual(run(grids, [(3, 3)], "count", False, None, opt)[1], grids, opt)                          # all-nonzero blocks use the implicit flags, the lone last coefficient the longest zero run
+        img = TJ.picture(256, 256, seed=9); j = jpegcoef.read_jpeg(TJ.encode(img, quality=85, subsampling=2, progressive=True))
+        for g, sh in M.tiles_of(j):
+            for opt in self.OPTS: self.assertEqual(run(g, sh, "count", False, None, opt)[1], g, opt)
+    def test_rich_cost_matches_the_real_stream(self):
+        grids, shapes = synth_tile(55, rows=(8, 4), cols=(8, 4))
+        for opt in self.OPTS:
+            data, back, c = run(grids, shapes, "count", False, None, opt); self.assertEqual(back, grids); self.assertLess(abs(len(data) * 8 - c.bits), 48 + 0.01 * c.bits, opt)
+    def test_rich_tables(self):
+        self.assertEqual(M.ZZI[M.ZZN[17]], 17); self.assertTrue(all(M.ZZI[M.ZZN[k]] == k for k in range(64)))
+        for k in range(1, 64):
+            for q in M.LN[k]: self.assertTrue(q < k)                                                                                       # the left and upper coefficients are always coded earlier
+        self.assertEqual(M.LN[1], (0, -1)); self.assertEqual(M.LN[2], (-1, 0)); self.assertEqual([M._remb(r) for r in (0, 1, 4, 5, 6, 7, 9, 10, 14, 15, 22, 23, 63)], [0, 1, 4, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8])
+        self.assertEqual(M._med(3, 9, 5), 5); self.assertEqual(M._med(3, 9, 20), 9); self.assertEqual(M._med(3, 9, -4), 3)
     def test_engine(self):
         e = M.Engine("fixed"); self.assertEqual(e.prob("a"), 16384); e.update("a", 1); self.assertEqual(e.p["a"], 16384 - (16384 >> 5)); e.update("a", 0); self.assertGreater(e.p["a"], 16384 - 512)
         e = M.Engine("count"); e.prob("c"); e.update("c", 0); self.assertEqual(e.p["c"], 16384 + (((32768 - 16384) * M.REC[0]) >> 16))      # the first update moves half way (the rate starts at 1/2)
