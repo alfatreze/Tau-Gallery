@@ -973,3 +973,9 @@ test-tvcrc:
 	$(PYTHON) sim/test_tvcrc.py --mutants
 	$(PYTHON) sim/cross_tvcrc.py
 
+# The JPEG coefficient reader (tools/gallery/jpegcoef.py): tests against Pillow and mutants.
+.PHONY: test-jpegcoef
+test-jpegcoef:
+	$(PYTHON) sim/test_jpegcoef.py
+	$(PYTHON) sim/test_jpegcoef.py --mutants
+

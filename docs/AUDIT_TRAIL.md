@@ -16367,3 +16367,7 @@ Appended to B-1040 (owner: "yes", 2026-11-10): the VexRiscv option review (plan 
 
 docs/M3_STREAMING_NOTE.md section 11 (decisions D1 to D8) and plan 12.15 record the review: TVC range coder kept with count-based adaptation and trained priors; measure on original JPEG coefficients (coefficient reader first); JPEG-source size expectation 7 to 15% (estimate); normative decode and tile-edge upsampling; the fit view as its own level; TGX run and palette modes; per-tile CRC. No code changed by this entry; the coefficient reader follows.
 
+## B-1043: JPEG coefficient reader built and tested (owner: "move on to the next planned task", 2026-11-10)
+
+`tools/gallery/jpegcoef.py` and `sim/test_jpegcoef.py` (`make test-jpegcoef`: 13 tests, 14 of 14 mutants killed); on the real 2560 x 1705 progressive 4:2:0 photo the coefficients reproduce Pillow's luma with mean error 0.31 (read time 3.0 s). Details in docs/M3_STREAMING_NOTE.md section 12. Two test-design corrections on the way: a wrapping blue channel and a random patch made the chroma and luma pixel references noisy (the 4:4:4 checks passed; the 4:2:0 ones now use a smooth picture for pixels and exact baseline-versus-progressive coefficient equality for the noisy one). No hardware or firmware change.
+
