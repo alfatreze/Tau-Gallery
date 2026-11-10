@@ -984,3 +984,9 @@ test-jpegcoef:
 test-tgymodel:
 	$(PYTHON) sim/test_tgymodel.py
 
+# The FROZEN TGY symbol layer v0 (docs/TGY_SYMBOL_LAYER_V0.md): conformance vectors, equality with the exploratory model, the spec text, and 21 mutants.
+.PHONY: test-tgy-v0
+test-tgy-v0:
+	$(PYTHON) sim/test_tgy_v0.py
+	$(PYTHON) sim/test_tgy_v0.py --mutants
+
