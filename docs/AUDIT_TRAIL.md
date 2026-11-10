@@ -16350,3 +16350,8 @@ The owner converted 42 pictures (about 4,000 to 8,000 px, with zoom levels). Fin
 ## B-1039: the nested converter output removed from the TauV card (owner: "Yes, delete it", 2026-11-09)
 
 `/Volumes/TauV/Assets/tau_gallery/common/Assets` (89 files, 4.1 GB, the converter app's first run written inside the card's tree, B-1038) was removed with `rm -rf` after listing it again. Checked afterwards: `common/photos` still holds its 5 pictures and `common/tau-library.tdb` (73,728 bytes, 10:22) is unchanged; the card shows 1.7 GB used of 119 GB. The card has not been ejected from this session.
+
+## B-1040: Decision: compressed formats first, whole picture resident in SDRAM; full-resolution size table (owner, 2026-11-10)
+
+The owner asked whether the pan would work better with encoded files and proposed streaming the whole compressed picture into SDRAM or PSRAM and panning from there; decided: stop tuning the raw-tile pan, do TGY (then TGX) first, JPEG and PNG direct later even if slower. Recorded in `docs/M3_STREAMING_NOTE.md` (vocabulary of TGY, TGX and the container, why a resident picture, work order, open measurements) and plan section 12.15. New tool `tools/gallery/size_table.py`: on the five test photos at full resolution the JPEG-class q92 4:4:4 re-encode is 1.5 to 4.5 MB (original JPEGs 2.5 to 6.6 MB, raw 13 to 64 MB), loads of 1.0 to 2.9 s at 1.55 MB/s (**measured sizes, estimated times**; second-generation proxy). Nothing built or run on a Pocket.
+
