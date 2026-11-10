@@ -1,5 +1,7 @@
 # Session handoff 2026-11-09: Tau Gallery M0 on a Pocket, M1 built (DEV 005 installed, not yet run)
 
+> **Superseded for the current state by `SESSION_HANDOFF_2026-11-09_GALLERY_STRIP_DEV006.md`** (nine addenda, up to DEV 012 with the zoom map, B-1039). This file is the record of M0 on a Pocket and of M1 as first built (DEV 005); its "next steps" are done. Read the other one first.
+
 Repo `gallery/` (branch `main`, local only, nothing pushed). Plan (outside the repo): `../docs/GALLERY_ANALYSIS_2026-11-07.md`. Designs: `docs/M0_DESIGN.md` (6c to 6e: the Pocket results), `docs/M1_DESIGN.md`. Audit B-1005 to B-1008. Last commit `a490b96`.
 
 ## State in one paragraph
