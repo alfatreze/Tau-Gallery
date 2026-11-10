@@ -966,3 +966,10 @@ test-tgy:
 	$(PYTHON) sim/test_tgy_convert_modes.py
 	$(PYTHON) sim/test_tgy_convert_modes.py --mutants
 
+# TGY and TGX entropy coder reference (tools/gallery/tvcrc.py, the TVC range coder of Tau codecs): tests, mutants, and the bit-exact comparison with the Rust implementation (skipped when cargo is missing).
+.PHONY: test-tvcrc
+test-tvcrc:
+	$(PYTHON) sim/test_tvcrc.py
+	$(PYTHON) sim/test_tvcrc.py --mutants
+	$(PYTHON) sim/cross_tvcrc.py
+
