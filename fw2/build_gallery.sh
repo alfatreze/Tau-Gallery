@@ -15,6 +15,7 @@ SRCS=("$FW2/platform/start.S" "$FW2/platform/platform.c" "$FW2/platform/libc_min
       "$FW2/gallery/gallery_pattern.c" "$FW2/gallery/gallery_hw.c" "${MAINSRC[@]}")
 DEFS=(-DP2_DIAG=0 -DP2_GALLERY=1); LDEXTRA=()
 # RAM128=1: the gallery for the 128 KB core (CORE_VERSION rev 28, tools/gallery_m1b_qsf_append.txt): link into 128 KB and accept only that core.
+if [ "${TGY:-0}" = "1" ]; then RAM128=1; DEFS+=(-DP2_TGY); fi   # TGY=1: the core with the hardware TGY decoder (CORE_VERSION rev 29, tools/gallery_m1c_qsf_append.txt), implies the 128 KB link
 if [ "${RAM128:-0}" = "1" ]; then DEFS+=(-DP2_RAM128); LDEXTRA=(-Wl,--defsym=__ram_size=0x20000); fi
 CFLAGS=(-march=rv32im -mabi=ilp32 -mno-relax -O2 -ffreestanding -nostartfiles -nostdlib -ffunction-sections -fdata-sections -Wall -Wextra -Wno-unused-parameter)
 OBJ="$OUT/obj"; rm -rf "$OBJ"; mkdir -p "$OBJ"; : > "$OUT/build.log"; OBJS=()

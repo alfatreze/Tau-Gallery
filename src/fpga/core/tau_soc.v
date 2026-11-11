@@ -120,8 +120,11 @@ module tau_soc #(
     parameter VIEW_ENABLE = 0,
     // Tau Gallery landing path (tau_land.sv, M0.5): registers 0x200-0x210 (base, clear, status, word count, overflow count). With 0 they read 0 and writes are ignored.
     parameter LAND_ENABLE = 0,
+    // Tau Gallery hardware TGY decoder (tau_tgy_unit.sv, docs/TGY_HW_DMA.md): MMIO 0x220-0x24C are forwarded to the unit (fb_tgy_*), its read data is merged into the read mux, its interrupt is source 4. With 0 the registers read 0,
+    // writes are ignored and the outputs are constant.
+    parameter TGY_ENABLE = 0,
     // Tau Gallery interrupts (M0.6): the 32-bit pending register 0x214 (read; write 1 to clear a bit) drives the CPU's external interrupt inputs; the CPU's own mask CSR (0xBC0) enables
-    // them. Sources: bit 0 data-slot command done, bit 1 vsync rising, bit 2 landing path idle (rising), bit 3 a video mode switch completed. With 0 the inputs stay 0 as before.
+    // them. Sources: bit 0 data-slot command done, bit 1 vsync rising, bit 2 landing path idle (rising), bit 3 a video mode switch completed, bit 4 the TGY decoder finished or failed (rising, TGY_ENABLE). With 0 the inputs stay 0 as before.
     parameter IRQ_ENABLE = 0,
     parameter BUG_FONT_NO_INC = 0,      // mutation hooks for sim/tb_font_soc.v (1 must make it fail): the index does not step after a data write / the completed-load counter never counts
     parameter BUG_FONT_NO_GEN = 0
@@ -226,6 +229,13 @@ module tau_soc #(
     input  wire         fb_land_idle,
     input  wire [31:0]  fb_land_words,
     input  wire [31:0]  fb_land_ovf,
+    // Tau Gallery hardware TGY decoder (TGY_ENABLE): the MMIO window 0x220-0x24C, forwarded (clk_sys): byte offset, write strobe (one clock) and data out; hit, read data and interrupt level in
+    output wire [9:0]   fb_tgy_addr,
+    output wire         fb_tgy_we,
+    output wire [31:0]  fb_tgy_wdata,
+    input  wire         fb_tgy_hit,
+    input  wire [31:0]  fb_tgy_rdata,
+    input  wire         fb_tgy_irq,
 
     // core_bridge_cmd's datatable: a dual-port BRAM whose OTHER port APF can
     // read and write over the bridge at 0xF8xx2xxx. That is what makes the
@@ -1029,7 +1039,10 @@ module tau_soc #(
     // stale RTL. That has already happened three times here, each time looking
     // like a logic bug (dead peripheral, no audio, unresponsive buttons) rather
     // than what it was. BUMP THIS whenever the MMIO map changes.
-`ifdef TAU_RAM_128K
+`ifdef TAU_TGY
+    // Tau Gallery hardware TGY decoder: new MMIO registers 0x220-0x24C and interrupt source 4, a different contract from every earlier core (with or without the 128 KB RAM option; the firmware that drives it is linked for this value).
+    localparam [31:0] CORE_VERSION = 32'h4D50331D;   // "MP3" + rev 29 (rev 28 + the hardware TGY decoder)
+`elsif TAU_RAM_128K
     // Tau Gallery 128 KB main RAM: a different contract from the 192 KB one (a firmware linked for 192 KB must be refused, and the gallery firmware linked for 128 KB must refuse the older core).
     localparam [31:0] CORE_VERSION = 32'h4D50331C;   // "MP3" + rev 28 (rev 27 + 128 KB main RAM)
 `elsif TAU_CLK66
@@ -1239,6 +1252,10 @@ module tau_soc #(
     localparam [9:0] R_LAND_BASE = 10'h200, R_LAND_CTRL = 10'h204, R_LAND_STATUS = 10'h208, R_LAND_WORDS = 10'h20C, R_LAND_OVF = 10'h210, R_IRQ_PEND = 10'h214;   // Tau Gallery (M0.5, M0.6)
     reg  [24:0] land_base_r = 25'd0;
     reg         land_clear_r = 1'b0;
+    assign fb_tgy_addr  = (TGY_ENABLE != 0) ? mmio_reg : 10'd0;
+    assign fb_tgy_we    = (TGY_ENABLE != 0) && d_req && d_is_mmio && dWE && (mmio_reg >= 10'h220) && (mmio_reg <= 10'h24C);
+    assign fb_tgy_wdata = (TGY_ENABLE != 0) ? dDAT_MOSI : 32'd0;
+    reg         irq_tgy_q = 1'b0;
     assign fb_land_base  = (LAND_ENABLE != 0) ? land_base_r : 25'd0;
     assign fb_land_clear = (LAND_ENABLE != 0) && land_clear_r;
     // interrupts: sticky pending bits set by their sources, cleared by writing 1; the pending register is the CPU's external interrupt array
@@ -1246,10 +1263,10 @@ module tau_soc #(
     reg         irq_done_q = 1'b0, irq_vs_q = 1'b0, irq_idle_q = 1'b0; reg [15:0] irq_sw_q = 16'd0;
     reg         irq_clr_we = 1'b0; reg [31:0] irq_clr_d = 32'd0;
     assign irq_ext = (IRQ_ENABLE != 0) ? irq_pend : 32'd0;
-    wire [3:0]  irq_set = { (fb_vid_switches != irq_sw_q), (fb_land_idle && !irq_idle_q), (vblank_rd[0] && !irq_vs_q), (tgt_done && !irq_done_q) };
+    wire [4:0]  irq_set = { (TGY_ENABLE != 0) && fb_tgy_irq && !irq_tgy_q, (fb_vid_switches != irq_sw_q), (fb_land_idle && !irq_idle_q), (vblank_rd[0] && !irq_vs_q), (tgt_done && !irq_done_q) };
     always @(posedge clk) if (IRQ_ENABLE != 0) begin
-        irq_done_q <= tgt_done; irq_vs_q <= vblank_rd[0]; irq_idle_q <= fb_land_idle; irq_sw_q <= fb_vid_switches;
-        irq_pend <= (irq_pend & ~(irq_clr_we ? irq_clr_d : 32'd0)) | {28'd0, irq_set};
+        irq_done_q <= tgt_done; irq_vs_q <= vblank_rd[0]; irq_idle_q <= fb_land_idle; irq_sw_q <= fb_vid_switches; irq_tgy_q <= fb_tgy_irq;
+        irq_pend <= (irq_pend & ~(irq_clr_we ? irq_clr_d : 32'd0)) | {27'd0, irq_set};
     end
     localparam [8:0] R_VID_MODE = 9'h1EC, R_VIEW_BASE = 9'h1F0, R_VIEW_STRIDE = 9'h1F4, R_VIEW_CAPS = 9'h1F8;   // Tau Gallery viewer (M0.3)
     reg         view_req_r = 1'b0;
@@ -1728,7 +1745,7 @@ module tau_soc #(
             R_GAIN_STEP:   mmio_rdata = {16'd0, gain_ramp};
             R_AUDIO_CFG:   mmio_rdata = {30'd0, (AUDIO16_ENABLE != 0), audio_full16};   // B-602: bit 1 present, bit 0 value; 0 when not built
             R_CYMO_DIAG:   mmio_rdata = {cymo_drop_cnt, cymo_stale_cnt}; // B-527: [15:0] consumes that found no pushed sample (repeat), [31:16] ticks dropped because the queue was full; both saturate, both clear on live engage
-            default:   mmio_rdata = xm_range ? xm_rdata : 32'h0;
+            default:   mmio_rdata = ((TGY_ENABLE != 0) && fb_tgy_hit) ? fb_tgy_rdata : (xm_range ? xm_rdata : 32'h0);
         endcase
     end
 

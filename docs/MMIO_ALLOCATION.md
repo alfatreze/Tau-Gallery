@@ -108,7 +108,17 @@ only 8 bits of offset (`mmio_reg`, 64 registers, 4-byte stride); offsets at
 | 0x208 | LAND_STATUS | R | `[31]` present, `[1]` words were dropped (the FIFO was full), `[0]` idle (every accepted word is in SDRAM). |
 | 0x20C | LAND_WORDS | R | words accepted since the last clear. |
 | 0x210 | LAND_OVF | R | words dropped since the last clear. |
-| 0x214 | IRQ_PEND | R/W1C | Tau Gallery interrupts (`TAU_IRQ`): sticky pending bits, write 1 to clear. 0 data-slot command done, 1 vsync rising, 2 landing path idle (rising), 3 a video mode switch completed. The register is the CPU's external interrupt array (LiteX scheme: mask CSR 0xBC0, pending CSR 0xFC0, `mie.MEIE`, `mstatus.MIE`); reads 0 without the macro. |
+| 0x214 | IRQ_PEND | R/W1C | Tau Gallery interrupts (`TAU_IRQ`): sticky pending bits, write 1 to clear. 0 data-slot command done, 1 vsync rising, 2 landing path idle (rising), 3 a video mode switch completed, 4 the TGY decoder finished or failed (rising, `TAU_TGY`). The register is the CPU's external interrupt array (LiteX scheme: mask CSR 0xBC0, pending CSR 0xFC0, `mie.MEIE`, `mstatus.MIE`); reads 0 without the macro. |
+| 0x220 | TGY_CTRL | W | Tau Gallery hardware TGY decoder (`TAU_TGY`, `tau_tgy_regs.sv`, `docs/TGY_HW_DMA.md`; the window 0x220-0x24C is forwarded to `tau_tgy_unit`, reads 0 without the macro). bit 0 START_TILE, 1 LOAD_TABLES, 2 ABORT, 3 CLEAR. |
+| 0x224 | TGY_STATUS | R | `[0]` busy, `[1]` done, `[2]` err, `[3]` tables loaded, `[4]` a start was rejected, `[11:8]` error code (1 decoder or watchdog, 2 tile timeout, 15 abort), `[31]` present. |
+| 0x228 | TGY_SRC | R/W | `[25:0]` SDRAM byte address of the tile stream (any byte). |
+| 0x22C | TGY_LEN | R/W | `[19:0]` stream length in bytes. |
+| 0x230 | TGY_DST | R/W | `[25:0]` SDRAM byte address of the tile's first pixel (RGB888, any byte). |
+| 0x234 | TGY_PITCH | R/W | `[15:0]` bytes from one pixel row to the next. |
+| 0x238 | TGY_GEOM | R/W | `[17:16]` format (0 grey, 2 4:2:0; 1 4:4:4 needs a build with C444), `[15:8]` width, `[7:0]` height of the tile in luma samples (1..128). |
+| 0x23C | TGY_QY | R/W | `[25:0]` SDRAM byte address of the Y quantisation table (64 u16, zigzag, even address). |
+| 0x240 | TGY_QC | R/W | the same for Cb and Cr. |
+| 0x244 | TGY_CYCLES | R | SDRAM-clock cycles the last tile took (valid after done). |
 | 0x1DC-0x1FC | free | | B-287 widened the decode (0x100 upward is open); 0x00-0xFF is full. |
 
 `OP_CHAR` with the font memory: the glyph code is 8 bits, bit 7 is `R_FB_GO` bit 15 (`cmd_glyph_hi[0]`), bits 6:0 are bits 9:3 as before; glyph index 0..94 = U+0020..U+007E, 95..190 = U+00A0..U+00FF, any other code is the blank glyph 0. A command with bit 15 clear is exactly the old one.

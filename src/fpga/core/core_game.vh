@@ -143,6 +143,8 @@ wire [1:0]  soc_fb_cmd_glyph_hi;   // B12 (B-454): BAR's lit-row count, high 2 b
 wire        soc_fb_cmd_full;
 wire        soc_gfx_idle;   wire [31:0] soc_gfx_fence;   wire [8:0] soc_gfx_free;   wire [15:0] soc_gfx_ovf, soc_gfx_underflow;   // Talos 2 T3 status, tau_gfx -> tau_soc
 // Tau Gallery wires (M0.3 viewer, M0.5 landing path): declared before the tau_soc instance that uses them
+// Tau Gallery hardware TGY decoder (TAU_TGY, tau_tgy_unit.sv): the MMIO window tau_soc <-> unit
+wire [9:0]  soc_tgy_addr;  wire soc_tgy_we;  wire [31:0] soc_tgy_wdata, soc_tgy_rdata;  wire soc_tgy_hit, soc_tgy_irq;
 wire [24:0] soc_land_base;  wire soc_land_clear;  wire land_idle_w;  wire [31:0] land_words_w, land_ovf_w;   // Tau Gallery landing path (M0.5), tau_soc <-> tau_land
 wire        soc_view_req;   wire [24:0] soc_view_base;   wire [15:0] soc_view_stride;   // Tau Gallery viewer (M0.3), tau_soc -> tau_gfx
 wire        gfx_vid_cur, gfx_vid_pend;   wire [15:0] gfx_vid_switches;   // and tau_gfx -> tau_soc
@@ -373,6 +375,16 @@ wire [31:0] soc_sdram_wb_debug_adapter_rdata, soc_sdram_wb_debug_cpu_rdata;
 `else
 `define TAU_LAND_EN 0
 `endif
+// Hardware TGY decoder (tau_tgy_unit.sv + tau_sdram_dmux.sv): the MMIO window 0x220-0x24C of tau_soc (TGY_ENABLE), a read/write secondary client on the CPU scheduler port behind the landing path's mux
+// (needs TAU_LAND), interrupt source 4. CORE_VERSION rev 29 with TAU_RAM_128K.
+`ifdef TAU_TGY
+`ifndef TAU_LAND
+`TAU_TGY_NEEDS_TAU_LAND   // TAU_TGY shares the CPU scheduler port behind the landing path's mux: define TAU_LAND too (this undefined macro is the error)
+`endif
+`define TAU_TGY_EN 1
+`else
+`define TAU_TGY_EN 0
+`endif
 `ifdef TAU_IRQ
 `define TAU_IRQ_EN 1
 `else
@@ -458,9 +470,9 @@ assign soc_vblank_rd = 17'd0;
 `endif
 
 `ifdef TAU_PHASE2_WINDOW
-tau_soc #(.VIEW_ENABLE(`TAU_VIEW_EN), .LAND_ENABLE(`TAU_LAND_EN), .IRQ_ENABLE(`TAU_IRQ_EN), .PHASE2_WINDOW_ENABLE(1), .PSRAM_WINDOW_ENABLE(`TAU_PSRAM_WIN_EN), .PSRAM_IFETCH_ENABLE(`TAU_PSRAM_IFE_EN), .SDRAM_BUSY_ENABLE(`TAU_SDR_BUSY_EN), .BLIT_ENABLE(`TAU_BLIT_EN), .VBLANK_ENABLE(`TAU_VBLANK_EN), .SPEC_ENABLE(`TAU_SPEC_EN), .WAVE_ENABLE(`TAU_WAVE_EN), .STATS_ENABLE(`TAU_STATS_EN), .POLY_ENABLE(`TAU_POLY_EN), .DBUF_ENABLE(`TAU_DBUF_EN), .LPC_ENABLE(`TAU_LPC_EN), .CYMO_RESAMP_ENABLE(`TAU_CYMO_RESAMP_EN), .I2S_DIAG_ENABLE(`TAU_I2S_DIAG_EN), .AUDIO16_ENABLE(`TAU_AUDIO16_EN), .GAIN_ENABLE(`TAU_GAIN_EN), .PCM_RING_ENABLE(`TAU_PCM_RING_EN), .GAIN_BOOST(`TAU_GAIN_BOOST_EN), .HALCYON_ENABLE(`TAU_HALCYON_EN), .WIDE_EQ_ENABLE(`TAU_WIDE_EQ_EN), .FONT_RAM_ENABLE(`TAU_FONT_RAM_EN), .RTC_ENABLE(`TAU_RTC_EN), .SDA_ENABLE(`TAU_SDA_EN), .WDOG_ENABLE(`TAU_WDOG_EN)) u_soc (
+tau_soc #(.VIEW_ENABLE(`TAU_VIEW_EN), .LAND_ENABLE(`TAU_LAND_EN), .TGY_ENABLE(`TAU_TGY_EN), .IRQ_ENABLE(`TAU_IRQ_EN), .PHASE2_WINDOW_ENABLE(1), .PSRAM_WINDOW_ENABLE(`TAU_PSRAM_WIN_EN), .PSRAM_IFETCH_ENABLE(`TAU_PSRAM_IFE_EN), .SDRAM_BUSY_ENABLE(`TAU_SDR_BUSY_EN), .BLIT_ENABLE(`TAU_BLIT_EN), .VBLANK_ENABLE(`TAU_VBLANK_EN), .SPEC_ENABLE(`TAU_SPEC_EN), .WAVE_ENABLE(`TAU_WAVE_EN), .STATS_ENABLE(`TAU_STATS_EN), .POLY_ENABLE(`TAU_POLY_EN), .DBUF_ENABLE(`TAU_DBUF_EN), .LPC_ENABLE(`TAU_LPC_EN), .CYMO_RESAMP_ENABLE(`TAU_CYMO_RESAMP_EN), .I2S_DIAG_ENABLE(`TAU_I2S_DIAG_EN), .AUDIO16_ENABLE(`TAU_AUDIO16_EN), .GAIN_ENABLE(`TAU_GAIN_EN), .PCM_RING_ENABLE(`TAU_PCM_RING_EN), .GAIN_BOOST(`TAU_GAIN_BOOST_EN), .HALCYON_ENABLE(`TAU_HALCYON_EN), .WIDE_EQ_ENABLE(`TAU_WIDE_EQ_EN), .FONT_RAM_ENABLE(`TAU_FONT_RAM_EN), .RTC_ENABLE(`TAU_RTC_EN), .SDA_ENABLE(`TAU_SDA_EN), .WDOG_ENABLE(`TAU_WDOG_EN)) u_soc (
 `else
-tau_soc #(.VIEW_ENABLE(`TAU_VIEW_EN), .LAND_ENABLE(`TAU_LAND_EN), .IRQ_ENABLE(`TAU_IRQ_EN), .SDRAM_BUSY_ENABLE(`TAU_SDR_BUSY_EN), .BLIT_ENABLE(`TAU_BLIT_EN), .VBLANK_ENABLE(`TAU_VBLANK_EN), .SPEC_ENABLE(`TAU_SPEC_EN), .WAVE_ENABLE(`TAU_WAVE_EN), .STATS_ENABLE(`TAU_STATS_EN), .POLY_ENABLE(`TAU_POLY_EN), .DBUF_ENABLE(`TAU_DBUF_EN), .LPC_ENABLE(`TAU_LPC_EN), .CYMO_RESAMP_ENABLE(`TAU_CYMO_RESAMP_EN), .I2S_DIAG_ENABLE(`TAU_I2S_DIAG_EN), .AUDIO16_ENABLE(`TAU_AUDIO16_EN), .GAIN_ENABLE(`TAU_GAIN_EN), .PCM_RING_ENABLE(`TAU_PCM_RING_EN), .GAIN_BOOST(`TAU_GAIN_BOOST_EN), .HALCYON_ENABLE(`TAU_HALCYON_EN), .WIDE_EQ_ENABLE(`TAU_WIDE_EQ_EN), .FONT_RAM_ENABLE(`TAU_FONT_RAM_EN), .RTC_ENABLE(`TAU_RTC_EN), .SDA_ENABLE(`TAU_SDA_EN), .WDOG_ENABLE(`TAU_WDOG_EN)) u_soc (
+tau_soc #(.VIEW_ENABLE(`TAU_VIEW_EN), .LAND_ENABLE(`TAU_LAND_EN), .TGY_ENABLE(`TAU_TGY_EN), .IRQ_ENABLE(`TAU_IRQ_EN), .SDRAM_BUSY_ENABLE(`TAU_SDR_BUSY_EN), .BLIT_ENABLE(`TAU_BLIT_EN), .VBLANK_ENABLE(`TAU_VBLANK_EN), .SPEC_ENABLE(`TAU_SPEC_EN), .WAVE_ENABLE(`TAU_WAVE_EN), .STATS_ENABLE(`TAU_STATS_EN), .POLY_ENABLE(`TAU_POLY_EN), .DBUF_ENABLE(`TAU_DBUF_EN), .LPC_ENABLE(`TAU_LPC_EN), .CYMO_RESAMP_ENABLE(`TAU_CYMO_RESAMP_EN), .I2S_DIAG_ENABLE(`TAU_I2S_DIAG_EN), .AUDIO16_ENABLE(`TAU_AUDIO16_EN), .GAIN_ENABLE(`TAU_GAIN_EN), .PCM_RING_ENABLE(`TAU_PCM_RING_EN), .GAIN_BOOST(`TAU_GAIN_BOOST_EN), .HALCYON_ENABLE(`TAU_HALCYON_EN), .WIDE_EQ_ENABLE(`TAU_WIDE_EQ_EN), .FONT_RAM_ENABLE(`TAU_FONT_RAM_EN), .RTC_ENABLE(`TAU_RTC_EN), .SDA_ENABLE(`TAU_SDA_EN), .WDOG_ENABLE(`TAU_WDOG_EN)) u_soc (
 `endif
     .clk     (clk_sys),
     .rst     (cpu_reset),
@@ -530,6 +542,7 @@ tau_soc #(.VIEW_ENABLE(`TAU_VIEW_EN), .LAND_ENABLE(`TAU_LAND_EN), .IRQ_ENABLE(`T
     .fb_gfx_idle(soc_gfx_idle), .fb_gfx_fence(soc_gfx_fence), .fb_gfx_free(soc_gfx_free), .fb_gfx_ovf(soc_gfx_ovf), .fb_gfx_underflow(soc_gfx_underflow),
     .fb_view_req(soc_view_req), .fb_view_base(soc_view_base), .fb_view_stride(soc_view_stride), .fb_vid_cur(gfx_vid_cur), .fb_vid_pend(gfx_vid_pend), .fb_vid_switches(gfx_vid_switches),
     .fb_land_base(soc_land_base), .fb_land_clear(soc_land_clear), .fb_land_idle(land_idle_w), .fb_land_words(land_words_w), .fb_land_ovf(land_ovf_w),
+    .fb_tgy_addr(soc_tgy_addr), .fb_tgy_we(soc_tgy_we), .fb_tgy_wdata(soc_tgy_wdata), .fb_tgy_hit(soc_tgy_hit), .fb_tgy_rdata(soc_tgy_rdata), .fb_tgy_irq(soc_tgy_irq),
 
     .dt_addr  (soc_dt_addr),
     .dt_wren  (soc_dt_wren),
@@ -826,6 +839,37 @@ tau_land u_land (
     .clk_mem(clk_sdram), .rst_mem(sa_rst_sdram), .a_valid(ld_valid), .a_ready(ld_ready), .a_we(ld_we), .a_addr(ld_addr), .a_len(ld_len),
     .a_w_next(ld_next), .a_w_idx(ld_idx), .a_w_data(ld_wdata), .a_done(ld_done)
 );
+`ifdef TAU_TGY
+// Hardware TGY decoder: the scheduler's CPU port is shared by three clients, the CPU (and, behind tau_sdram_p2mux, the landing path) and the decoder's DMA, which reads the stream and the tables and writes the pixel
+// rows (tau_sdram_dmux: D is granted the port only while the CPU side is idle, one request at a time).
+wire        pm_valid, pm_ready, pm_we, pm_next, pm_r_valid, pm_r_last, pm_done;  wire [24:0] pm_addr;  wire [9:0] pm_len, pm_idx;  wire [15:0] pm_wdata, pm_r_data;  wire [1:0] pm_be;
+tau_sdram_p2mux u_p2mux (
+    .clk(clk_sdram), .rst(sa_rst_sdram),
+    .c_valid(cb_req_valid), .c_ready(cb_req_ready), .c_we(cb_req_we), .c_addr(cb_req_addr), .c_len(cb_req_len), .c_next(cb_w_next), .c_idx(cb_w_idx),
+    .c_wdata(cb_w_data), .c_be(cb_w_be), .c_r_valid(cb_r_valid), .c_r_data(cb_r_data), .c_r_last(cb_r_last), .c_done(cb_done),
+    .l_valid(ld_valid), .l_ready(ld_ready), .l_addr(ld_addr), .l_len(ld_len), .l_next(ld_next), .l_idx(ld_idx), .l_wdata(ld_wdata), .l_done(ld_done),
+    .s_valid(pm_valid), .s_ready(pm_ready), .s_we(pm_we), .s_addr(pm_addr), .s_len(pm_len),
+    .s_next(pm_next), .s_idx(pm_idx), .s_wdata(pm_wdata), .s_be(pm_be),
+    .s_r_valid(pm_r_valid), .s_r_data(pm_r_data), .s_r_last(pm_r_last), .s_done(pm_done)
+);
+wire        td_valid, td_ready, td_we, td_next, td_r_valid, td_r_last, td_done;  wire [24:0] td_addr;  wire [9:0] td_len, td_idx;  wire [15:0] td_wdata, td_r_data;  wire [1:0] td_be;
+tau_sdram_dmux u_dmux (
+    .clk(clk_sdram), .rst(sa_rst_sdram),
+    .c_valid(pm_valid), .c_ready(pm_ready), .c_we(pm_we), .c_addr(pm_addr), .c_len(pm_len), .c_next(pm_next), .c_idx(pm_idx), .c_wdata(pm_wdata), .c_be(pm_be),
+    .c_r_valid(pm_r_valid), .c_r_data(pm_r_data), .c_r_last(pm_r_last), .c_done(pm_done),
+    .d_valid(td_valid), .d_ready(td_ready), .d_we(td_we), .d_addr(td_addr), .d_len(td_len), .d_next(td_next), .d_idx(td_idx), .d_wdata(td_wdata), .d_be(td_be),
+    .d_r_valid(td_r_valid), .d_r_data(td_r_data), .d_r_last(td_r_last), .d_done(td_done),
+    .s_valid(sa_cpu_req_valid), .s_ready(sa_cpu_req_ready), .s_we(sa_cpu_req_we), .s_addr(sa_cpu_req_addr), .s_len(sa_cpu_req_len),
+    .s_next(sa_cpu_w_next), .s_idx(sa_cpu_w_idx), .s_wdata(sa_cpu_w_data), .s_be(sa_cpu_w_be),
+    .s_r_valid(sa_cpu_r_valid), .s_r_data(sa_cpu_r_data), .s_r_last(sa_cpu_r_last), .s_done(sa_cpu_done)
+);
+tau_tgy_unit #(.C444(0)) u_tgy (
+    .clk_sys(clk_sys), .rst_sys(cpu_reset), .reg_addr(soc_tgy_addr), .reg_we(soc_tgy_we), .reg_wdata(soc_tgy_wdata), .reg_hit(soc_tgy_hit), .reg_rdata(soc_tgy_rdata), .irq(soc_tgy_irq),
+    .clk_mem(clk_sdram), .rst_mem(sa_rst_sdram),
+    .p_valid(td_valid), .p_ready(td_ready), .p_we(td_we), .p_addr(td_addr), .p_len(td_len), .p_next(td_next), .p_idx(td_idx), .p_wdata(td_wdata), .p_be(td_be),
+    .p_r_valid(td_r_valid), .p_r_data(td_r_data), .p_r_last(td_r_last), .p_done(td_done)
+);
+`else
 tau_sdram_p2mux u_p2mux (
     .clk(clk_sdram), .rst(sa_rst_sdram),
     .c_valid(cb_req_valid), .c_ready(cb_req_ready), .c_we(cb_req_we), .c_addr(cb_req_addr), .c_len(cb_req_len), .c_next(cb_w_next), .c_idx(cb_w_idx),
@@ -835,10 +879,14 @@ tau_sdram_p2mux u_p2mux (
     .s_next(sa_cpu_w_next), .s_idx(sa_cpu_w_idx), .s_wdata(sa_cpu_w_data), .s_be(sa_cpu_w_be),
     .s_r_valid(sa_cpu_r_valid), .s_r_data(sa_cpu_r_data), .s_r_last(sa_cpu_r_last), .s_done(sa_cpu_done)
 );
+`endif
 `else
 assign sa_cpu_req_valid = cb_req_valid, sa_cpu_req_we = cb_req_we, sa_cpu_req_addr = cb_req_addr, sa_cpu_req_len = cb_req_len, sa_cpu_w_data = cb_w_data, sa_cpu_w_be = cb_w_be;
 assign cb_req_ready = sa_cpu_req_ready, cb_w_next = sa_cpu_w_next, cb_w_idx = sa_cpu_w_idx, cb_r_valid = sa_cpu_r_valid, cb_r_data = sa_cpu_r_data, cb_r_last = sa_cpu_r_last, cb_done = sa_cpu_done;
 assign land_idle_w = 1'b0, land_words_w = 32'd0, land_ovf_w = 32'd0;
+`endif
+`ifndef TAU_TGY
+assign soc_tgy_hit = 1'b0, soc_tgy_rdata = 32'd0, soc_tgy_irq = 1'b0;   // no hardware TGY decoder: the MMIO window 0x220-0x24C reads 0
 `endif
 // Per-port statistics of sched_v (requests, words, busy cycles, worst wait, urgent over the bound, bad requests; ports 0 scan-out, 1 engine, 2 CPU) read through a snapshot window in MMIO 0x1D4/0x1D8.
 `ifdef TAU_SDA_ON

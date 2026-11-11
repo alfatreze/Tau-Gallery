@@ -1078,3 +1078,13 @@ test-rtl-tgy-unit:
 	$(PYTHON) sim/gen_tgy_dec_vectors.py $(RTL_BUILD_DIR)/dec_vec.hex > /dev/null
 	for c in 0 1; do iverilog -g2012 -P tb_tau_tgy_unit.C444=$$c -o $(RTL_BUILD_DIR)/unit_c$$c.out $(TGY_UNIT_SRC) && vvp $(RTL_BUILD_DIR)/unit_c$$c.out +VEC=$(RTL_BUILD_DIR)/dec_vec.hex | /usr/bin/grep -E "^tile|PASSED|FAILED" | tee $(RTL_BUILD_DIR)/unit_c$$c.log; /usr/bin/grep -q "^UNIT PASSED" $(RTL_BUILD_DIR)/unit_c$$c.log || exit 1; done
 	for b in 1 2 3 4 5 6; do iverilog -g2012 -P tb_tau_tgy_unit.C444=1 -P tb_tau_tgy_unit.BUG=$$b -o $(RTL_BUILD_DIR)/unit_m$$b.out $(TGY_UNIT_SRC) && if vvp $(RTL_BUILD_DIR)/unit_m$$b.out +VEC=$(RTL_BUILD_DIR)/dec_vec.hex | /usr/bin/grep -q "^UNIT PASSED"; then echo "MUTANT SURVIVED: $$b"; exit 1; else echo "mutant killed: $$b"; fi; done
+
+# Tau Gallery: tau_soc.v with TGY_ENABLE and the real VexRiscv running sim/fw_tgy/main.c: the MMIO window 0x220-0x24C, the interrupt source 4 and CORE_VERSION rev 29 (-DTAU_TGY) against tau_tgy_unit and the port model; the picture memory compared byte for byte.
+TGY_SOC_SRC = sim/tb_tgy_soc.v build/rtl/tau_soc_sim.v src/fpga/rtl/VexRiscv_Full.v src/fpga/core/pcm_fifo.v src/fpga/core/tau_halcyon.sv src/fpga/core/tau_sdram_addr_decode.sv src/fpga/core/tau_sdram_wb_adapter.sv src/fpga/core/tau_cdc_sync1.sv src/fpga/core/tau_clut_wr.sv src/fpga/core/tau_cymo_resamp.sv src/fpga/core/tau_cymo_feed.sv src/fpga/core/tau_pcm_ring.sv sim/sp_model.v src/fpga/core/tau_tgy_unit.sv src/fpga/core/tau_tgy_regs.sv src/fpga/core/tau_tgy_dma.sv src/fpga/core/tau_tgy_dec.sv src/fpga/core/tau_tgy_tile.sv src/fpga/core/tau_tgy_ent.sv src/fpga/core/tau_tgy_idct.sv src/fpga/core/tau_tgy_recon.sv
+.PHONY: test-rtl-tgy-soc
+test-rtl-tgy-soc: $(RTL_BUILD_DIR)/tau_soc_sim.v
+	$(PYTHON) sim/gen_tgy_dec_vectors.py $(RTL_BUILD_DIR)/dec_vec.hex > /dev/null
+	"$(RV_BIN)/riscv-none-elf-gcc" -march=rv32im -mabi=ilp32 -mno-relax -O2 -ffreestanding -nostdlib -nostartfiles -Wl,--no-warn-rwx-segments -T sim/fw_ifetch/link.ld sim/fw_ifetch/start.S sim/fw_tgy/main.c -o $(RTL_BUILD_DIR)/fw_tgy.elf
+	"$(RV_BIN)/riscv-none-elf-objcopy" -O binary $(RTL_BUILD_DIR)/fw_tgy.elf $(RTL_BUILD_DIR)/fw_tgy.bin
+	$(IVERILOG) -g2012 -Isrc/fpga/core -DTAU_TGY -o $(RTL_BUILD_DIR)/tb_tgy_soc.vvp $(TGY_SOC_SRC)
+	$(VVP) $(RTL_BUILD_DIR)/tb_tgy_soc.vvp +ROM=$(RTL_BUILD_DIR)/fw_tgy.bin +VEC=$(RTL_BUILD_DIR)/dec_vec.hex | tee $(RTL_BUILD_DIR)/tgy_soc.log | tail -20; grep -q "^PASSED" $(RTL_BUILD_DIR)/tgy_soc.log

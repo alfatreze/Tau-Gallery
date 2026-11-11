@@ -1,6 +1,6 @@
 # TGY decoder: SDRAM DMA and register block (simulation only)
 
-Status: bit-exact in simulation against the scheduler port model; not synthesised, not fitted, **not yet instantiated in the core** (no `tau_soc.v` / `core_game.vh` change, no macro in a fit bundle), nothing on a Pocket.
+Status: bit-exact in simulation against the scheduler port model; wired into the core behind `TAU_TGY` (see Integration) and exercised by the real CPU in simulation; not synthesised, not fitted, nothing on a Pocket.
 
 ## Parts
 | Module | File | Test | Role |
@@ -26,9 +26,10 @@ Status: bit-exact in simulation against the scheduler port model; not synthesise
 - `test-rtl-tgy-unit`: the CPU view with two unrelated clocks (66.7 and 100 MHz): registers read back, LOAD_TABLES, START with the immediate busy/not-done check, a start while busy rejected, done, irq, CYCLES, CLEAR, ABORT then a good tile; 6 of 6 register mutants killed (three took a sharper check: a start must clear a stale done flag, irq must rise on err, the done flag must survive until the next start).
 - Caught on the way: the first-row test used the 5-bit row counter, which wraps at 32 rows (a 64-row tile overwrote its first row); a withdrawn-request deadlock when the port stays busy during an error.
 
-## Integration (not done, small)
-1. `tau_soc.v`: forward MMIO 0x220-0x24C to external `fb_tgy_*` ports (address, we, wdata out; hit, rdata, irq in), OR the read data, add `irq` as interrupt source 4; parameter `TGY_ENABLE` (inert at 0).
-2. `core_game.vh` under `TAU_TGY`: instantiate `tau_tgy_unit` (`clk_mem` = the SDRAM clock) and chain `tau_sdram_dmux` between the output of `tau_sdram_p2mux` and the scheduler's CPU port.
-3. The files into `ap_core.qsf` (the listing check `test_check_qsf_files` already lists missing files), a new fit bundle macro `TAU_TGY=1` on top of `tools/gallery_m1b_qsf_append.txt`, then synthesis and the two-seed fit (needs the owner's yes).
-4. Firmware: a small driver (`tgy_hw.c`) that reads the container's tile index and drives the registers tile by tile.
-Clock domain choice: the whole decoder runs on the SDRAM clock, so no pixel or stream data crosses clocks; the cost is that the decoder's multipliers must close at that clock (100 MHz now, 150 MHz later); unmeasured until Quartus.
+## Integration (done 2026-11-11, simulation only; B-1057)
+Behind the macro `TAU_TGY` (needs `TAU_LAND`; off in every existing bundle, and the default SoC is unchanged: the Halcyon SoC test passes with the new ports unconnected):
+1. `tau_soc.v`: parameter `TGY_ENABLE`; ports `fb_tgy_addr / we / wdata` out, `fb_tgy_hit / rdata / irq` in; MMIO 0x220-0x24C forwarded (read data merged into the read mux, reads 0 when off); interrupt source 4 (rising edge of the unit's level) in `IRQ_PEND` 0x214; CORE_VERSION **rev 29 = 0x4D50331D** whenever `TAU_TGY` is defined (checked first in the version chain).
+2. `core_game.vh`: `TAU_TGY_EN`, the three-client chain on the scheduler's CPU port (CPU and landing path through `tau_sdram_p2mux`, then `tau_sdram_dmux` for the decoder), `tau_tgy_unit` with `C444 = 0` (grey and 4:2:0 tiles; 4:4:4 pictures are transcoded by the converter), clocks `clk_sys` and `clk_sdram`; `TAU_TGY` without `TAU_LAND` stops the build (undefined macro on purpose).
+3. `tools/gallery_m1c_qsf_append.txt`: the m1b bundle (128 KB RAM) plus `TAU_TGY=1` and the nine source files (`tau_sdram_dmux` and the eight `tau_tgy_*`); `tau_compat` resolves it to 0x4D50331D. Firmware: `fw2/build_gallery.sh TGY=1` links the gallery into 128 KB for rev 29 (`P2_TGY`); the default and `RAM128=1` builds are unchanged. `docs/MMIO_ALLOCATION.md` lists the registers.
+4. Test: `make test-rtl-tgy-soc`: tau_soc with the real VexRiscv running `sim/fw_tgy/main.c` programs the decoder (tables, tile, status polls, CYCLES, interrupt bit 4, CLEAR) and the picture memory is compared byte for byte; the firmware's 12 console lines (version, status values, busy right after a store, tile done, interrupt) are checked. Not run: the whole core (`core_top`) was not elaborated (the Altera IP models are missing here; a Verilator pass over it shows only missing-IP errors, none from the new code); the first full elaboration is the Quartus synthesis.
+Still to do: the firmware driver (`tgy_hw.c`: container tile index to registers), the Quartus synthesis and two-seed fit (needs the owner's yes and a stated finish time), the Pocket run. Clock domain choice: the whole decoder runs on the SDRAM clock, so no pixel or stream data crosses clocks; the cost is that the decoder's multipliers must close at that clock (100 MHz now, 150 MHz later); unmeasured until Quartus.
