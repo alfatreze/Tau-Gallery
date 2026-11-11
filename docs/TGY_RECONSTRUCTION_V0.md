@@ -1,0 +1,37 @@
+# TGY reconstruction, version 0 (FROZEN 2026-11-11)
+
+Normative. Reference implementation: `tools/gallery/tgy_recon.py`. Conformance vectors: `docs/conformance/tgy_recon_v0_vectors.json` (`tools/gallery/make_tgy_recon_vectors.py` writes them; `sim/test_tgy_recon.py` and `sim/test_tgy_recon_vectors.py` check; `make test-tgy-recon`). Companion of `docs/TGY_SYMBOL_LAYER_V0.md` (the entropy layer): that one produces the quantised coefficients, this one turns them into pixels. The reconstruction is defined to **equal libjpeg-turbo's decode of the same coefficients** (the "libjpeg profile", verified bit for bit against Pillow on baseline and progressive JPEGs, 4:4:4, 4:2:0 and grey, odd and tiny sizes, saturating noise and a real photo crop), except for one deliberate difference at tile seams in the normative **TGY profile** (section 5).
+
+**Change control.** Anything that changes a reconstructed sample is a new version.
+
+## 1. Inputs
+Per component: a grid of blocks of 64 quantised coefficients in zigzag order (the symbol layer's output), the component's quantisation table (64 positive integers in zigzag order, 1 to 65,535), its sampling factors, and the picture's width and height in luma samples. Supported layouts in v0: **grey** (one component), **4:4:4** (three components, factors 1 x 1 each), **4:2:0** (Y 2 x 2, Cb and Cr 1 x 1). Others (4:2:2, 4:4:0, 4:1:1, CMYK) are not defined; the converter transcodes or rejects them. The three components are Y, Cb, Cr with the JFIF YCbCr interpretation.
+
+## 2. Dequantisation
+`F[row][col] = coefficient * q` as an integer product, with the zigzag index mapped to the natural position by `ZZN` (row = vertical frequency, col = horizontal). No clamping.
+
+## 3. Inverse DCT: libjpeg `jpeg_idct_islow` (jidctint.c), 8-bit samples
+Integer arithmetic with CONST_BITS = 13 and PASS1_BITS = 2; the constants are `FIX(x) = round(x * 8192)`: 0.298631336 = 2446, 0.390180644 = 3196, 0.541196100 = 4433, 0.765366865 = 6270, 0.899976223 = 7373, 1.175875602 = 9633, 1.501321110 = 12299, 1.847759065 = 15137, 1.961570560 = 16069, 2.053119869 = 16819, 2.562915447 = 20995, 3.072711026 = 25172. `DESCALE(x, n) = (x + (1 << (n - 1))) >> n` (arithmetic shift).
+**Pass 1, each of the 8 columns, inputs i0..i7 = rows 0..7 of the column:** `z1 = (i2 + i6) * 4433; t2 = z1 - i6 * 15137; t3 = z1 + i2 * 6270; t0 = (i0 + i4) << 13; t1 = (i0 - i4) << 13; t10 = t0 + t3; t13 = t0 - t3; t11 = t1 + t2; t12 = t1 - t2.` Odd part: `a0 = i7; a1 = i5; a2 = i3; a3 = i1; z1 = a0 + a3; z2 = a1 + a2; z3 = a0 + a2; z4 = a1 + a3; z5 = (z3 + z4) * 9633; a0 *= 2446; a1 *= 16819; a2 *= 25172; a3 *= 12299; z1 *= -7373; z2 *= -20995; z3 *= -16069; z4 *= -3196; z3 += z5; z4 += z5; a0 += z1 + z3; a1 += z2 + z4; a2 += z2 + z3; a3 += z1 + z4.` Outputs 0..7 = `t10 + a3, t11 + a2, t12 + a1, t13 + a0, t13 - a0, t12 - a1, t11 - a2, t10 - a3`, each `DESCALE(., 11)`, stored back in the same column of a workspace.
+**Pass 2, each of the 8 rows of the workspace, inputs i0..i7 = columns 0..7:** the same butterfly, each output `DESCALE(out, 13 + 2 + 3)`, that is `DESCALE(out, 18)`, giving a signed value `d` before the level shift.
+**Range limit (libjpeg's post-IDCT table):** `j = d & 1023`; the sample is `j + 128` for j in 0..127, 255 for 128..511, 0 for 512..895, `j - 896` for 896..1023. For `d` in -128..127 that is `d + 128`, and it clamps to 0..255 outside, with libjpeg's wrap beyond +-512 kept (the vectors include a wrapping case). (libjpeg's all-zero-AC shortcuts give identical results to the full computation and are not part of the definition.)
+
+## 4. Colour conversion: libjpeg `jdcolor.c`, 16-bit fixed point
+For x = c - 128: `Cr_r[c] = (FIX16(1.40200) * x + 32768) >> 16`, `Cb_b[c] = (FIX16(1.77200) * x + 32768) >> 16`, `Cr_g[c] = -FIX16(0.71414) * x`, `Cb_g[c] = -FIX16(0.34414) * x + 32768`, with `FIX16(v) = floor(v * 65536 + 0.5)` (91881, 116130, 46802, 22554). Per pixel: `R = clamp(Y + Cr_r[Cr])`, `G = clamp(Y + ((Cb_g[Cb] + Cr_g[Cr]) >> 16))`, `B = clamp(Y + Cb_b[Cb])`, clamp to 0..255. A grey picture has R = G = B = Y.
+
+## 5. Chroma upsampling (4:2:0 only)
+The chroma plane is the blocks' samples cropped to the component's true size, `ceil(width / 2)` by `ceil(height / 2)` (the padding of partial blocks is discarded). Each chroma sample of a plane `p` of width `w` and height `h` becomes 2 x 2 output samples by libjpeg's `h2v2_fancy_upsample` (jdsample.c), a triangle filter with weights 9/16, 3/16, 3/16, 1/16:
+for each output row pair, with `other` = the row above for the first output row and the row below for the second (the first and last row of the plane replicated), `s[x] = 3 * p[x] + other[x]`; then `out[0] = (s[0]*4 + 8) >> 4`, `out[1] = (s[0]*3 + s[1] + 7) >> 4`; for 0 < x < w-1: `out[2x] = (s[x]*3 + s[x-1] + 8) >> 4`, `out[2x+1] = (s[x]*3 + s[x+1] + 7) >> 4`; `out[2w-2] = (s[w-1]*3 + s[w-2] + 8) >> 4`, `out[2w-1] = (s[w-1]*4 + 7) >> 4`. **When w <= 2 libjpeg uses the box filter** (each sample replicated 2 x 2), and so does this specification.
+**Two profiles:**
+- **libjpeg profile:** the filter is applied to the WHOLE chroma plane of the picture. A tile's edge pixels then depend on one chroma sample of each neighbouring tile. Equal to libjpeg-turbo for the whole picture.
+- **TGY profile (normative for TGY files): the filter is applied to each tile's chroma samples on their own** (a chroma tile is 64 x 64 samples, smaller at the right and bottom edges of the picture), the tile's border samples replicated exactly as the plane border is. A tile is then self-contained: it needs no sample of a neighbouring tile. The result equals the libjpeg profile **everywhere except the outermost row and the outermost column of luma samples of each tile** (tested exactly) and everywhere for a picture that is one tile (up to 128 x 128). Measured on 1024 x 1024 crops of the five test photos: 0.2 to 2.2% of the pixels differ, by 1.7 to 3.7 levels on average where they do (maximum 29 on the most saturated crop), 55 to 74 dB PSNR over the crop. 4:4:4 and grey pictures are always exact.
+The reason for the TGY profile is the format's central property, independent tiles (decode, cache and discard any tile in any order). A decoder that holds whole planes (the direct-JPEG path of plan M4) may use the libjpeg profile and match a PC exactly.
+
+## 6. Output
+RGB888, the picture's width and height, in the order R, G, B. The viewer's 5/6/5-bit handheld display is a property of the Pocket, not of this specification.
+
+## 7. Conformance
+`docs/conformance/tgy_recon_v0_vectors.json` carries: single-block IDCT cases (dequantised natural-order input and the 64 samples, including saturation and the range-limit wrap), colour triples, small plane upsampling cases (libjpeg and tile profile), and whole small pictures (quantisation tables, coefficient blocks, and the SHA-256 of the RGB bytes under both profiles). An implementation conforms if it reproduces every output. `sim/test_tgy_recon.py --mutants` shows that 18 plausible one-line deviations (a constant, a shift, a rounding, an edge rule) each break bit equality with libjpeg-turbo.
+
+## 8. Not defined here
+The container (tile offsets, lengths, CRC, the band layout, the fit level), the encoder's quantisation, ICC and colour management (the converter applies them), EXIF orientation (applied by the converter), 16-bit and higher bit depths, TGX.

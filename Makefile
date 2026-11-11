@@ -990,3 +990,10 @@ test-tgy-v0:
 	$(PYTHON) sim/test_tgy_v0.py
 	$(PYTHON) sim/test_tgy_v0.py --mutants
 
+# TGY reconstruction (docs/TGY_RECONSTRUCTION_V0.md): bit-exact against libjpeg-turbo, the JPEG -> tiles -> symbol layer -> pixels chain, the conformance vectors, 18 mutants.
+.PHONY: test-tgy-recon
+test-tgy-recon:
+	$(PYTHON) sim/test_tgy_recon.py
+	$(PYTHON) sim/test_tgy_recon.py --mutants
+	$(PYTHON) sim/test_tgy_recon_vectors.py
+
