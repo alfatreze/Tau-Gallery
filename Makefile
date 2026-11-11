@@ -997,3 +997,10 @@ test-tgy-recon:
 	$(PYTHON) sim/test_tgy_recon.py --mutants
 	$(PYTHON) sim/test_tgy_recon_vectors.py
 
+# TGY container v1 (docs/TGY_CONTAINER_V1.md): round trips, damage, alignment, 13 mutants, conformance vectors.
+.PHONY: test-tgy-container
+test-tgy-container:
+	$(PYTHON) sim/test_tgy_container.py
+	$(PYTHON) sim/test_tgy_container.py --mutants
+	$(PYTHON) sim/test_tgy_container_vectors.py
+

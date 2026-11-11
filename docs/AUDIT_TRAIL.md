@@ -16387,3 +16387,7 @@ New: `tools/gallery/tgymodel.py` (symbol layer over the TVC coder, one binarisat
 
 `tools/gallery/tgy_recon.py` (islow IDCT, range limit, colour tables, fancy upsampling, tile split and reassembly), `docs/TGY_RECONSTRUCTION_V0.md` (normative), `docs/conformance/tgy_recon_v0_vectors.json`, `tools/gallery/make_tgy_recon_vectors.py`, `tools/gallery/measure_tile_upsampling.py`, `sim/test_tgy_recon.py` and `sim/test_tgy_recon_vectors.py` (`make test-tgy-recon`: 14 tests, 18 of 18 mutants killed). Measured: bit-equal with Pillow on every case tried (first run); the JPEG -> tiles -> TGY v0 streams -> pixels chain is lossless and pixel-identical; tile-local chroma upsampling differs from libjpeg in the outermost row and column of each tile only (0.2 to 2.2% of pixels, 55 to 74 dB). Corrections on the way: a garbled sentence in the spec's IDCT section and two dead lines in the vectors test were removed. No hardware or firmware change.
 
+## B-1048: TGY container v1 frozen (owner: "container", 2026-11-11)
+
+Spec, reference writer and reader, converter, pixel-source encoder, vectors, 13 tests and 13 mutants (docs/M3_STREAMING_NOTE.md section 17). Host only: no firmware, RTL or Pocket change.
+
