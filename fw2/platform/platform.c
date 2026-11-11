@@ -6,7 +6,7 @@ extern char _image_end, _tag_start, _stack_top, _stack_size;
 
 /* The package tools read these out of the ROM: the CORE_VERSION list this image accepts, the bitstream features it needs (none yet), and the version field
  * the packagers stamp after the build (tools/tau_version.py). Their exact text is a contract with tools/check_fw_bitstream_pair.py and tools/tau_version.py. */
-static const char p2_pair_marker[] __attribute__((used, retain)) = "TAUFWPAIR:4D50331B;";
+static const char p2_pair_marker[] __attribute__((used, retain)) = "TAUFWPAIR:" P2_CORE_VERSION_HEX ";";
 static const char p2_need_marker[] __attribute__((used, retain)) = "TAUFWNEED:FONT;";
 const char p2_ver_field[48] __attribute__((used, retain)) = "TAUVER:0.6.0";
 

@@ -502,6 +502,12 @@ module tau_soc #(
     reg [7:0] rb1 [0:RS_WORDS_B-1];
     reg [7:0] rb2 [0:RS_WORDS_B-1];
     reg [7:0] rb3 [0:RS_WORDS_B-1];
+`elsif TAU_RAM_128K
+    // Tau Gallery: 128 KB main RAM, ONE power-of-two array (32,768 words per lane), no second region: the gallery firmware needs about 60 KB, and this frees about 64 M10K blocks for the
+    // hardware TGY decoder (docs/M3_STREAMING_NOTE.md section 4). Addresses above 128 KB alias (the link map of the gallery stops at 0x20000).
+    tau_main_ram #(.WORDS_A(32768), .WORDS_B(0), .AW(RAM_AW)) u_main_ram (
+        .clk(clk), .addr(mem_addr), .wdata(mem_wdata), .be(mem_be), .we(mem_we), .rdata(a_rdata)
+    );
 `elsif TAU_RAM_192K
     tau_main_ram #(.WORDS_A(32768), .WORDS_B(16384), .AW(RAM_AW)) u_main_ram (
         .clk(clk), .addr(mem_addr), .wdata(mem_wdata), .be(mem_be), .we(mem_we), .rdata(a_rdata)
@@ -723,6 +729,8 @@ module tau_soc #(
                  ? {rb3[mem_addr[RS_AW_B-1:0]], rb2[mem_addr[RS_AW_B-1:0]], rb1[mem_addr[RS_AW_B-1:0]], rb0[mem_addr[RS_AW_B-1:0]]}
                  : {ra3[mem_addr[RS_AW_A-1:0]], ra2[mem_addr[RS_AW_A-1:0]], ra1[mem_addr[RS_AW_A-1:0]], ra0[mem_addr[RS_AW_A-1:0]]};
     end
+`elsif TAU_RAM_128K
+    wire [31:0] a_rdata;     // driven by u_main_ram (128 KB, single region)
 `elsif TAU_RAM_192K
     // a_rdata is driven structurally by u_main_ram (declared above, alongside
     // the array declarations it replaces) -- must be a net, not a reg, here.
@@ -1021,7 +1029,10 @@ module tau_soc #(
     // stale RTL. That has already happened three times here, each time looking
     // like a logic bug (dead peripheral, no audio, unresponsive buttons) rather
     // than what it was. BUMP THIS whenever the MMIO map changes.
-`ifdef TAU_CLK66
+`ifdef TAU_RAM_128K
+    // Tau Gallery 128 KB main RAM: a different contract from the 192 KB one (a firmware linked for 192 KB must be refused, and the gallery firmware linked for 128 KB must refuse the older core).
+    localparam [31:0] CORE_VERSION = 32'h4D50331C;   // "MP3" + rev 28 (rev 27 + 128 KB main RAM)
+`elsif TAU_CLK66
     // B-338: clk_sys 60 -> 66.667 MHz is also a different contract (every cycle-counted deadline in firmware runs 11.1% faster); a firmware
     // linked for 60 MHz (CLK_HZ=60000000) must be refused here for the same reason RAM_192K refuses a 256 KB firmware.
  `ifdef TAU_RAM_192K

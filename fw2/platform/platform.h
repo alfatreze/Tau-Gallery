@@ -12,7 +12,13 @@ typedef struct {
 extern caps_t caps;
 
 /* The CORE_VERSION values this image accepts (192 KB + CLK66 + writable font memory bitstream, rev 27). The same text is in the ROM as TAUFWPAIR (platform.c) for the package checks. */
+#ifdef P2_RAM128   /* Tau Gallery on the 128 KB core (rev 28, build_gallery.sh RAM128=1) */
+#define P2_CORE_VERSION 0x4D50331Cu
+#define P2_CORE_VERSION_HEX "4D50331C"
+#else
 #define P2_CORE_VERSION 0x4D50331Bu
+#define P2_CORE_VERSION_HEX "4D50331B"
+#endif
 
 void platform_probe(void);                       /* fills caps */
 int  platform_version_ok(void);

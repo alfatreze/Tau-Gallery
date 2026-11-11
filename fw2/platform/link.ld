@@ -2,8 +2,10 @@
  * ROM and RAM are the same on-chip memory at 0x0. MMIO is at 0x8000_0000 and is reached through volatile pointers (platform/mmio.h).
  * Layout, low to high:  .text .rodata .data .bss | free | tag landing zone | compressed-data ring (APF DMA target) | stack
  * The ring and the tag zone are carved out explicitly (they are DMA targets: an overlap would corrupt audio, not fail cleanly). */
+/* RAM size: 192 KB unless the build passes -Wl,--defsym=__ram_size=N (the gallery on the 128 KB core, fw2/build_gallery.sh RAM128=1). */
+_ram_size = DEFINED(__ram_size) ? __ram_size : 0x30000;
 MEMORY {
-	ram   : ORIGIN = 0x00000000, LENGTH = 0x00030000
+	ram   : ORIGIN = 0x00000000, LENGTH = _ram_size
 	/* Cold image (spec P5): read-only data in the PSRAM window at 8 MiB (loaded at boot from tau-cold.bin, data slot 6), code executed from the same PSRAM through the instruction alias
 	 * (PSRAM byte offset = address - 0x2400_0000). One 1 MiB region carries both, data first. Same addresses as the old player and the bitstream's instruction fetch. */
 	pcold : ORIGIN = 0xA4800000, LENGTH = 0x00100000

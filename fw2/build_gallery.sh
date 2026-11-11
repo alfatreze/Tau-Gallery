@@ -13,7 +13,9 @@ OUT="${TAU_BUILD_OUT:-$ROOT/work/diagnostics}/$OUTNAME"; mkdir -p "$OUT"
 rm -f "$OUT/fw2.elf" "$OUT/tau.rom"
 SRCS=("$FW2/platform/start.S" "$FW2/platform/platform.c" "$FW2/platform/libc_min.c" "$FW2/gfx/gfx.c" "$FW2/stream/slot.c"
       "$FW2/gallery/gallery_pattern.c" "$FW2/gallery/gallery_hw.c" "${MAINSRC[@]}")
-DEFS=(-DP2_DIAG=0 -DP2_GALLERY=1)
+DEFS=(-DP2_DIAG=0 -DP2_GALLERY=1); LDEXTRA=()
+# RAM128=1: the gallery for the 128 KB core (CORE_VERSION rev 28, tools/gallery_m1b_qsf_append.txt): link into 128 KB and accept only that core.
+if [ "${RAM128:-0}" = "1" ]; then DEFS+=(-DP2_RAM128); LDEXTRA=(-Wl,--defsym=__ram_size=0x20000); fi
 CFLAGS=(-march=rv32im -mabi=ilp32 -mno-relax -O2 -ffreestanding -nostartfiles -nostdlib -ffunction-sections -fdata-sections -Wall -Wextra -Wno-unused-parameter)
 OBJ="$OUT/obj"; rm -rf "$OBJ"; mkdir -p "$OBJ"; : > "$OUT/build.log"; OBJS=()
 for src in "${SRCS[@]}"; do
@@ -21,7 +23,7 @@ for src in "${SRCS[@]}"; do
     "$GCC" "${DEFS[@]}" "${CFLAGS[@]}" -c "$src" -o "$o" 2>> "$OUT/build.log" || { grep -v "LOAD segment with RWX" "$OUT/build.log" >&2; echo "*** Gallery COMPILE FAILED ***" >&2; exit 1; }
     OBJS+=("$o")
 done
-"$GCC" "${CFLAGS[@]}" -Wl,--gc-sections -T "$FW2/platform/link.ld" -o "$OUT/fw2.elf" "${OBJS[@]}" -lgcc 2>> "$OUT/build.log" || { grep -v "LOAD segment with RWX" "$OUT/build.log" >&2; echo "*** Gallery LINK FAILED ***" >&2; exit 1; }
+"$GCC" "${CFLAGS[@]}" -Wl,--gc-sections -T "$FW2/platform/link.ld" "${LDEXTRA[@]+"${LDEXTRA[@]}"}" -o "$OUT/fw2.elf" "${OBJS[@]}" -lgcc 2>> "$OUT/build.log" || { grep -v "LOAD segment with RWX" "$OUT/build.log" >&2; echo "*** Gallery LINK FAILED ***" >&2; exit 1; }
 grep -v "LOAD segment with RWX" "$OUT/build.log" >&2 || true
 "$SIZE" "$OUT/fw2.elf"
 [ "$("$NM" "$OUT/fw2.elf" | awk '$3 == "_start" { print $1 }')" = "00000000" ] || { echo "*** _start is not at address 0 ***" >&2; exit 1; }
