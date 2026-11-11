@@ -10,6 +10,7 @@
 // BUG (test only): 0 = correct; 1..13 = one deliberate fault each, killed by sim/tb_tau_tgy_tile.v.
 module tau_tgy_tile #(parameter integer C444 = 0, parameter integer BUG = 0) (
     input  wire        clk, rst,
+    input  wire        clk_q,                // the clock of the quantisation table write port (the SDRAM clock when the DMA loads the tables; clk when the unit has one clock)
     input  wire        qwe, qsel,
     input  wire [5:0]  qidx,
     input  wire [15:0] qval,
@@ -104,7 +105,7 @@ module tau_tgy_tile #(parameter integer C444 = 0, parameter integer BUG = 0) (
 
     // ---- quantisation tables: [0..63] Y, [64..127] Cb/Cr, zigzag order
     reg [15:0] qmem [0:127];
-    always @(posedge clk) if (qwe) qmem[{qsel, qidx}] <= qval;
+    always @(posedge clk_q) if (qwe) qmem[{qsel, qidx}] <= qval;      // written while the decoder is idle (cmd_tables), read by the dequantiser on clk: a two clock RAM
 
     // ---- state
     localparam [3:0] S_IDLE = 0, S_NEXT = 1, S_DEC1 = 2, S_DEC = 3, S_FLUSH = 4, S_IDCT = 5, S_RECON = 6, S_OUT = 7;

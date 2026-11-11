@@ -1,5 +1,5 @@
 // tau_tgy_unit.sv -- the TGY hardware decoder as the core will see it: register block (clk_sys MMIO) + DMA and decoder (clk_mem) with one scheduler client port (for tau_sdram_dmux, secondary client D).
-// Not instantiated in the core yet (docs/TGY_HW_DMA.md "Integration"). BUG selects mutants of tau_tgy_regs (1..6) or of tau_tgy_dma (11..20 = DMA BUG 1..10) for the testbench.
+// Not instantiated in the core yet (docs/TGY_HW_DMA.md "Integration"). BUG selects mutants of tau_tgy_regs (1..6) or of tau_tgy_dma (11..20 = DMA BUG 1..10, 21..24 = the decoder-clock half's BUG 1..4) for the testbench. Clocks: clk_sys (registers), clk_mem (SDRAM, the DMA), clk_dec (the decoder).
 module tau_tgy_unit #(parameter integer C444 = 0, parameter integer BUG = 0, parameter [23:0] TMO = 24'hFFFFFF) (
     input  wire        clk_sys, rst_sys,
     input  wire [9:0]  reg_addr,
@@ -9,6 +9,7 @@ module tau_tgy_unit #(parameter integer C444 = 0, parameter integer BUG = 0, par
     output wire [31:0] reg_rdata,
     output wire        irq,
     input  wire        clk_mem, rst_mem,
+    input  wire        clk_dec,           // the decoder clock (50 MHz), asynchronous to the other two
     output wire        p_valid,
     input  wire        p_ready,
     output wire        p_we,
@@ -28,7 +29,8 @@ module tau_tgy_unit #(parameter integer C444 = 0, parameter integer BUG = 0, par
     tau_tgy_regs #(.BUG(BUG < 10 ? BUG : 0)) regs (.clk_sys(clk_sys), .rst_sys(rst_sys), .reg_addr(reg_addr), .reg_we(reg_we), .reg_wdata(reg_wdata), .reg_hit(reg_hit), .reg_rdata(reg_rdata), .irq(irq),
         .clk_mem(clk_mem), .rst_mem(rst_mem), .cfg_src(cfg_src), .cfg_dst(cfg_dst), .cfg_qy(cfg_qy), .cfg_qc(cfg_qc), .cfg_len(cfg_len), .cfg_pitch(cfg_pitch), .cfg_fmt(cfg_fmt), .cfg_w(cfg_w), .cfg_h(cfg_h),
         .cmd_tile(cmd_tile), .cmd_tables(cmd_tables), .cmd_abort(cmd_abort), .ev_done(ev_done), .ev_err(ev_err), .ev_tables(ev_tables), .err_code(err_code), .tile_cycles(tile_cycles));
-    tau_tgy_dma #(.C444(C444), .BUG(BUG >= 11 ? BUG - 10 : 0), .TMO(TMO)) dma (.clk(clk_mem), .rst(rst_mem), .cfg_src(cfg_src), .cfg_dst(cfg_dst), .cfg_qy(cfg_qy), .cfg_qc(cfg_qc), .cfg_len(cfg_len), .cfg_pitch(cfg_pitch),
+    reg [2:0] rsd = 3'b111; always @(posedge clk_dec) rsd <= {rsd[1:0], rst_mem};      // reset released synchronously in the decoder clock domain
+    tau_tgy_dma #(.C444(C444), .BUG(BUG >= 11 ? BUG - 10 : 0), .TMO(TMO)) dma (.clk(clk_mem), .rst(rst_mem), .clk_dec(clk_dec), .rst_dec(rsd[2]), .cfg_src(cfg_src), .cfg_dst(cfg_dst), .cfg_qy(cfg_qy), .cfg_qc(cfg_qc), .cfg_len(cfg_len), .cfg_pitch(cfg_pitch),
         .cfg_fmt(cfg_fmt), .cfg_w(cfg_w), .cfg_h(cfg_h), .cmd_tile(cmd_tile), .cmd_tables(cmd_tables), .cmd_abort(cmd_abort), .busy(busy), .ev_done(ev_done), .ev_err(ev_err), .ev_tables(ev_tables), .err_code(err_code), .tile_cycles(tile_cycles),
         .p_valid(p_valid), .p_ready(p_ready), .p_we(p_we), .p_addr(p_addr), .p_len(p_len), .p_next(p_next), .p_idx(p_idx), .p_wdata(p_wdata), .p_be(p_be), .p_r_valid(p_r_valid), .p_r_data(p_r_data), .p_r_last(p_r_last), .p_done(p_done));
 endmodule

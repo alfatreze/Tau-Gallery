@@ -23,6 +23,7 @@ module mf_pllbase_0002 (
     output wire outclk_1,
     output wire outclk_2,
     output wire outclk_3,
+    output wire outclk_4,   // TAU_TGY: 50 MHz, the hardware TGY decoder's clock (600 MHz VCO / 12); 0 without the macro
     output wire locked
 );
 
@@ -30,7 +31,11 @@ module mf_pllbase_0002 (
         .fractional_vco_multiplier("true"),
         .reference_clock_frequency("74.25 MHz"),
         .operation_mode("normal"),
+`ifdef TAU_TGY
+        .number_of_clocks(5),
+`else
         .number_of_clocks(4),
+`endif
         `ifdef TAU_CLK66
         .output_clock_frequency0("66.666667 MHz"),   // clk_sys, N=9 of the same 600 MHz VCO
 `else
@@ -60,7 +65,11 @@ module mf_pllbase_0002 (
 `endif
         .phase_shift3("0 ps"),
         .duty_cycle3(50),
+`ifdef TAU_TGY
+        .output_clock_frequency4("50.000000 MHz"),   // the hardware TGY decoder (docs/TGY_HW_CLOCK.md): its logic needs about 15 ns, a 100 MHz clock failed by 5 ns
+`else
         .output_clock_frequency4("0 MHz"),
+`endif
         .phase_shift4("0 ps"),
         .duty_cycle4(50),
         .output_clock_frequency5("0 MHz"),
@@ -106,11 +115,18 @@ module mf_pllbase_0002 (
         .pll_subtype("General")
     ) altera_pll_i (
         .rst      (rst),
+`ifdef TAU_TGY
+        .outclk   ({outclk_4, outclk_3, outclk_2, outclk_1, outclk_0}),
+`else
         .outclk   ({outclk_3, outclk_2, outclk_1, outclk_0}),
+`endif
         .locked   (locked),
         .fboutclk (),
         .fbclk    (1'b0),
         .refclk   (refclk)
     );
+`ifndef TAU_TGY
+    assign outclk_4 = 1'b0;
+`endif
 
 endmodule

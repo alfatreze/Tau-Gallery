@@ -4,6 +4,7 @@
 // (px_valid, px_x, px_y, px_r/g/b, px_last; `hold` pauses between rows). done after the last pixel; err (pulse) if the decoder or the watchdog gave up (the unit is idle again). docs/TGY_HW_DECODER.md.
 module tau_tgy_dec #(parameter integer C444 = 0) (
     input  wire        clk, rst,
+    input  wire        clk_q,            // the quantisation table write port's clock (see tau_tgy_tile)
     input  wire        qwe, qsel,
     input  wire [5:0]  qidx,
     input  wire [15:0] qval,
@@ -24,7 +25,7 @@ module tau_tgy_dec #(parameter integer C444 = 0) (
     wire dec_tile, dec_blk, dec_abort, dec_left, dec_above, c_we, blk_done, dec_err; wire [1:0] dec_comp; wire [3:0] dec_bx; wire [5:0] c_zz; wire signed [15:0] c_val;
     reg [19:0] len_r; always @(posedge clk) if (start) len_r <= tile_len;
     wire tile_err;
-    tau_tgy_tile #(.C444(C444)) tile (.clk(clk), .rst(rst), .qwe(qwe), .qsel(qsel), .qidx(qidx), .qval(qval), .start(start), .fmt(fmt), .tw(tw), .th(th), .busy(busy), .done(done), .err(tile_err),
+    tau_tgy_tile #(.C444(C444)) tile (.clk(clk), .rst(rst), .clk_q(clk_q), .qwe(qwe), .qsel(qsel), .qidx(qidx), .qval(qval), .start(start), .fmt(fmt), .tw(tw), .th(th), .busy(busy), .done(done), .err(tile_err),
         .dec_tile(dec_tile), .dec_blk(dec_blk), .dec_abort(dec_abort), .dec_comp(dec_comp), .dec_bx(dec_bx), .dec_left(dec_left), .dec_above(dec_above), .c_we(c_we), .c_zz(c_zz), .c_val(c_val),
         .blk_done(blk_done), .dec_err(dec_err), .hold(hold), .px_valid(px_valid), .px_x(px_x), .px_y(px_y), .px_r(px_r), .px_g(px_g), .px_b(px_b), .px_last(px_last));
     assign err = tile_err;

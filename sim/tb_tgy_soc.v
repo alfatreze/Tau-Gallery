@@ -4,8 +4,8 @@
 `timescale 1ns/1ps
 `default_nettype none
 module tb_tgy_soc;
-    reg clk = 0, clk74 = 0, clkm = 0, rst = 1;
-    always #8.333 clk = ~clk; always #6.734 clk74 = ~clk74; always #5 clkm = ~clkm;
+    reg clk = 0, clk74 = 0, clkm = 0, clkd = 0, rst = 1;
+    always #8.333 clk = ~clk; always #6.734 clk74 = ~clk74; always #5 clkm = ~clkm; initial begin #3.3; forever #10 clkd = ~clkd; end
     reg ld_wr = 0; reg [31:0] ld_addr = 0; reg [7:0] ld_data = 0; reg [7:0] rom [0:65535];
     integer rom_n, fd, i, errors = 0; reg [1023:0] romfile; reg [8*200-1:0] vecfile;
     wire [4:0] set_idx; wire set_wr; wire [31:0] set_wdata; wire [15:0] audio_l, audio_r;
@@ -22,7 +22,7 @@ module tb_tgy_soc;
         .audio_l(audio_l), .audio_r(audio_r));
     wire p_valid, p_ready, p_we, p_next, p_r_valid, p_r_last, p_done; wire [24:0] p_addr; wire [9:0] p_len, p_idx; wire [15:0] p_wdata, p_r_data; wire [1:0] p_be;
     tau_tgy_unit #(.C444(0)) u_tgy (.clk_sys(clk), .rst_sys(rst), .reg_addr(tg_addr), .reg_we(tg_we), .reg_wdata(tg_wdata), .reg_hit(tg_hit), .reg_rdata(tg_rdata), .irq(tg_irq),
-        .clk_mem(clkm), .rst_mem(rst), .p_valid(p_valid), .p_ready(p_ready), .p_we(p_we), .p_addr(p_addr), .p_len(p_len), .p_next(p_next), .p_idx(p_idx), .p_wdata(p_wdata), .p_be(p_be),
+        .clk_mem(clkm), .rst_mem(rst), .clk_dec(clkd), .p_valid(p_valid), .p_ready(p_ready), .p_we(p_we), .p_addr(p_addr), .p_len(p_len), .p_next(p_next), .p_idx(p_idx), .p_wdata(p_wdata), .p_be(p_be),
         .p_r_valid(p_r_valid), .p_r_data(p_r_data), .p_r_last(p_r_last), .p_done(p_done));
     sp_model #(.SEED(41), .MEMW(18), .RDYPCT(70)) port (.clk(clkm), .rst(rst), .valid(p_valid), .ready(p_ready), .we(p_we), .addr(p_addr), .len(p_len), .w_next(p_next), .w_idx(p_idx), .w_data(p_wdata), .w_be(p_be),
         .r_valid(p_r_valid), .r_data(p_r_data), .r_last(p_r_last), .done(p_done), .stall(1'b0));

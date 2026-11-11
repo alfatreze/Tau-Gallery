@@ -8,7 +8,7 @@ module tb_tau_tgy_dec;
     reg clk = 0, rst = 1; always #5 clk = ~clk;
     reg qwe = 0, qsel = 0; reg [5:0] qidx = 0; reg [15:0] qval = 0; reg start = 0; reg [1:0] fmt = 0; reg [7:0] tw = 0, th = 0; reg [19:0] tile_len = 0;
     reg in_valid = 0; reg [31:0] in_word = 0; wire in_ready; reg hold = 0; wire busy, done, err, px_valid, px_last; wire [6:0] px_x, px_y; wire [7:0] px_r, px_g, px_b;
-    tau_tgy_dec #(.C444(C444)) dut (.clk(clk), .rst(rst), .qwe(qwe), .qsel(qsel), .qidx(qidx), .qval(qval), .start(start), .fmt(fmt), .tw(tw), .th(th), .tile_len(tile_len), .in_valid(in_valid), .in_word(in_word), .in_ready(in_ready),
+    tau_tgy_dec #(.C444(C444)) dut (.clk(clk), .rst(rst), .clk_q(clk), .qwe(qwe), .qsel(qsel), .qidx(qidx), .qval(qval), .start(start), .fmt(fmt), .tw(tw), .th(th), .tile_len(tile_len), .in_valid(in_valid), .in_word(in_word), .in_ready(in_ready),
         .hold(hold), .busy(busy), .done(done), .err(err), .px_valid(px_valid), .px_x(px_x), .px_y(px_y), .px_r(px_r), .px_g(px_g), .px_b(px_b), .px_last(px_last));
     reg [63:0] mem [0:SLOT * 12];
     reg [8*200-1:0] vecfile; integer nt, t, errors = 0, base, f, w, h, len, npx, nlast, cyc, bad_order, errs_seen, dones_seen, nw, wi, exp_x, exp_y, skipped = 0, ran = 0, j; reg [31:0] lfsr = 32'h13579BDF; reg hold_en, feeding = 0; time t0;

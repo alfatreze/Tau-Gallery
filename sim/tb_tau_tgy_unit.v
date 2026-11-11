@@ -8,11 +8,11 @@ module tb_tau_tgy_unit;
     parameter integer BUG = 0;
     parameter integer C444 = 1;
     localparam integer STREAM_WORDS = 3300, OFF_STREAM = 34, OFF_EXP = 34 + STREAM_WORDS, SLOT = OFF_EXP + 3 * 2048, MEMW = 18, MEMB = 2 << MEMW;
-    reg clk_sys = 0, clk_mem = 0, rst = 1; always #7.5 clk_sys = ~clk_sys; always #5 clk_mem = ~clk_mem;
+    reg clk_sys = 0, clk_mem = 0, clk_dec = 0, rst = 1; always #7.5 clk_sys = ~clk_sys; always #5 clk_mem = ~clk_mem; initial begin #3.3; forever #10 clk_dec = ~clk_dec; end
     reg [9:0] reg_addr = 0; reg reg_we = 0; reg [31:0] reg_wdata = 0; wire reg_hit, irq; wire [31:0] reg_rdata;
     wire p_valid, p_ready, p_we, p_next, p_r_valid, p_r_last, p_done; wire [24:0] p_addr; wire [9:0] p_len, p_idx; wire [15:0] p_wdata, p_r_data; wire [1:0] p_be;
     tau_tgy_unit #(.C444(C444), .BUG(BUG), .TMO(24'hFFFFFF)) dut (.clk_sys(clk_sys), .rst_sys(rst), .reg_addr(reg_addr), .reg_we(reg_we), .reg_wdata(reg_wdata), .reg_hit(reg_hit), .reg_rdata(reg_rdata), .irq(irq),
-        .clk_mem(clk_mem), .rst_mem(rst), .p_valid(p_valid), .p_ready(p_ready), .p_we(p_we), .p_addr(p_addr), .p_len(p_len), .p_next(p_next), .p_idx(p_idx), .p_wdata(p_wdata), .p_be(p_be),
+        .clk_mem(clk_mem), .rst_mem(rst), .clk_dec(clk_dec), .p_valid(p_valid), .p_ready(p_ready), .p_we(p_we), .p_addr(p_addr), .p_len(p_len), .p_next(p_next), .p_idx(p_idx), .p_wdata(p_wdata), .p_be(p_be),
         .p_r_valid(p_r_valid), .p_r_data(p_r_data), .p_r_last(p_r_last), .p_done(p_done));
     sp_model #(.SEED(33), .MEMW(MEMW), .RDYPCT(70)) port (.clk(clk_mem), .rst(rst), .valid(p_valid), .ready(p_ready), .we(p_we), .addr(p_addr), .len(p_len), .w_next(p_next), .w_idx(p_idx), .w_data(p_wdata), .w_be(p_be),
         .r_valid(p_r_valid), .r_data(p_r_data), .r_last(p_r_last), .done(p_done), .stall(1'b0));

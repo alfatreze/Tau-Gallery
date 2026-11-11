@@ -13,7 +13,7 @@ module tb_tau_tgy_tile;
     wire busy, done, err, dec_tile, dec_blk, dec_abort, dec_left, dec_above; wire [1:0] dec_comp; wire [3:0] dec_bx;
     reg c_we = 0; reg [5:0] c_zz = 0; reg signed [15:0] c_val = 0; reg blk_done = 0, dec_err = 0;
     wire px_valid, px_last; wire [6:0] px_x, px_y; wire [7:0] px_r, px_g, px_b;
-    tau_tgy_tile #(.C444(C444), .BUG(BUG)) dut (.clk(clk), .rst(rst), .qwe(qwe), .qsel(qsel), .qidx(qidx), .qval(qval), .start(start), .fmt(fmt), .tw(tw), .th(th), .busy(busy), .done(done), .err(err),
+    tau_tgy_tile #(.C444(C444), .BUG(BUG)) dut (.clk(clk), .rst(rst), .clk_q(clk), .qwe(qwe), .qsel(qsel), .qidx(qidx), .qval(qval), .start(start), .fmt(fmt), .tw(tw), .th(th), .busy(busy), .done(done), .err(err),
         .dec_tile(dec_tile), .dec_blk(dec_blk), .dec_abort(dec_abort), .dec_comp(dec_comp), .dec_bx(dec_bx), .dec_left(dec_left), .dec_above(dec_above),
         .c_we(c_we), .c_zz(c_zz), .c_val(c_val), .blk_done(blk_done), .dec_err(dec_err), .hold(hold), .px_valid(px_valid), .px_x(px_x), .px_y(px_y), .px_r(px_r), .px_g(px_g), .px_b(px_b), .px_last(px_last));
     reg [63:0] mem [0:SLOT * 40];

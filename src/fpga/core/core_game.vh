@@ -40,6 +40,7 @@ wire clk_sys;
 wire clk_vid;
 wire clk_vid_90;
 wire clk_sdram;
+wire clk_dec;                       // 50 MHz decoder clock (TAU_TGY; constant 0 without it)
 wire clk_audio_mclk;
 wire pll_locked_main;
 wire pll_locked_mclk;
@@ -53,6 +54,7 @@ mf_pllbase mp1 (
     .outclk_1 (clk_vid),
     .outclk_2 (clk_vid_90),
     .outclk_3 (clk_sdram),
+    .outclk_4 (clk_dec),
     .locked   (pll_locked_main)
 );
 
@@ -865,7 +867,7 @@ tau_sdram_dmux u_dmux (
 );
 tau_tgy_unit #(.C444(0)) u_tgy (
     .clk_sys(clk_sys), .rst_sys(cpu_reset), .reg_addr(soc_tgy_addr), .reg_we(soc_tgy_we), .reg_wdata(soc_tgy_wdata), .reg_hit(soc_tgy_hit), .reg_rdata(soc_tgy_rdata), .irq(soc_tgy_irq),
-    .clk_mem(clk_sdram), .rst_mem(sa_rst_sdram),
+    .clk_mem(clk_sdram), .rst_mem(sa_rst_sdram), .clk_dec(clk_dec),
     .p_valid(td_valid), .p_ready(td_ready), .p_we(td_we), .p_addr(td_addr), .p_len(td_len), .p_next(td_next), .p_idx(td_idx), .p_wdata(td_wdata), .p_be(td_be),
     .p_r_valid(td_r_valid), .p_r_data(td_r_data), .p_r_last(td_r_last), .p_done(td_done)
 );
