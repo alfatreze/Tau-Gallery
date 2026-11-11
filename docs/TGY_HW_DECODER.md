@@ -1,0 +1,24 @@
+# TGY hardware tile decoder (simulation only)
+
+Three RTL blocks built on the IDCT (`docs/TGY_HW_IDCT.md`) and the pixel stage (`docs/TGY_HW_RECON.md`). Status: bit-exact in simulation; not synthesised, not fitted, not instantiated in the core, nothing on a Pocket.
+
+| Module | File | Test | Role |
+|---|---|---|---|
+| `tau_tgy_ent` | `src/fpga/core/tau_tgy_ent.sv` | `make test-rtl-tgy-ent` | the frozen symbol layer v0 (range coder, 1,250 adaptive contexts) |
+| `tau_tgy_tile` | `src/fpga/core/tau_tgy_tile.sv` | `make test-rtl-tgy-tile` | block walk, dequantisation, IDCT, plane writes, pixel stream, watchdog |
+| `tau_tgy_dec` | `src/fpga/core/tau_tgy_dec.sv` | `make test-rtl-tgy-dec` | the two joined: tile stream in, RGB out |
+
+## Entropy decoder (`tau_tgy_ent`)
+Input: the tile stream as 32-bit words (`in_valid`, `in_word`, `in_ready`) and its length in bytes; bytes past the end read as 0 (the range coder's rule). Output, per block requested by the tile controller (`dec_blk` with component, block column, left/upper block exist): the DC value, then every nonzero AC coefficient in zigzag order (`c_we`, `c_zz`, `c_val`), then `blk_done`. Contexts live in one RAM (1,250 x 20 bits, reset in 1,250 clocks at each tile start); the 64 magnitudes of the block in progress are kept saturated to 5 (the local class needs only `min(sum, 5)`); the DC values of the previous block row are 16 registers. A context bin takes 3 clocks (read; the three multiplications; decide, update, renormalise up to 2 bytes, write back, next symbol), a bypass bin 1 clock. An Exp-Golomb exponent above 15 (the C decoder's `TGY_MAX_EXP`; valid streams stay at or below 11) raises `dec_err`.
+Measured in simulation (random input gaps included): the dense real photo tile (12,641 bytes) in 362,403 clocks, the sparse one (5,379 bytes) in 157,167: about 28 clocks per stream byte, 5.4 and 2.4 ms at 66.7 MHz. A faster engine (overlapping the context read with the previous bin, 2 clocks per bin) is a later optimisation.
+
+## Tile controller (`tau_tgy_tile`)
+Holds the two quantisation tables (Y; Cb and Cr share), walks the blocks in the symbol layer's order (all Y blocks in raster order, then Cb, then Cr), asks the decoder for one block at a time, dequantises each coefficient as it arrives (zigzag to natural index, times the table entry, saturated to 18 bits signed: the IDCT unit's input range; valid files never reach it), runs the IDCT, writes its rows into the planes of the pixel stage, and after the last block starts the pixel stage and passes its stream through. The IDCT and the entropy decode do not overlap in this version (the IDCT is about 30 clocks of each block's time). A watchdog (2^17 clocks per block) turns a decoder that never answers into `err`; a decoder `dec_err` does the same at once; the unit is idle again and the next tile decodes correctly (tested).
+
+## Results (simulation)
+- Entropy decoder: all 9 frozen symbol-layer vectors (empty tile, extremes DC +-2047 and AC +-1023, synthetic shapes, the two real photo tiles) plus 7 extra synthetic tiles (4:4:4 shapes, many seeds) and a stream cut short (zeros past the end) decode to exactly the reference blocks; the coefficient events come in the required order (DC first, zigzag strictly increasing); a stream of 0xFF bytes raises `dec_err`; an abort mid-tile followed by a good tile works. 15 of 15 mutants killed (range coder compare and renormalisation, bypass compare and renormalisation, probability clamp, count limit, local class, DC predictor priority, sign, mantissa context offset, position group cap, tree context offset, DC zero case, magnitude 1, DC neighbour).
+- Tile controller (decoder played by the testbench, which also checks every block request against the expected order and left/upper flags): 36 tiles (all sizes, three formats, sparse/dense/saturating coefficients, the conformance pictures `grey_40x30` and `yuv444_64x48` whose generated expectation also equals the conformance file's SHA-256 under the TGY profile, and the first tile of `yuv420_200x150`), random `hold`, in both `C444` configurations; the watchdog and the decoder-error scenarios. 13 mutants.
+- End to end (`tau_tgy_dec`): 11 tile streams (two real photo tiles included) to RGB equal to the Python reference; the dense photo tile takes 392,845 clocks from `start` to the last pixel with random input gaps and `hold`.
+
+## Not done
+Not synthesised (no Quartus run: needs the owner's yes and a stated finish time), no stream fetch (the DMA that feeds `in_word` from the SDRAM-resident file), no firmware, no register block, TGX not started, no DC-first preview (the container does not define one), the intermediate zoom levels. The pixel stage needs about 40 M10K (estimate) and the entropy RAM about 3 more; the 128 KB main RAM option (`TAU_RAM_128K`, `tools/gallery_m1b_qsf_append.txt`) frees about 64.

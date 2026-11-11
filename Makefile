@@ -1031,3 +1031,24 @@ test-rtl-tgy-recon:
 	$(PYTHON) sim/gen_tgy_recon_rtl_vectors.py $(RTL_BUILD_DIR)/recon_vec.hex
 	for c in 0 1; do iverilog -g2012 -P tb_tau_tgy_recon.C444=$$c -o $(RTL_BUILD_DIR)/recon_c$$c.out sim/tb_tau_tgy_recon.v src/fpga/core/tau_tgy_recon.sv && vvp $(RTL_BUILD_DIR)/recon_c$$c.out +VEC=$(RTL_BUILD_DIR)/recon_vec.hex +N=144 | /usr/bin/grep -E "clocks for|tiles run|PASSED|FAILED" | tee $(RTL_BUILD_DIR)/recon_c$$c.log; /usr/bin/grep -q "^RECON PASSED" $(RTL_BUILD_DIR)/recon_c$$c.log || exit 1; done
 	for b in 1 2 3 4 5 6 7 8 11 12 13 14 15 16 17 18 20; do iverilog -g2012 -P tb_tau_tgy_recon.C444=1 -P tb_tau_tgy_recon.BUG=$$b -o $(RTL_BUILD_DIR)/recon_m$$b.out sim/tb_tau_tgy_recon.v src/fpga/core/tau_tgy_recon.sv && if vvp $(RTL_BUILD_DIR)/recon_m$$b.out +VEC=$(RTL_BUILD_DIR)/recon_vec.hex +N=144 | /usr/bin/grep -q "^RECON PASSED"; then echo "MUTANT SURVIVED: $$b"; exit 1; else echo "mutant killed: $$b"; fi; done
+
+.PHONY: test-rtl-tgy-tile
+test-rtl-tgy-tile:
+	mkdir -p $(RTL_BUILD_DIR)
+	$(PYTHON) sim/gen_tgy_tile_vectors.py $(RTL_BUILD_DIR)/tile_vec.hex
+	for c in 0 1; do iverilog -g2012 -P tb_tau_tgy_tile.C444=$$c -o $(RTL_BUILD_DIR)/tile_c$$c.out sim/tb_tau_tgy_tile.v src/fpga/core/tau_tgy_tile.sv src/fpga/core/tau_tgy_idct.sv src/fpga/core/tau_tgy_recon.sv && vvp $(RTL_BUILD_DIR)/tile_c$$c.out +VEC=$(RTL_BUILD_DIR)/tile_vec.hex +N=36 | /usr/bin/grep -E "clocks to|watchdog|decoder error|PASSED|FAILED" | tee $(RTL_BUILD_DIR)/tile_c$$c.log; /usr/bin/grep -q "^TILE PASSED" $(RTL_BUILD_DIR)/tile_c$$c.log || exit 1; done
+	for b in 1 2 3 4 5 6 7 8 9 10 11 12 13; do iverilog -g2012 -P tb_tau_tgy_tile.C444=1 -P tb_tau_tgy_tile.BUG=$$b -o $(RTL_BUILD_DIR)/tile_m$$b.out sim/tb_tau_tgy_tile.v src/fpga/core/tau_tgy_tile.sv src/fpga/core/tau_tgy_idct.sv src/fpga/core/tau_tgy_recon.sv && if vvp $(RTL_BUILD_DIR)/tile_m$$b.out +VEC=$(RTL_BUILD_DIR)/tile_vec.hex +N=36 | /usr/bin/grep -q "^TILE PASSED"; then echo "MUTANT SURVIVED: $$b"; exit 1; else echo "mutant killed: $$b"; fi; done
+
+.PHONY: test-rtl-tgy-ent
+test-rtl-tgy-ent:
+	mkdir -p $(RTL_BUILD_DIR)
+	$(PYTHON) sim/gen_tgy_ent_vectors.py $(RTL_BUILD_DIR)/ent_vec.hex
+	iverilog -g2012 -o $(RTL_BUILD_DIR)/ent.out sim/tb_tau_tgy_ent.v src/fpga/core/tau_tgy_ent.sv
+	vvp $(RTL_BUILD_DIR)/ent.out +VEC=$(RTL_BUILD_DIR)/ent_vec.hex +N=17 | /usr/bin/grep -E "real tile|exponent|PASSED|FAILED" | tee $(RTL_BUILD_DIR)/ent.log; /usr/bin/grep -q "^ENT PASSED" $(RTL_BUILD_DIR)/ent.log
+	for b in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do iverilog -g2012 -P tb_tau_tgy_ent.BUG=$$b -o $(RTL_BUILD_DIR)/ent_m$$b.out sim/tb_tau_tgy_ent.v src/fpga/core/tau_tgy_ent.sv && if vvp $(RTL_BUILD_DIR)/ent_m$$b.out +VEC=$(RTL_BUILD_DIR)/ent_vec.hex +N=17 | /usr/bin/grep -q "^ENT PASSED"; then echo "MUTANT SURVIVED: $$b"; exit 1; else echo "mutant killed: $$b"; fi; done
+
+.PHONY: test-rtl-tgy-dec
+test-rtl-tgy-dec:
+	mkdir -p $(RTL_BUILD_DIR)
+	$(PYTHON) sim/gen_tgy_dec_vectors.py $(RTL_BUILD_DIR)/dec_vec.hex > /dev/null
+	for c in 0 1; do iverilog -g2012 -P tb_tau_tgy_dec.C444=$$c -o $(RTL_BUILD_DIR)/dec_c$$c.out sim/tb_tau_tgy_dec.v src/fpga/core/tau_tgy_dec.sv src/fpga/core/tau_tgy_tile.sv src/fpga/core/tau_tgy_ent.sv src/fpga/core/tau_tgy_idct.sv src/fpga/core/tau_tgy_recon.sv && vvp $(RTL_BUILD_DIR)/dec_c$$c.out +VEC=$(RTL_BUILD_DIR)/dec_vec.hex +N=11 | /usr/bin/grep -E "^tile|tiles run|PASSED|FAILED" | tee $(RTL_BUILD_DIR)/dec_c$$c.log; /usr/bin/grep -q "^DEC PASSED" $(RTL_BUILD_DIR)/dec_c$$c.log || exit 1; done
