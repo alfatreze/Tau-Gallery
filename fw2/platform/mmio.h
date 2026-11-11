@@ -76,7 +76,18 @@
 #define R_LAND_OVF   0x80000210u        /* read: words dropped since the last clear */
 /* Interrupts (bitstream built with TAU_IRQ; reads 0 without it): the pending register drives the CPU's external interrupt inputs; the CPU's own mask CSR (0xBC0) enables each line and the
  * pending lines are readable in CSR 0xFC0. fw2/platform/start.S has the trap path (irq_enable, irq_disable, and a weak irq_handler(pending) that the firmware may define). */
-#define R_IRQ_PEND   0x80000214u        /* read: pending sources (sticky); write 1 to a bit to clear it. 0 data-slot command done, 1 vsync rising, 2 landing path idle (rising), 3 a video mode switch completed */
+#define R_IRQ_PEND   0x80000214u        /* read: pending sources (sticky); write 1 to a bit to clear it. 0 data-slot command done, 1 vsync rising, 2 landing path idle (rising), 3 a video mode switch completed, 4 the TGY decoder finished or failed (rising; TAU_TGY, rev 29) */
+/* Hardware TGY decoder (TAU_TGY, CORE_VERSION rev 29 = 0x4D50331D; docs/TGY_HW_DMA.md; the driver is fw2/gallery/tgy_hw.c). Reads 0 on a core without it. */
+#define R_TGY_CTRL   0x80000220u        /* write: bit 0 START_TILE, 1 LOAD_TABLES, 2 ABORT, 3 CLEAR (done, err, rejected) */
+#define R_TGY_STATUS 0x80000224u        /* read: [0] busy, [1] done, [2] err, [3] tables loaded, [4] a start was rejected, [11:8] error code (1 decoder or watchdog, 2 tile timeout, 15 abort), [31] present */
+#define R_TGY_SRC    0x80000228u        /* SDRAM byte address of the tile stream (any byte) */
+#define R_TGY_LEN    0x8000022Cu        /* stream length in bytes [19:0] */
+#define R_TGY_DST    0x80000230u        /* SDRAM byte address of the tile's first pixel (RGB888, any byte) */
+#define R_TGY_PITCH  0x80000234u        /* bytes from one pixel row to the next [15:0] */
+#define R_TGY_GEOM   0x80000238u        /* [17:16] format (0 grey, 2 4:2:0), [15:8] width, [7:0] height of the tile in luma samples */
+#define R_TGY_QY     0x8000023Cu        /* SDRAM byte address of the Y quantisation table (64 u16, zigzag, even) */
+#define R_TGY_QC     0x80000240u        /* the same for Cb and Cr */
+#define R_TGY_CYCLES 0x80000244u        /* SDRAM-clock cycles of the last tile (valid after done) */
 #define R_SDA_SEL    0x800001D4u        /* per-port SDRAM statistics window (tau_sdr_stat_win.sv): write {port[1:0], stat[2:0]} (stat 0 requests, 1 words, 2 busy cycles, 3 worst wait, 4 urgent over the bound, 5 bad requests; port 0 scan-out, 1 engine, 2 CPU) -- ignored while pending; read [31] built in, [8] a snapshot is pending, [4:0] the selection */
 #define R_SDA_VAL    0x800001D8u        /* read: the snapshot of the selected counter, stable until the next select; valid once R_SDA_SEL bit 8 is 0 */
 #define R_DBUF_CPU   0x80000118u        /* Helios H2: bit 0 = the buffer plain RECT/CHAR/COPY commands target (rows of the visible frame only; the off-screen stash rows are shared); read bit 31 = built in */

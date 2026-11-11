@@ -1088,3 +1088,9 @@ test-rtl-tgy-soc: $(RTL_BUILD_DIR)/tau_soc_sim.v
 	"$(RV_BIN)/riscv-none-elf-objcopy" -O binary $(RTL_BUILD_DIR)/fw_tgy.elf $(RTL_BUILD_DIR)/fw_tgy.bin
 	$(IVERILOG) -g2012 -Isrc/fpga/core -DTAU_TGY -o $(RTL_BUILD_DIR)/tb_tgy_soc.vvp $(TGY_SOC_SRC)
 	$(VVP) $(RTL_BUILD_DIR)/tb_tgy_soc.vvp +ROM=$(RTL_BUILD_DIR)/fw_tgy.bin +VEC=$(RTL_BUILD_DIR)/dec_vec.hex | tee $(RTL_BUILD_DIR)/tgy_soc.log | tail -20; grep -q "^PASSED" $(RTL_BUILD_DIR)/tgy_soc.log
+
+# Tau Gallery: the TGY hardware driver (container v1 reader + register driver, fw2/gallery/tgy_hw.c) against a model of the decoder hardware over a byte addressed memory; 18 mutants must fail.
+.PHONY: test-tgy-hw
+test-tgy-hw:
+	$(PYTHON) sim/test_tgy_hw.py
+	$(PYTHON) sim/test_tgy_hw.py --mutants
