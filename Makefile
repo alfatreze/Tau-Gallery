@@ -1010,3 +1010,9 @@ test-tgy-dec-c:
 	$(PYTHON) sim/test_tgy_dec_c.py
 	$(PYTHON) sim/test_tgy_dec_c.py --mutants
 
+# The C pixel pipeline (fw2/gallery/tgy_pix.c): tiles decoded from symbol-layer streams to RGB rows, equal to the Python reconstruction; primitive vectors; sanitizers; 23 mutants.
+.PHONY: test-tgy-pix-c
+test-tgy-pix-c:
+	$(PYTHON) sim/test_tgy_pix_c.py
+	$(PYTHON) sim/test_tgy_pix_c.py --mutants
+

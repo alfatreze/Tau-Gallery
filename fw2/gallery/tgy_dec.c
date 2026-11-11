@@ -49,9 +49,9 @@ static int16_t sat(int32_t v) { return (int16_t)(v > 32767 ? 32767 : (v < -32767
 static unsigned lbk(unsigned x) { return x == 0 ? 0u : (x == 1 ? 1u : (x == 2 ? 2u : (x <= 4 ? 3u : 4u))); }
 static unsigned iabs(int v) { return (unsigned)(v < 0 ? -v : v); }
 
-void tgy_block(tgy_dec_t *d, unsigned cc, const int16_t *left, const int16_t *above, int16_t *out)
+void tgy_block_pred(tgy_dec_t *d, unsigned cc, int32_t pred, int16_t *out)
 {
-    int32_t pred = left ? left[0] : (above ? above[0] : 0), dc = 0; unsigned node = 1, last, k, i;
+    int32_t dc = 0; unsigned node = 1, last, k, i;
     for (i = 0; i < 64; i++) out[i] = 0;
     if (ctx_bit(d, O_D0 + cc)) {
         unsigned neg = ctx_bit(d, O_DS + cc); int32_t a = (int32_t)exp_golomb(d, O_DX + cc * 10u, O_DM + cc * 10u) + 1;
@@ -71,6 +71,10 @@ void tgy_block(tgy_dec_t *d, unsigned cc, const int16_t *left, const int16_t *ab
         v = (int32_t)(a > 32767u ? 32767u : a); out[k] = sat(bypass_bit(d) ? -v : v);
         if (d->err) return;
     }
+}
+void tgy_block(tgy_dec_t *d, unsigned cc, const int16_t *left, const int16_t *above, int16_t *out)
+{
+    tgy_block_pred(d, cc, left ? left[0] : (above ? above[0] : 0), out);
 }
 int tgy_tile(tgy_dec_t *d, const uint8_t *data, uint32_t len, unsigned ncomp, const uint8_t *rows, const uint8_t *cols, int16_t *out)
 {

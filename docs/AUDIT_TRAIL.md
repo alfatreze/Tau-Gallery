@@ -16395,3 +16395,7 @@ Spec, reference writer and reader, converter, pixel-source encoder, vectors, 13 
 
 `fw2/gallery/tgy_dec.c` and `.h`, `sim/tgy_dec_harness.c`, `sim/test_tgy_dec_c.py` (`make test-tgy-dec-c`): vectors, 60 random tiles, 4,000 fuzzed streams under sanitizers, tables check, 23 of 23 mutants killed, 2,132 bytes of rv32im code. Host only; not built into the firmware yet, nothing on a Pocket. Details: docs/M3_STREAMING_NOTE.md section 18.
 
+## B-1050: C pixel pipeline for TGY tiles (owner: "start the IDCT pipeline", 2026-11-12)
+
+`fw2/gallery/tgy_pix.c` and `.h` (dequantise, islow IDCT, tile-local fancy upsampling, colour, rows through a callback), `tgy_block_pred` in `tgy_dec.c`, `sim/tgy_pix_harness.c`, `sim/test_tgy_pix_c.py` (`make test-tgy-pix-c`: 11 pictures byte-equal to the Python reconstruction under sanitizers, primitive vectors, 23 of 23 mutants killed), 3,080 bytes of rv32im code, about 29 KB of RAM for a 4:2:0 tile. The reconstruction vectors gained IDCT range-limit corners and full colour-table sweeps (tools/gallery/make_tgy_recon_vectors.py, docs/conformance/tgy_recon_v0_vectors.json); behaviour unchanged. Host only; speed unmeasured; nothing on a Pocket. Details: docs/M3_STREAMING_NOTE.md section 19.
+

@@ -15,6 +15,8 @@ typedef struct {
 void tgy_tile_begin(tgy_dec_t *d, const uint8_t *data, uint32_t len);
 /* Decodes one block of component class cc (0 = Y, 1 = Cb or Cr) into out[64] (zigzag order). left and above are the neighbouring blocks of the same component inside the tile, or 0. */
 void tgy_block(tgy_dec_t *d, unsigned cc, const int16_t *left, const int16_t *above, int16_t *out);
+/* The same block with the DC prediction given: the DC of the left block of the row, else of the block above, else 0 (the only thing a block takes from its neighbours), so a pipeline need not keep whole blocks. */
+void tgy_block_pred(tgy_dec_t *d, unsigned cc, int32_t pred, int16_t *out);
 /* Decodes a whole tile: ncomp components, comp i being rows[i] x cols[i] blocks in raster order; out receives the blocks of component 0, then 1, then 2 (64 int16 each). Returns 0, or 1 if the stream was impossible. */
 int tgy_tile(tgy_dec_t *d, const uint8_t *data, uint32_t len, unsigned ncomp, const uint8_t *rows, const uint8_t *cols, int16_t *out);
 #endif
