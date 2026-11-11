@@ -1016,3 +1016,12 @@ test-tgy-pix-c:
 	$(PYTHON) sim/test_tgy_pix_c.py
 	$(PYTHON) sim/test_tgy_pix_c.py --mutants
 
+# The RTL IDCT unit (src/fpga/core/tau_tgy_idct.sv, docs/TGY_HW_IDCT.md): 2,870 vectors from the Python reference (conformance cases, every impulse, random, extremes, real photo blocks) and 9 mutants (BUG=1..9).
+.PHONY: test-rtl-tgy-idct
+test-rtl-tgy-idct:
+	mkdir -p $(RTL_BUILD_DIR)
+	$(PYTHON) sim/gen_tgy_idct_vectors.py $(RTL_BUILD_DIR)/idct_vec.hex
+	iverilog -g2012 -o $(RTL_BUILD_DIR)/idct.out sim/tb_tau_tgy_idct.v src/fpga/core/tau_tgy_idct.sv
+	vvp $(RTL_BUILD_DIR)/idct.out +VEC=$(RTL_BUILD_DIR)/idct_vec.hex +N=2870 | /usr/bin/grep -E "latency|PASSED|FAILED" | tee $(RTL_BUILD_DIR)/idct.log; /usr/bin/grep -q "^IDCT PASSED" $(RTL_BUILD_DIR)/idct.log
+	for b in 1 2 3 4 5 6 7 8 9; do iverilog -g2012 -P tb_tau_tgy_idct.BUG=$$b -o $(RTL_BUILD_DIR)/idct_m$$b.out sim/tb_tau_tgy_idct.v src/fpga/core/tau_tgy_idct.sv && if vvp $(RTL_BUILD_DIR)/idct_m$$b.out +VEC=$(RTL_BUILD_DIR)/idct_vec.hex +N=2870 | /usr/bin/grep -q "^IDCT PASSED"; then echo "MUTANT SURVIVED: $$b"; exit 1; else echo "mutant killed: $$b"; fi; done
+

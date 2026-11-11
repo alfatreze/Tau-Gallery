@@ -16403,3 +16403,7 @@ Spec, reference writer and reader, converter, pixel-source encoder, vectors, 13 
 
 `tools/cpubench/bench4.c`, `gen_tgy.py`, `tgydata.h` (README updated with the lessons: buffered output lost on kill, short firmware path, 7,000 to 17,000 cycles per second). Simulation of the real VexRiscv RTL, two real tiles, RGB checksums equal the Python reconstruction on the target: sparse tile 11,362,246 cycles (170 ms at 66.67 MHz), dense 16,638,896 (250 ms); entropy 74 to 76 cycles per binary decision, IDCT 9,880 cycles per block, upsample and colour about 190 to 200 cycles per pixel. Software TGY does not beat the RAW fit canvas (about 6 s against 1.1 s for the fit level): hardware decoding is required; build order proposed in docs/M3_STREAMING_NOTE.md section 20. Two earlier runs measured nothing (killed runs lose their buffered output; a long firmware path is truncated by the testbench). No hardware or firmware change.
 
+## B-1052: RTL IDCT unit for the TGY decoder (owner: "go ahead", 2026-11-12)
+
+`src/fpga/core/tau_tgy_idct.sv`, `sim/tb_tau_tgy_idct.v`, `sim/gen_tgy_idct_vectors.py`, `docs/TGY_HW_IDCT.md`, `make test-rtl-tgy-idct`: 2,870 vectors bit-exact against the Python reference, 9 of 9 mutants killed, 30 clocks per block (about 115 microseconds per 384-block tile at 100 MHz, simulated). Not synthesised, no fit, nothing on a Pocket; the core's macro bundle is unchanged (the module is not instantiated anywhere yet). Details: docs/M3_STREAMING_NOTE.md section 21.
+
