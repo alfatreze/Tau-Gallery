@@ -1052,3 +1052,29 @@ test-rtl-tgy-dec:
 	mkdir -p $(RTL_BUILD_DIR)
 	$(PYTHON) sim/gen_tgy_dec_vectors.py $(RTL_BUILD_DIR)/dec_vec.hex > /dev/null
 	for c in 0 1; do iverilog -g2012 -P tb_tau_tgy_dec.C444=$$c -o $(RTL_BUILD_DIR)/dec_c$$c.out sim/tb_tau_tgy_dec.v src/fpga/core/tau_tgy_dec.sv src/fpga/core/tau_tgy_tile.sv src/fpga/core/tau_tgy_ent.sv src/fpga/core/tau_tgy_idct.sv src/fpga/core/tau_tgy_recon.sv && vvp $(RTL_BUILD_DIR)/dec_c$$c.out +VEC=$(RTL_BUILD_DIR)/dec_vec.hex +N=11 | /usr/bin/grep -E "^tile|tiles run|PASSED|FAILED" | tee $(RTL_BUILD_DIR)/dec_c$$c.log; /usr/bin/grep -q "^DEC PASSED" $(RTL_BUILD_DIR)/dec_c$$c.log || exit 1; done
+
+# Tau Gallery: the read/write secondary client mux behind tau_sdram_p2mux (tau_sdram_dmux) against the scheduler port model; mutants must fail.
+.PHONY: test-rtl-dmux
+test-rtl-dmux:
+	mkdir -p $(RTL_BUILD_DIR)
+	iverilog -g2012 -o $(RTL_BUILD_DIR)/dmux.out sim/tb_tau_dmux.v sim/sp_model.v src/fpga/core/tau_sdram_dmux.sv
+	vvp $(RTL_BUILD_DIR)/dmux.out | /usr/bin/grep -E "PASS|FAILED" | tee $(RTL_BUILD_DIR)/dmux.log; /usr/bin/grep -q "^  PASS" $(RTL_BUILD_DIR)/dmux.log
+	for b in 1 2 3 4 5 6 7 8 9 10; do iverilog -g2012 -P tb_tau_dmux.BUG=$$b -o $(RTL_BUILD_DIR)/dmux_m$$b.out sim/tb_tau_dmux.v sim/sp_model.v src/fpga/core/tau_sdram_dmux.sv && if vvp $(RTL_BUILD_DIR)/dmux_m$$b.out | /usr/bin/grep -q "^  PASS"; then echo "MUTANT SURVIVED: $$b"; exit 1; else echo "mutant killed: $$b"; fi; done
+
+# Tau Gallery: the TGY decoder's SDRAM DMA (table load, stream fetch, pixel row writer) against the scheduler port model, whole memory compared; mutants must fail.
+TGY_DMA_SRC = sim/tb_tau_tgy_dma.v sim/sp_model.v src/fpga/core/tau_tgy_dma.sv src/fpga/core/tau_tgy_dec.sv src/fpga/core/tau_tgy_tile.sv src/fpga/core/tau_tgy_ent.sv src/fpga/core/tau_tgy_idct.sv src/fpga/core/tau_tgy_recon.sv
+.PHONY: test-rtl-tgy-dma
+test-rtl-tgy-dma:
+	mkdir -p $(RTL_BUILD_DIR)
+	$(PYTHON) sim/gen_tgy_dec_vectors.py $(RTL_BUILD_DIR)/dec_vec.hex > /dev/null
+	for c in 0 1; do iverilog -g2012 -P tb_tau_tgy_dma.C444=$$c -o $(RTL_BUILD_DIR)/dma_c$$c.out $(TGY_DMA_SRC) && vvp $(RTL_BUILD_DIR)/dma_c$$c.out +VEC=$(RTL_BUILD_DIR)/dec_vec.hex +N=11 | /usr/bin/grep -E "^tile|tiles run|abort|corrupt|timeout|PASSED|FAILED" | tee $(RTL_BUILD_DIR)/dma_c$$c.log; /usr/bin/grep -q "^DMA PASSED" $(RTL_BUILD_DIR)/dma_c$$c.log || exit 1; done
+	for b in 1 2 3 4 5 6 7 8 9 10; do iverilog -g2012 -P tb_tau_tgy_dma.C444=1 -P tb_tau_tgy_dma.BUG=$$b -o $(RTL_BUILD_DIR)/dma_m$$b.out $(TGY_DMA_SRC) && if vvp $(RTL_BUILD_DIR)/dma_m$$b.out +VEC=$(RTL_BUILD_DIR)/dec_vec.hex +N=11 | /usr/bin/grep -q "^DMA PASSED"; then echo "MUTANT SURVIVED: $$b"; exit 1; else echo "mutant killed: $$b"; fi; done
+
+# Tau Gallery: the register block with its clock crossings + DMA + decoder, driven as the CPU will (two unrelated clocks); register mutants must fail.
+TGY_UNIT_SRC = sim/tb_tau_tgy_unit.v sim/sp_model.v src/fpga/core/tau_tgy_unit.sv src/fpga/core/tau_tgy_regs.sv src/fpga/core/tau_tgy_dma.sv src/fpga/core/tau_tgy_dec.sv src/fpga/core/tau_tgy_tile.sv src/fpga/core/tau_tgy_ent.sv src/fpga/core/tau_tgy_idct.sv src/fpga/core/tau_tgy_recon.sv
+.PHONY: test-rtl-tgy-unit
+test-rtl-tgy-unit:
+	mkdir -p $(RTL_BUILD_DIR)
+	$(PYTHON) sim/gen_tgy_dec_vectors.py $(RTL_BUILD_DIR)/dec_vec.hex > /dev/null
+	for c in 0 1; do iverilog -g2012 -P tb_tau_tgy_unit.C444=$$c -o $(RTL_BUILD_DIR)/unit_c$$c.out $(TGY_UNIT_SRC) && vvp $(RTL_BUILD_DIR)/unit_c$$c.out +VEC=$(RTL_BUILD_DIR)/dec_vec.hex | /usr/bin/grep -E "^tile|PASSED|FAILED" | tee $(RTL_BUILD_DIR)/unit_c$$c.log; /usr/bin/grep -q "^UNIT PASSED" $(RTL_BUILD_DIR)/unit_c$$c.log || exit 1; done
+	for b in 1 2 3 4 5 6; do iverilog -g2012 -P tb_tau_tgy_unit.C444=1 -P tb_tau_tgy_unit.BUG=$$b -o $(RTL_BUILD_DIR)/unit_m$$b.out $(TGY_UNIT_SRC) && if vvp $(RTL_BUILD_DIR)/unit_m$$b.out +VEC=$(RTL_BUILD_DIR)/dec_vec.hex | /usr/bin/grep -q "^UNIT PASSED"; then echo "MUTANT SURVIVED: $$b"; exit 1; else echo "mutant killed: $$b"; fi; done
