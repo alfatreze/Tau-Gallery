@@ -67,6 +67,8 @@ module tb_tau_tgy_dma;
                 load_tables; run_cmd_tile(3000000);
                 if (cyc >= 3000000 || ev_d != 1 || ev_e != 0 || busy) begin errors = errors + 1; $display("test %0d fmt %0d %0dx%0d: cyc %0d done %0d err %0d (code %0d)", t, f, w, h, cyc, ev_d, ev_e, last_code); end
                 compare(t);
+                if (BUG != 0 && errors != 0) begin $display("DMA FAILED %0d (a mutant stops at its first failing tile: a hung tile costs 3 million clocks)", errors); $finish; end
+                if (len > 5000 && tile_cycles > 70 * len + 20000) begin errors = errors + 1; $display("PERF BUDGET: tile %0d took %0d clocks, budget %0d (70 per byte + 20000; measured 62 per byte for the dense tile)", t, tile_cycles, 70 * len + 20000); end
                 if (len > 5000) $display("tile %0d (%0d bytes, %0dx%0d, src odd %0d, dst odd %0d, pitch %0d): %0d clocks to the last row in memory", t, len, w, h, src_off, dst_off, pitch, tile_cycles);
             end
         end
@@ -91,6 +93,7 @@ module tb_tau_tgy_dma;
         // a slow SDRAM: the writer falls behind, the ring fills, `hold` must stop the decoder's row starts (no row may be overwritten)
         len = mem[base + 1]; snapshot; put_tile(6); put_expected(6); load_tables; slow_en = 1; run_cmd_tile(8000000); slow_en = 0; repeat (50) @(posedge clk); compare(101);
         if (ev_d != 1 || ev_e != 0 || nbad != 0) begin errors = errors + 1; $display("slow SDRAM: done %0d err %0d bad bytes %0d", ev_d, ev_e, nbad); end else $display("slow SDRAM: ok (%0d clocks)", tile_cycles);
+        if (tile_cycles > 430000) begin errors = errors + 1; $display("PERF BUDGET: the slow SDRAM tile took %0d clocks, budget 430000 (measured 389427)", tile_cycles); end
         if (errors == 0) $display("DMA PASSED (0 failures)"); else $display("DMA FAILED %0d", errors);
         $finish;
     end

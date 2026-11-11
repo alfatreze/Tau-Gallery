@@ -3,7 +3,8 @@
 `timescale 1ns/1ps
 module tb_tau_tgy_wfifo;
     parameter integer BUG = 0;
-    reg clk_w = 0, clk_r = 0; always #5 clk_w = ~clk_w; initial #3.3 forever #10 clk_r = ~clk_r;
+    parameter integer WH_PS = 5000, RH_PS = 10000, RP_PS = 3300;                     // half periods and the reader's phase in ps: the Makefile sweeps ratios and phases
+    reg clk_w = 0, clk_r = 0; always #(WH_PS / 1000.0) clk_w = ~clk_w; initial begin #(RP_PS / 1000.0); forever #(RH_PS / 1000.0) clk_r = ~clk_r; end
     reg clear_req = 0, push = 0, pop = 0; wire [31:0] wdata; wire clear_ack, full, rvalid; wire [31:0] rdata;
     tau_tgy_wfifo #(.AW(4), .BUG(BUG)) dut (.clk_w(clk_w), .clk_r(clk_r), .clear_req(clear_req), .clear_ack(clear_ack), .push(push), .wdata(wdata), .full(full), .rvalid(rvalid), .rdata(rdata), .pop(pop));
     integer seed = 32'h1badf00d; function integer rnd(input integer n); rnd = $unsigned($random(seed)) % n; endfunction

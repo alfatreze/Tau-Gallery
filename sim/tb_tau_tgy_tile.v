@@ -91,6 +91,7 @@ module tb_tau_tgy_tile;
                 run_tile(3000000);
                 if (cyc >= 3000000 || npx != w * h || nlast != 1 || bad_order != 0 || errs_seen != 0 || dones_seen != 1 || hdr_bad != 0 || busy) begin
                     errors = errors + 1; $display("test %0d fmt %0d %0dx%0d: cyc %0d pixels %0d (want %0d) last %0d order %0d err %0d done %0d request errors %0d", t, f, w, h, cyc, npx, w * h, nlast, bad_order, errs_seen, dones_seen, hdr_bad);
+                    if (BUG != 0) begin $display("TILE FAILED %0d (a mutant stops at its first failing tile: a hung tile costs 3 million clocks)", errors); $finish; end
                 end
                 if (t == 0) $display("tile 0 (%0d blocks): %0d clocks to the end of the pixel stream (hold off)", nblk, cyc);
             end
