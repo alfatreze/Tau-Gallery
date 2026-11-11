@@ -65,13 +65,4 @@ set_global_assignment -name VERILOG_MACRO "TAU_VID40=1"
 set_global_assignment -name VERILOG_MACRO "TAU_VIEW=1"
 set_global_assignment -name VERILOG_MACRO "TAU_LAND=1"
 set_global_assignment -name VERILOG_MACRO "TAU_IRQ=1"
-# The sources of the TGY decoder (not in ap_core.qsf; the other gallery modules tau_land, tau_scanout_v, tau_vidmode are listed by the fit flow, see the handoff):
-set_global_assignment -name SYSTEMVERILOG_FILE core/tau_sdram_dmux.sv
-set_global_assignment -name SYSTEMVERILOG_FILE core/tau_tgy_unit.sv
-set_global_assignment -name SYSTEMVERILOG_FILE core/tau_tgy_regs.sv
-set_global_assignment -name SYSTEMVERILOG_FILE core/tau_tgy_dma.sv
-set_global_assignment -name SYSTEMVERILOG_FILE core/tau_tgy_dec.sv
-set_global_assignment -name SYSTEMVERILOG_FILE core/tau_tgy_tile.sv
-set_global_assignment -name SYSTEMVERILOG_FILE core/tau_tgy_ent.sv
-set_global_assignment -name SYSTEMVERILOG_FILE core/tau_tgy_idct.sv
-set_global_assignment -name SYSTEMVERILOG_FILE core/tau_tgy_recon.sv
+# The decoder's sources are found through ap_core.qsf's SEARCH_PATH core (like tau_land.sv); no file lines needed.
