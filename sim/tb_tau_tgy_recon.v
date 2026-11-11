@@ -32,7 +32,7 @@ module tb_tau_tgy_recon;
         if (err) errs_seen = errs_seen + 1;
     end
     task wr(input [1:0] comp, input integer row, input integer col8, input [63:0] d); begin
-        we <= 1; wcomp <= comp; wy <= row; wx <= col8 * 8; wdata <= d; @(posedge clk); we <= 0;
+        @(negedge clk); we = 1; wcomp = comp; wy = row; wx = col8 * 8; wdata = d;       // driven on the falling edge: no race with the DUT's sampling edge (Verilator lost every write but the first)
     end endtask
     initial begin
         if (!$value$plusargs("VEC=%s", vecfile)) begin $display("no +VEC"); $finish; end
@@ -51,6 +51,7 @@ module tb_tau_tgy_recon;
                 ran = ran + 1;
                 for (r = 0; r < 128; r = r + 1) for (c = 0; c < 16; c = c + 1) wr(0, r, c, mem[base + 1 + r * 16 + c]);
                 if (f != 0) for (r = 0; r < nrows; r = r + 1) for (c = 0; c < ncw; c = c + 1) begin wr(1, r, c, mem[base + 1 + 2048 + r * 16 + c]); wr(2, r, c, mem[base + 1 + 4096 + r * 16 + c]); end
+                @(negedge clk); we = 0;
                 hold_en = (t % 2) == 1; npx = 0; nlast = 0; exp_x = 0; exp_y = 0; bad_order = 0; errs_seen = 0;
                 fmt <= f; tw <= w; th <= h; start <= 1; @(posedge clk); start <= 0; cyc = 0;
                 while (!done && cyc < 80000) begin @(posedge clk); cyc = cyc + 1; end

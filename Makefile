@@ -1091,6 +1091,16 @@ test-rtl-tgy-soc: $(RTL_BUILD_DIR)/tau_soc_sim.v
 
 # Tau Gallery: the TGY hardware driver (container v1 reader + register driver, fw2/gallery/tgy_hw.c) against a model of the decoder hardware over a byte addressed memory; 18 mutants must fail.
 .PHONY: test-tgy-hw
+# The gate: what must be green before a commit that touches the gallery core, run by .github/workflows/gate.yml and by hand (about 10 minutes). The whole-core
+# simulation (test-fullcore) is slow and needs Intel's altera_mf.v: a nightly, not part of the gate.
+.PHONY: gate
+gate: test-host-fast test-fuzz-c test-tgy-hw test-rtl-tgy-tile test-rtl-tgy-ent test-rtl-tgy-dec test-rtl-tgy-dma test-rtl-tgy-unit test-rtl-tgy-wfifo test-rtl-dmux test-rtl-tgy-soc
+
+# line and toggle coverage of each decoder block under its own testbench (Verilator), docs/RTL_COVERAGE.md
+.PHONY: coverage-rtl
+coverage-rtl:
+	$(PYTHON) tools/rtl_coverage.py all
+
 test-fuzz-c:                # mutation fuzzer of the C parsers and the decoder driver under ASan/UBSan (nightly: FUZZ_ITERS=500000)
 	$(PYTHON) sim/test_fuzz_c.py --iters $(or $(FUZZ_ITERS),3000)
 	$(PYTHON) sim/test_fuzz_c.py --mutants --iters 1500
