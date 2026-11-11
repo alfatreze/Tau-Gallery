@@ -10,7 +10,7 @@ Outputs are written to a temporary name and renamed, so an interrupted run never
 import argparse, json, os, sys, zlib
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import tgy
+import tgy, tgy_make
 
 EXT = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tif", ".tiff", ".webp"}
 
@@ -38,6 +38,9 @@ def main(argv=None):
     ap.add_argument("--index-name", default="tau-library.tdb")
     ap.add_argument("--upscale", action="store_true", help="enlarge pictures smaller than the screen to fit (default: show them at 1:1)")
     ap.add_argument("--levels", action="store_true", help="also write the zoom levels (raw tiles, the half and the 1:1 stops of tgy.ladder) for pictures larger than the screen (docs/M2_DESIGN.md): about 45 MB for a 12-megapixel photo, off by default")
+    ap.add_argument("--format", choices=("v0", "v1"), default="v0", help="v0: the RAW canvas files (every Tau Gallery core); v1: the compressed container the hardware TGY decoder draws (core rev 29, TAU_TGY; docs/TGY_CONTAINER_V1.md, the fit level is the whole canvas)")
+    ap.add_argument("--quality", type=int, default=92, help="v1: the quality of a full-resolution level encoded from a non-JPEG picture")
+    ap.add_argument("--fit-quality", type=int, default=90, help="v1: the quality of the fit level")
     ap.add_argument("--card-layout", action="store_true", help="write OUT as the card's tree: the pictures in OUT/<card-dir>, the index in the folder above it")
     ap.add_argument("--merge", action="store_true", help="keep the pictures the output library already has; a picture with the same name is replaced")
     a = ap.parse_args(argv)
@@ -69,11 +72,12 @@ def main(argv=None):
             print(json.dumps({"event": "skip", "file": p.name, "error": f"the card path is {len(path.encode('utf-8'))} bytes, the limit is {tgy.PATH_BYTES - 1}: shorten the file name or the card folder"})); skipped += 1; continue
         try:
             prep = tgy.prepare(Image.open(p)); canvas, rect, thumb, size = tgy.render_prepared(prep, upscale=a.upscale)
-            levels = tgy.zoom_levels(prep) if a.levels else []
+            levels = tgy.zoom_levels(prep) if (a.levels and a.format == "v0") else []
         except Exception as e:                                       # a file that is not a readable picture is skipped, and said so
             print(json.dumps({"event": "skip", "file": p.name, "error": str(e)})); skipped += 1; continue
         used.add(stem.lower())
-        data = tgy.pack_tgy(canvas, rect, thumb, size, levels)
+        if a.format == "v1": data, thumb, size = tgy_make.canvas_container(p, prep, a.quality, a.fit_quality, a.upscale)
+        else: data = tgy.pack_tgy(canvas, rect, thumb, size, levels)
         write_atomic(photos / (stem + ".tgy"), data); old.pop((stem + ".tgy").lower(), None)           # (a kept picture of the same name is replaced)
         entries.append(dict(path=path, name=name_of(shown), size=len(data), width=size[0], height=size[1])); thumbs.append(thumb)
         print(json.dumps({"event": "converted", "file": p.name, "tgy": stem + ".tgy", "size": len(data), "width": size[0], "height": size[1], "rect": rect, "levels": [[l["w"], l["h"], "raster"] if isinstance(l, dict) else [l[0], l[1], "tiles"] for l in levels]}))

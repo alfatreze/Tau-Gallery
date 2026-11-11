@@ -29,8 +29,10 @@ static uint32_t blits_since_input, blit_max_pass; static uint32_t blit_cmds, bli
 static uint32_t setw[16], setidx; static int set_writes;                  /* the settings register file (R_SET_IDX / R_SET_DAT) and how many words were written */
 static void tick(void) { if (!viewer_dead && vid_req != vid_bus && vid_due && clk >= vid_due) { vid_bus = vid_req; vid_sw++; vid_due = 0; } }
 static uint32_t next_input(void);
+static uint32_t tgy_rd(uint32_t a); static void tgy_wr(uint32_t a, uint32_t v); static int tgy_present = 1;       /* the model of the hardware TGY decoder (registers 0x220-0x244), after the firmware sources */
 static uint32_t rd(uint32_t a)
 {
+    if (a >= 0x80000220u && a <= 0x80000244u) return tgy_rd(a);
     switch (a) {
     case 0x80000084u: return 0;
     case 0x800001ECu: return (vid_sw << 16) | (vid_req << 2) | vid_bus;
@@ -50,6 +52,7 @@ static uint32_t rd(uint32_t a)
 static uint32_t cyc_rd(void) { clk += clk_step; tick(); return clk; }
 static void wr(uint32_t a, uint32_t v)
 {
+    if (a >= 0x80000220u && a <= 0x80000244u) { tgy_wr(a, v); return; }
     switch (a) {
     case 0x80000114u: text_mode = v & 1u; break;
     case 0x8000006Cu: setidx = v; break;
@@ -147,6 +150,9 @@ static uint32_t next_input(void)
 }
 #define main gallery_app_main
 #include "../fw2/gallery/gallery_fmt.c"
+#include "../fw2/gallery/tgy_hw.c"
+#include "../fw2/gallery/tgy_dec.c"
+#include "../fw2/gallery/tgy_pix.c"
 #include "../fw2/gallery/gallery_pattern.c"
 #include "../fw2/gallery/gallery_hw.c"
 #include "../fw2/gallery/gallery_settings.c"
@@ -154,6 +160,49 @@ static uint32_t next_input(void)
 #include "../fw2/ui/theme.c"
 #include "../fw2/gallery/gallery_app.c"
 #undef main
+
+/* ---- the hardware TGY decoder as tau_tgy_regs.sv / tau_tgy_dma.sv define it, over the SDRAM model: LOAD_TABLES reads the two tables at the programmed byte addresses, START decodes the tile at SRC with the C reference
+ * pipeline and writes its RGB rows at DST + row * PITCH byte for byte; busy for a few polls; done / err / rejected like the RTL. ---- */
+static struct { uint32_t src, len, dst, pitch, geom, qy, qc, status, polls; uint16_t ty[64], tc[64]; int tables_ok; uint32_t starts, loads; int corrupt_next; } tg;
+static tgy_dec_t tg_dec; static tgy_planes_t tg_planes;
+static uint8_t mbyte(uint32_t a) { return (uint8_t)(mem[a / 2u] >> (8u * (a & 1u))); }
+static void msetb(uint32_t a, uint8_t v) { const uint32_t h = a / 2u, b = a & 1u; mem[h] = (uint16_t)((mem[h] & ~(0xFFu << (8u * b))) | (uint32_t)v << (8u * b)); }
+typedef struct { uint32_t dst, pitch, w; } tg_emit_t;
+static void tg_emit(void *c, unsigned row, const uint8_t *rgb) { tg_emit_t *e = c; for (uint32_t i = 0; i < e->w * 3u; i++) msetb(e->dst + row * e->pitch + i, rgb[i]); }
+static uint32_t tgy_rd(uint32_t a)
+{
+    if (!tgy_present) return 0u;
+    switch (a) {
+    case 0x80000224u: { uint32_t s = tg.status & ~1u; if (tg.polls > 0) { tg.polls--; s |= 1u; } return 0x80000000u | s | (tg.tables_ok ? 8u : 0u); }
+    case 0x80000244u: return 4242u;
+    default: return 0u;
+    }
+}
+static void tgy_wr(uint32_t a, uint32_t v)
+{
+    if (!tgy_present) return;
+    switch (a) {
+    case 0x80000228u: tg.src = v & 0x3FFFFFFu; break; case 0x8000022Cu: tg.len = v & 0xFFFFFu; break; case 0x80000230u: tg.dst = v & 0x3FFFFFFu; break; case 0x80000234u: tg.pitch = v & 0xFFFFu; break;
+    case 0x80000238u: tg.geom = v & 0x3FFFFu; break; case 0x8000023Cu: tg.qy = v & 0x3FFFFFFu; break; case 0x80000240u: tg.qc = v & 0x3FFFFFFu; break;
+    case 0x80000220u:
+        if (v & 8u) tg.status &= ~0x16u;
+        if ((v & 3u) && tg.polls > 0) { tg.status |= 0x10u; break; }
+        if (v & 2u) {
+            for (int i = 0; i < 64; i++) { tg.ty[i] = (uint16_t)(mbyte(tg.qy + 2u * i) | mbyte(tg.qy + 2u * i + 1u) << 8); tg.tc[i] = (uint16_t)(mbyte(tg.qc + 2u * i) | mbyte(tg.qc + 2u * i + 1u) << 8); }
+            tg.tables_ok = 1; tg.loads++; tg.polls = 2; tg.status |= 2u;
+        } else if (v & 1u) {
+            const unsigned fmt = (tg.geom >> 16) & 3u, w = (tg.geom >> 8) & 255u, h = tg.geom & 255u; uint8_t rows[3] = {0}, cols[3] = {0}; static uint8_t sbuf[1u << 20];
+            if (fmt == 2u) { rows[0] = (uint8_t)(2u * ((h + 15u) / 16u)); cols[0] = (uint8_t)(2u * ((w + 15u) / 16u)); rows[1] = rows[2] = (uint8_t)((h + 15u) / 16u); cols[1] = cols[2] = (uint8_t)((w + 15u) / 16u); }
+            else { rows[0] = rows[1] = rows[2] = (uint8_t)((h + 7u) / 8u); cols[0] = cols[1] = cols[2] = (uint8_t)((w + 7u) / 8u); }
+            for (uint32_t i = 0; i < tg.len && i < sizeof sbuf; i++) sbuf[i] = mbyte(tg.src + i);                      /* the DMA's stream fetch from the landing window */
+            tg_emit_t e = { tg.dst, tg.pitch, w };
+            const int err = (fmt == 1u || !w || !h || w > 128u || h > 128u) ? 1 : tgy_tile_rgb(&tg_dec, &tg_planes, sbuf, tg.len, fmt, rows, cols, w, h, tg.ty, tg.tc, tg_emit, &e);
+            tg.status = (tg.status & ~0x6u) | (err ? 4u : 2u) | (err ? (1u << 8) : 0u); tg.starts++; tg.polls = 3;
+        }
+        break;
+    default: break;
+    }
+}
 _Static_assert(T_WIN0 == GAL_WIN0 && T_WIN1 == GAL_WIN1 && T_STAGE == GAL_STAGE, "the model's window addresses are the firmware's");
 
 static uint32_t count;
@@ -172,6 +221,13 @@ static int plane_is(uint32_t pic)                                               
     char f[600]; snprintf(f, sizeof f, "%s/p%02u.tgy", dir, pic); uint32_t n; uint8_t *d = slurp(f, &n); if (!d) return 0;
     uint32_t bad = 0;
     for (uint32_t b = 0; b < 1728000u; b++) { const uint8_t got = (uint8_t)(mem[0x200000u + b / 2u] >> (8u * (b & 1u))); if (got != d[20480u + b]) bad++; }
+    free(d); return bad == 0u;
+}
+static int plane_is_rgb(const char *fname)                                                       /* the plane equals the 800 x 720 RGB888 file `fname` (the reference decode of a version 1 picture) */
+{
+    char f[600]; snprintf(f, sizeof f, "%s/%s", dir, fname); uint32_t n; uint8_t *d = slurp(f, &n); if (!d || n != 1728000u) return 0;
+    uint32_t bad = 0;
+    for (uint32_t b = 0; b < 1728000u; b++) if ((uint8_t)(mem[0x200000u + b / 2u] >> (8u * (b & 1u))) != d[b]) bad++;
     free(d); return bad == 0u;
 }
 static int plane_is_f(const char *fname)                                                         /* the plane equals the canvas of the file `fname` of the set directory */
@@ -309,10 +365,18 @@ static int big_grid_ok(void)                                                    
     for (uint32_t e = n; e < 16u; e++) { const uint32_t x = 2u + (e % 4u) * 100u, y = 22u + (e / 4u) * 76u; for (uint32_t r = 0; r < 72u; r++) for (uint32_t c = 0; c < 96u; c++) if (fb[(y + r) * 512u + x + c] != th_role[TR_BG_BOTTOM]) return 0; }      /* the cells past the last picture stay empty */
     return page == pg && !strcmp(last_text(), w) && thumbs_on_screen(first, n) && fb[fy * 512u + fx] == th_role[TR_ACCENT];
 }
+static void clear_texts(void);
 static void checkpoint(int n)
 {
     char want[64]; char path[200];
     switch (n) {
+    case 200: chk(200, plane_is_rgb("v00.rgb") && tg.starts == 42u && tg.loads == 1u && !said("ERROR") && !said("DAMAGED")); clear_texts(); break;                          /* a version 1 picture opened from the grid: the plane is its decode, 42 tiles, one table load */
+    case 201: chk(201, plane_is_rgb("v01.rgb") && tg.starts == 84u && tg.loads == 2u); break;                                                                                 /* the next picture (a 500 x 300 one-level file): another table load for another file at the same base */
+    case 202: chk(202, plane_is_f("v02.tgy") && tg.starts == 84u); break;                                                                                                     /* a version 0 picture in the same library still lands as before (no decoder start) */
+    case 203: chk(203, said("DECODER ERROR") && vid_bus == 0u); clear_texts(); break;                                                                                         /* a damaged stream: the viewer is left and the status line says so */
+    case 204: chk(204, said("PICTURE DAMAGED")); clear_texts(); break;                                                                                                        /* a damaged tile index */
+    case 205: chk(205, said("NOT A TGY PICTURE")); clear_texts(); break;                                                                                                      /* a damaged header */
+    case 206: chk(206, said("NEEDS THE HW DECODER") && tg.starts == 0u); clear_texts(); break;                                                                                /* a core without the decoder */
     case 1: chk(50, th_role[TR_TEXT_PRIMARY] == 0xFFFFu && th_role[TR_BG_BOTTOM] == 0u && text_mode == 0u); chk(1, thumbs_on_screen(0, count < 16u ? count : 16u)); snprintf(want, sizeof want, "1/%u", count); chk(2, said(want)); chk(3, said("TAU GALLERY") && !said("FAILED")); break;
     case 2: snprintf(want, sizeof want, "3/%u", count); chk(4, !strcmp(last_text(), want)); chk(20, said("Picture 02")); break;
     case 3: chk(5, vid_bus == 1u && vbase == GAL_PLANE_BASE && vstride == 1200u); chk(6, plane_is(2)); snprintf(path, sizeof path, "/Assets/tau_gallery/common/photos/p%02u.tgy", 2u); chk(7, !strcmp(last_open, path)); chk(8, land_ovf == 0u && land_words == 1728512u / 4u); break;
@@ -493,6 +557,12 @@ int main(int argc, char **argv)
         S4[k++] = KEY_B; S4[k++] = 0; S4[k++] = KEY_B; S4[k++] = 0; HOLD(0, 12);
         S4[k++] = KEY_START; S4[k++] = 0; S4[k++] = KEY_DOWN; S4[k++] = 0; S4[k++] = KEY_DOWN; S4[k++] = 0; S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 3); S4[k++] = CP(128); S4[k++] = END;
         nscript = k; memcpy(script, S4, (size_t)k * sizeof S4[0]);
+        if (!setjmp(done)) gallery_app_main();
+        printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
+    }
+    if (argc > 2 && (!strcmp(argv[2], "v1") || !strcmp(argv[2], "v1nohw"))) {                          /* version 1 pictures drawn by the hardware decoder, in a library that also has a version 0 picture */
+        if (!strcmp(argv[2], "v1nohw")) { tgy_present = 0; const uint32_t S5[] = { KEY_A, 0, CP(206), END }; nscript = 4; memcpy(script, S5, sizeof S5); }
+        else { const uint32_t S5[] = { KEY_A, 0, CP(200), KEY_RIGHT, 0, CP(201), KEY_RIGHT, 0, CP(202), KEY_RIGHT, 0, CP(203), KEY_RIGHT, 0, KEY_A, 0, CP(204), KEY_RIGHT, 0, KEY_A, 0, CP(205), END }; nscript = (int)(sizeof S5 / sizeof S5[0]); memcpy(script, S5, sizeof S5); }
         if (!setjmp(done)) gallery_app_main();
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
     }

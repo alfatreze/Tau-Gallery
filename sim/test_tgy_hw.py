@@ -102,7 +102,7 @@ MUTANTS = [
     ("tile height not clipped", "(l->h - y0 < TH_TILE) ? l->h - y0 : TH_TILE", "TH_TILE"), ("tile width not clipped", "(l->w - x0 < TH_TILE) ? l->w - x0 : TH_TILE", "TH_TILE"),
     ("stream offset not added", "f->base + l->data_off + off", "f->base + l->data_off"), ("table address of Cb/Cr wrong", "128u * l->qc;\n    if ((qy | qc) & 1u)", "128u * l->qy;\n    if ((qy | qc) & 1u)"),
     ("tables skipped when cached wrongly (always)", "if (qy == g_loaded_y && qc == g_loaded_c) return TH_OK;", "if (g_loaded_y != 0xFFFFFFFFu) return TH_OK;"),
-    ("index CRC not compared", "return gf_crc32(f->img + l->idx_off, l->idx_len) == l->idx_crc ? TH_OK : TH_CRC;", "return TH_OK;"),
+    ("index CRC not compared", "if (gf_crc32(buf, l->idx_len) != l->idx_crc) return TH_CRC;", ""),
     ("header CRC not checked", "if (gf_crc32(img, 52u) != th32(img + 52)) return TH_CRC;", ""),
     ("hardware error ignored", "if (g_status & 4u) return TH_HWERR;", ""),
     ("rejected start ignored", "if (g_status & 0x10u) return TH_BUSY;", ""),
@@ -114,6 +114,7 @@ MUTANTS = [
     ("START without a separate CLEAR store first", "REG_WR(R_TGY_CTRL, 8u);                                                        /* CLEAR", "/* CLEAR"),
     ("4:4:4 level accepted", "if (fmt != 0u && fmt != 2u) return TH_UNSUPPORTED;", ""),
     ("level larger than the canvas accepted on show", "if ((uint32_t)l->rx + l->w > GT_CANVAS_W || (uint32_t)l->ry + l->h > GT_CANVAS_H) return TH_RANGE;", ""),
+    ("index read failure ignored", "if (!rd(ctx, l->idx_off, l->idx_len, buf)) return TH_SHORT;", ""),
     ("stream length halved", "REG_WR(R_TGY_LEN, len);", "REG_WR(R_TGY_LEN, len / 2u);"),
 ]
 def main():

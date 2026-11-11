@@ -65,30 +65,31 @@ void REG_WR(uint32_t a, uint32_t v)
 }
 #include "../fw2/gallery/tgy_hw.c"
 #include "../fw2/gallery/gallery_fmt.c"
+static uint32_t card_base; static int rd_card(void *c, uint32_t off, uint32_t len, uint8_t *dst) { (void)c; memcpy(dst, mem + card_base + off, len); return 1; }
 static int ticks; static int tick(void *c, uint32_t tx, uint32_t ty) { (void)c; (void)tx; (void)ty; ticks++; return 0; }
 int main(int argc, char **argv)
 {
     if (argc < 5) return 2; const char *mode = argv[1]; FILE *f = fopen(argv[2], "rb"); if (!f) return 2; uint32_t base = (uint32_t)strtoul(argv[3], 0, 0);
     mem = calloc(MEM_SIZE, 1); if (!mem) return 2;
     fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET); if (fread(mem + base, 1, (size_t)n, f) != (size_t)n) return 2; fclose(f);
-    hw.present = strcmp(mode, "absent") != 0; hw.force_busy = !strcmp(mode, "busy"); const char *fm = !strcmp(mode, "showfull") ? "full" : mode;
+    card_base = base; hw.present = strcmp(mode, "absent") != 0; hw.force_busy = !strcmp(mode, "busy"); const char *fm = !strcmp(mode, "showfull") ? "full" : mode;
     if (!strcmp(mode, "badhdr")) mem[base + 9] ^= 0x40;
     if (!strcmp(mode, "prefix") && argc > 5) { n = strtol(argv[5], 0, 0); memset(mem + base + n, 0, (size_t)(MEM_SIZE - base - n)); }          /* only the first n bytes of the file are resident */
-    tgy_file_t tf; int r = tgy_open(&tf, mem + base, (uint32_t)n, base);
+    tgy_file_t tf; int r = tgy_open(&tf, mem + base, (uint32_t)n, base);          /* the CPU's RAM copy of the header is the file's own first bytes here */
     printf("open %d\n", r); if (r != TH_OK) return 0;
     { tgy_level_t t; printf("full %d\n", tgy_find_level(&tf, 1u, &t)); }
     tgy_level_t l; r = tgy_find_level(&tf, !strcmp(fm, "full") ? 1u : 2u, &l); printf("find %d\n", r); if (r != TH_OK) return 0;
     printf("level %ux%u fmt %u tiles %ux%u rect %u,%u %ux%u\n", l.w, l.h, l.fmt, l.cols, l.rows, l.rx, l.ry, l.rw, l.rh);
     if (!strcmp(mode, "badidx")) mem[base + l.idx_off + 5] ^= 1;
-    r = tgy_check_index(&tf, &l); printf("index %d\n", r); if (r != TH_OK) return 0;
+    static uint8_t ibuf[65536]; r = tgy_load_index(&tf, &l, rd_card, 0, ibuf, sizeof ibuf); printf("index %d\n", r); if (r != TH_OK) return 0;
     if (!strcmp(mode, "hwerr")) { uint32_t ent = base + l.idx_off, off = mem[ent] | mem[ent + 1] << 8 | mem[ent + 2] << 16 | (uint32_t)mem[ent + 3] << 24; memset(mem + base + l.data_off + off, 0xFF, 40); }
     const uint32_t plane = 0x600000u, pitch_full = l.w * 3u + 5u, dst0 = 0x1000000u;
     if (!strcmp(mode, "show")) { memset(mem + plane, 0x55, 2400u * 720u); r = tgy_hw_show(&tf, &l, plane, tick, 0); }
     else if (!strcmp(mode, "full")) { memset(mem + dst0, 0x55, (size_t)(pitch_full) * (l.h + 1u)); r = tgy_hw_level(&tf, &l, dst0 + 1u, pitch_full, tick, 0); }
     else if (!strcmp(mode, "odd")) { tgy_file_t t2 = tf; t2.base |= 1u; r = tgy_hw_tables(&t2, &l); }
     else if (!strcmp(mode, "both")) {                                               /* the fit level on the canvas, then the full level of the SAME file (different tables): the cache must reload */
-        tgy_level_t lf; memset(mem + plane, 0x55, 2400u * 720u); r = tgy_hw_show(&tf, &l, plane, tick, 0);
-        if (r == TH_OK && tgy_find_level(&tf, 1u, &lf) == TH_OK) { memset(mem + dst0, 0x55, (size_t)(lf.w * 3u + 5u) * (lf.h + 1u)); r = tgy_hw_level(&tf, &lf, dst0 + 1u, lf.w * 3u + 5u, tick, 0); l = lf; }
+        tgy_level_t lf; static uint8_t ibuf2[65536]; memset(mem + plane, 0x55, 2400u * 720u); r = tgy_hw_show(&tf, &l, plane, tick, 0);
+        if (r == TH_OK && tgy_find_level(&tf, 1u, &lf) == TH_OK && tgy_load_index(&tf, &lf, rd_card, 0, ibuf2, sizeof ibuf2) == TH_OK) { memset(mem + dst0, 0x55, (size_t)(lf.w * 3u + 5u) * (lf.h + 1u)); r = tgy_hw_level(&tf, &lf, dst0 + 1u, lf.w * 3u + 5u, tick, 0); l = lf; }
     }
     else if (!strcmp(mode, "showfull")) { r = tgy_hw_show(&tf, &l, plane, tick, 0); }                                        /* a level wider than the canvas must be refused */
     else if (!strcmp(mode, "retry")) {                                              /* the first start is rejected (a race with a busy decoder), the caller retries the same tile */
@@ -100,6 +101,7 @@ int main(int argc, char **argv)
         FILE *g = fopen(argv[5], "rb"); fseek(g, 0, SEEK_END); long n2 = ftell(g); fseek(g, 0, SEEK_SET); memset(mem + base, 0, (size_t)n); if (fread(mem + base, 1, (size_t)n2, g) != (size_t)n2) return 2; fclose(g);
         r = tgy_open(&tf, mem + base, (uint32_t)n2, base); if (r != TH_OK) { printf("open2 %d\n", r); return 0; }
         r = tgy_find_level(&tf, 2u, &l); if (r != TH_OK) { printf("find2 %d\n", r); return 0; }
+        r = tgy_load_index(&tf, &l, rd_card, 0, ibuf, sizeof ibuf); if (r != TH_OK) { printf("index2 %d\n", r); return 0; }
         memset(mem + plane, 0x55, 2400u * 720u); r = tgy_hw_show(&tf, &l, plane, tick, 0);
     }
     printf("run %d status %08x ticks %d starts %d loads %d order %d\n", r, tgy_hw_status(), ticks, hw.starts, hw.loads, hw.bad_order);

@@ -7,6 +7,7 @@
 #include "../stream/slot.h"
 #include "gallery_hw.h"
 #include "gallery_fmt.h"
+#include "tgy_hw.h"
 #include "gallery_pages.h"
 #include "gallery_settings_hw.h"
 #include "../ui/theme.h"
@@ -140,6 +141,59 @@ static int land_canvas(const gt_info_t *t, uint32_t total, int show_progress)
     }
     return 0;
 }
+/* ---- container version 1 (docs/TGY_CONTAINER_V1.md): the picture is a tiled, compressed file; the hardware decoder (tgy_hw.c, docs/TGY_HW_DMA.md) draws it. The card read lands only the first part of the file (the header, the
+ * thumbnail, the fit level: it comes first) in the landing window at GAL_LAND_BASE; the decoder fetches the tile streams and the quantisation tables from there and writes the tiles into the viewer plane. The fit level
+ * of the files the converter writes is the whole 800 x 720 canvas (the black bars are part of it), so every byte of the plane is written and nothing needs clearing. ---- */
+#define V1_IDX_MAX 2048u                          /* the tile index of the fit level: 12 bytes a tile, 42 tiles for 800 x 720 (the converter's fit level), room for 170 */
+static tgy_file_t v1f; static tgy_level_t v1l; static uint8_t v1_idx[V1_IDX_MAX]; static uint32_t v1_on;       /* the open picture is a version 1 file shown by the decoder */
+static int v1_read_idx(void *ctx, uint32_t off, uint32_t len, uint8_t *dst) { (void)ctx; return read_bytes(SLOT_PIC, off, len, dst); }
+static int v1_land(uint32_t total, int show_progress)       /* lands bytes 0 .. total of the file at the landing window; 0 or 5 */
+{
+    REG_WR(R_LAND_BASE, GAL_LAND_BASE); REG_WR(R_LAND_CTRL, 1u);
+    for (uint32_t c = 0; c < total; c += LAND_CHUNK) {
+        const uint32_t len = total - c < LAND_CHUNK ? total - c : LAND_CHUNK;
+        if (!slot_read_blocking(SLOT_PIC, c, 0x40000000u + c, len, CLK_HZ * 4u)) return 5;
+        if (show_progress) { char b[24], *q = put_s(b, "LOADING "); q = put_u(q, (c + len) * 100u / total); q = put_s(q, "%"); *q = 0; say(b, ACC); loader_bar(c + len, total); }
+    }
+    return 0;
+}
+static int v1_tick(void *ctx, uint32_t tx, uint32_t ty)
+{
+    const int *show = ctx;
+    if (*show) { const uint32_t done = ty * v1l.cols + tx + 1u, all = v1l.cols * v1l.rows; char b[24], *q = put_s(b, "DECODING "); q = put_u(q, done * 100u / all); q = put_s(q, "%"); *q = 0; say(b, ACC); loader_bar(done, all); }
+    return 0;
+}
+static int open_v1(int show_progress)
+{
+    v1_on = 0u;
+    if (!tgy_hw_present()) return 7;                                                 /* a version 1 picture needs the hardware decoder */
+    if (!(REG_RD(R_LAND_STATUS) >> 31)) return 4;
+    const uint32_t fsize = (uint32_t)h4[48] | (uint32_t)h4[49] << 8 | (uint32_t)h4[50] << 16 | (uint32_t)h4[51] << 24, base = GAL_LAND_BASE * 2u;
+    int r = tgy_open(&v1f, h4, fsize, base);                                         /* first with the whole file in view, to learn where the fit level ends */
+    if (r == TH_CRC || r == TH_MAGIC || r == TH_VERSION || r == TH_SHORT) return 3;
+    if (r != TH_OK) return 8;
+    if (tgy_find_level(&v1f, 2u, &v1l) != TH_OK && tgy_find_level(&v1f, 1u, &v1l) != TH_OK) return 8;
+    uint32_t end = v1l.data_off + v1l.data_len; if (v1l.idx_off + v1l.idx_len > end) end = v1l.idx_off + v1l.idx_len;
+    end = (end + 4095u) & ~4095u; if (end > fsize) end = fsize;
+    if (v1_land(end, show_progress) && v1_land(end, show_progress)) return 5;        /* one retry, as for a version 0 picture */
+    uint32_t t0 = cycles();
+    while (!(REG_RD(R_LAND_STATUS) & 1u) && (uint32_t)(cycles() - t0) < CLK_HZ / 10u) { }
+    if (REG_RD(R_LAND_OVF) != 0u || REG_RD(R_LAND_WORDS) != end / 4u) return 6;
+    if (tgy_open(&v1f, h4, end, base) != TH_OK || tgy_find_level(&v1f, v1l.kind, &v1l) != TH_OK) return 8;
+    if (v1l.idx_len > V1_IDX_MAX) return 8;
+    r = tgy_load_index(&v1f, &v1l, v1_read_idx, 0, v1_idx, V1_IDX_MAX);
+    if (r == TH_SHORT) return 2;
+    if (r != TH_OK) return 8;
+    int show = show_progress;
+    r = tgy_hw_show(&v1f, &v1l, GAL_PLANE_BASE * 2u, v1_tick, &show);
+    if (r == TH_HWERR) return 9;
+    if (r == TH_TIMEOUT) return 10;
+    if (r != TH_OK) return 8;
+    pic.width = v1f.width; pic.height = v1f.height; pic.file_size = fsize; pic.canvas_off = 0u; pic.canvas_len = 0u; pic.thumb_off = 0u;
+    pic.rx = v1l.rx; pic.ry = v1l.ry; pic.rw = v1l.rw; pic.rh = v1l.rh;
+    v1_on = 1u;
+    return 0;
+}
 static int open_picture(uint32_t i, int show_progress)
 {
     char path[GX_PATH_MAX + 2u]; path[0] = '/';
@@ -147,6 +201,8 @@ static int open_picture(uint32_t i, int show_progress)
     if (show_progress) { say("OPENING", ACC); loader_bar(0u, 1u); }
     if (!slot_open_path(SLOT_PIC, path)) return 1;
     if (!read_bytes(SLOT_PIC, 0u, 4096u, h4) && !read_bytes(SLOT_PIC, 0u, 4096u, h4)) return 2;      /* one retry of a failed read: a transient card error should not cost the picture */
+    if (h4[0] == 'T' && h4[1] == 'G' && h4[2] == 'Y' && h4[3] == 0 && h4[4] == 1u && h4[5] == 0u) return open_v1(show_progress);       /* container version 1: the hardware decoder */
+    v1_on = 0u;
     if (gt_parse(h4, 4096u, &pic)) return 3;
     if (!(REG_RD(R_LAND_STATUS) >> 31)) return 4;                                   /* no landing path in this bitstream */
     const uint32_t total = (pic.canvas_len + 4095u) & ~4095u;                         /* the file is padded to 4 KB: read the padding too, it lands just past the plane */
@@ -156,7 +212,7 @@ static int open_picture(uint32_t i, int show_progress)
     if (REG_RD(R_LAND_OVF) != 0u || REG_RD(R_LAND_WORDS) != total / 4u) return 6;   /* a word was dropped or lost: do not show a damaged picture */
     return 0;
 }
-static const char *const open_msg[] = { "", "OPEN FAILED", "HEADER READ FAILED", "NOT A TGY PICTURE", "NO LANDING PATH", "PICTURE READ FAILED", "PICTURE DAMAGED IN TRANSFER" };
+static const char *const open_msg[] = { "", "OPEN FAILED", "HEADER READ FAILED", "NOT A TGY PICTURE", "NO LANDING PATH", "PICTURE READ FAILED", "PICTURE DAMAGED IN TRANSFER", "NEEDS THE HW DECODER", "PICTURE DAMAGED", "DECODER ERROR", "DECODER TIMEOUT" };
 
 /* open_picture with the Info page's numbers: how long it took (ms), the landing's word counts (only when a landing ran), the status line text. */
 static void zoom_list(void);

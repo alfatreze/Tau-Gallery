@@ -8,7 +8,7 @@ BIN="${RISCV_TOOLCHAIN_BIN:-$(python3 "$ROOT/tools/toolchain.py" bin)}" || exit 
 GCC="${CC_RISCV:-$BIN/riscv-none-elf-gcc}"; OBJCOPY="${OBJCOPY_RISCV:-$BIN/riscv-none-elf-objcopy}"; SIZE="${SIZE_RISCV:-$BIN/riscv-none-elf-size}"; NM="$BIN/riscv-none-elf-nm"
 # APP=gallery builds the gallery itself (M1: grid, open, viewer); the default is the M0 test page.
 APP="${APP:-test}"
-if [ "$APP" = "gallery" ]; then OUTNAME=gallery-app; MAINSRC=("$FW2/gallery/gallery_fmt.c" "$FW2/gallery/gallery_settings.c" "$FW2/gallery/gallery_theme_stub.c" "$FW2/ui/theme.c" "$FW2/gallery/gallery_app.c"); else OUTNAME=gallery; MAINSRC=("$FW2/gallery/gallery_main.c"); fi
+if [ "$APP" = "gallery" ]; then OUTNAME=gallery-app; MAINSRC=("$FW2/gallery/gallery_fmt.c" "$FW2/gallery/gallery_settings.c" "$FW2/gallery/gallery_theme_stub.c" "$FW2/ui/theme.c" "$FW2/gallery/tgy_hw.c" "$FW2/gallery/gallery_app.c"); else OUTNAME=gallery; MAINSRC=("$FW2/gallery/gallery_main.c"); fi
 OUT="${TAU_BUILD_OUT:-$ROOT/work/diagnostics}/$OUTNAME"; mkdir -p "$OUT"
 rm -f "$OUT/fw2.elf" "$OUT/tau.rom"
 SRCS=("$FW2/platform/start.S" "$FW2/platform/platform.c" "$FW2/platform/libc_min.c" "$FW2/gfx/gfx.c" "$FW2/stream/slot.c"

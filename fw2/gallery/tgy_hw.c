@@ -12,25 +12,25 @@ static uint32_t g_status, g_loaded_y = 0xFFFFFFFFu, g_loaded_c = 0xFFFFFFFFu;
 
 int tgy_open(tgy_file_t *f, const uint8_t *img, uint32_t n, uint32_t base)
 {
-    tgy_hw_forget();                                                              /* a new file (the landing window is reused for every picture): the decoder's tables are stale */
     if (n < 4096u) return TH_SHORT;
+    tgy_hw_forget();                                                              /* a new file (the landing window is reused for every picture): the decoder's tables are stale */
     if (img[0] != 'T' || img[1] != 'G' || img[2] != 'Y' || img[3] != 0) return TH_MAGIC;
     if (th16(img + 4) != 1u || th16(img + 6) != TH_HEAD) return TH_VERSION;
     if (gf_crc32(img, 52u) != th32(img + 52)) return TH_CRC;
     const uint32_t nlev = th32(img + 20), lt = th32(img + 24), tab = th32(img + 40), tlen = th32(img + 44), size = th32(img + 48);
     if (n > size || (base & 1u)) return base & 1u ? TH_ODD : TH_RANGE;                 /* n bytes of the file are resident: the whole file, or a prefix (the fit level first) */
-    if (nlev < 1u || nlev > 16u || lt < TH_HEAD || lt + nlev * TH_LEVEL > n) return TH_RANGE;
-    if (tab < TH_HEAD || tlen < 2u || tab > n || tlen > n - tab) return TH_RANGE;
+    if (nlev < 1u || nlev > 16u || lt < TH_HEAD || lt + nlev * TH_LEVEL > 4096u) return TH_RANGE;         /* the level table and the tables are inside the first 4 KB (container spec section 1) */
+    if (tab < TH_HEAD || tlen < 2u || tab + tlen > 4096u) return TH_RANGE;
     const uint32_t nt = th16(img + tab);
     if (nt > 8u || 2u + nt * 128u > tlen || (tab & 1u)) return TH_RANGE;
-    f->img = img; f->base = base; f->n = n; f->width = th32(img + 8); f->height = th32(img + 12); f->nlevels = nlev; f->level_off = lt; f->tables_off = tab; f->ntables = nt;
+    f->hdr = img; f->base = base; f->n = n; f->size = size; f->width = th32(img + 8); f->height = th32(img + 12); f->nlevels = nlev; f->level_off = lt; f->tables_off = tab; f->ntables = nt;
     return TH_OK;
 }
 
 int tgy_level(const tgy_file_t *f, uint32_t i, tgy_level_t *l)
 {
     if (i >= f->nlevels) return TH_NOLEVEL;
-    const uint8_t *e = f->img + f->level_off + i * TH_LEVEL;
+    const uint8_t *e = f->hdr + f->level_off + i * TH_LEVEL;
     const uint32_t w = th32(e), h = th32(e + 4), layout = e[16], mode = e[17], fmt = e[18], kind = e[19], qy = e[20], qc = e[21], log2 = e[22];
     if (layout != 1u || mode != 1u || log2 != 7u) return TH_UNSUPPORTED;
     if (fmt != 0u && fmt != 2u) return TH_UNSUPPORTED;                             /* 4:4:4 needs the larger chroma memory (C444) this core does not have */
@@ -42,7 +42,7 @@ int tgy_level(const tgy_file_t *f, uint32_t i, tgy_level_t *l)
     if (qy >= f->ntables || (fmt != 0u && qc >= f->ntables)) return TH_RANGE;
     l->w = w; l->h = h; l->cols = cols; l->rows = rows; l->data_off = doff; l->data_len = dlen; l->idx_off = ioff; l->idx_len = ilen; l->idx_crc = th32(e + 40);
     l->rx = (uint16_t)th16(e + 8); l->ry = (uint16_t)th16(e + 10); l->rw = (uint16_t)th16(e + 12); l->rh = (uint16_t)th16(e + 14);
-    l->fmt = (uint8_t)fmt; l->kind = (uint8_t)kind; l->qy = (uint8_t)qy; l->qc = (uint8_t)(fmt != 0u ? qc : qy);
+    l->fmt = (uint8_t)fmt; l->kind = (uint8_t)kind; l->qy = (uint8_t)qy; l->qc = (uint8_t)(fmt != 0u ? qc : qy); l->idx = 0;
     return TH_OK;
 }
 
@@ -51,7 +51,15 @@ int tgy_find_level(const tgy_file_t *f, unsigned kind, tgy_level_t *l)
     for (uint32_t i = 0; i < f->nlevels; i++) { tgy_level_t t; if (tgy_level(f, i, &t) == TH_OK && t.kind == kind) { *l = t; return TH_OK; } }
     return TH_NOLEVEL;
 }
-int tgy_check_index(const tgy_file_t *f, const tgy_level_t *l) { return gf_crc32(f->img + l->idx_off, l->idx_len) == l->idx_crc ? TH_OK : TH_CRC; }
+int tgy_load_index(const tgy_file_t *f, tgy_level_t *l, tgy_read_fn rd, void *ctx, uint8_t *buf, uint32_t cap)
+{
+    (void)f;
+    if (l->idx_len > cap) return TH_RANGE;
+    if (!rd(ctx, l->idx_off, l->idx_len, buf)) return TH_SHORT;
+    if (gf_crc32(buf, l->idx_len) != l->idx_crc) return TH_CRC;
+    l->idx = buf;
+    return TH_OK;
+}
 
 int tgy_hw_present(void) { return (REG_RD(R_TGY_STATUS) >> 31) & 1u; }
 uint32_t tgy_hw_status(void) { return g_status; }
@@ -81,9 +89,9 @@ int tgy_hw_tables(const tgy_file_t *f, const tgy_level_t *l)
 
 int tgy_hw_tile(const tgy_file_t *f, const tgy_level_t *l, uint32_t tx, uint32_t ty, uint32_t dst, uint32_t pitch)
 {
-    if (tx >= l->cols || ty >= l->rows) return TH_RANGE;
+    if (tx >= l->cols || ty >= l->rows || !l->idx) return TH_RANGE;
     int r = tgy_hw_tables(f, l); if (r != TH_OK) return r;
-    const uint8_t *ent = f->img + l->idx_off + (ty * l->cols + tx) * TH_IDX;
+    const uint8_t *ent = l->idx + (ty * l->cols + tx) * TH_IDX;
     const uint32_t off = th32(ent), len = th32(ent + 4);
     if (off > l->data_len || len > l->data_len - off || len >= (1u << 20)) return TH_RANGE;
     const uint32_t x0 = tx * TH_TILE, y0 = ty * TH_TILE, tw = (l->w - x0 < TH_TILE) ? l->w - x0 : TH_TILE, th = (l->h - y0 < TH_TILE) ? l->h - y0 : TH_TILE;

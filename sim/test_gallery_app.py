@@ -31,6 +31,31 @@ def make_zoom_set(d):
         ents.append(dict(path=f"Assets/tau_gallery/common/photos/z{i:02d}.tgy", name=f"Zoom {i:02d}", size=len(data), width=size[0], height=size[1])); ths.append(thumb)
     (d / "tau-library.tdb").write_bytes(tgy.pack_index(ents, ths))
 
+def make_v1_set(d):
+    """Version 1 pictures for the hardware decoder (the converter's canvas container): v00 a 1000 x 900 JPEG (fit canvas + lossless full level), v01 a 500 x 300 picture (the fit canvas only), v02 a version 0 picture, v03 a v1 file whose first tile
+    stream is damaged, v04 a v1 file with a damaged tile index, v05 a v1 file with a damaged header. Also the reference decode of v00 and v01 (vNN.rgb: the 800 x 720 canvas, TGY profile)."""
+    import io, numpy as np, tgy_container as C, tgy_make, test_jpegcoef as TJ
+    ents, ths = [], []
+    def add(i, data, thumb, size, name):
+        (d / f"v{i:02d}.tgy").write_bytes(data)
+        ents.append(dict(path=f"Assets/tau_gallery/common/photos/v{i:02d}.tgy", name=name, size=len(data), width=size[0], height=size[1])); ths.append(thumb)
+    jp = d / "src0.jpg"; TJ.picture(1000, 900, seed=3).save(jp, quality=90)
+    imgs = [TJ.picture(1000, 900, seed=3), TJ.picture(500, 300, seed=4), TJ.picture(640, 480, seed=5), TJ.picture(900, 700, seed=6), TJ.picture(900, 700, seed=7), TJ.picture(900, 700, seed=8)]
+    data0 = None
+    for i in (0, 1, 3, 4, 5):
+        prep = tgy.prepare(imgs[i]); data, thumb, size = tgy_make.canvas_container(jp if i == 0 else None, prep)
+        if i in (0, 1):
+            c = C.Container(data); fit = [k for k, e in enumerate(c.levels) if e["kind"] == C.KIND_FIT][0]; (d / f"v{i:02d}.rgb").write_bytes(c.pixels(fit).tobytes())
+        if i == 3:
+            c = C.Container(data); e = c.levels[0]; off = e["data_off"]; b = bytearray(data); b[off:off + 40] = b"\xff" * 40; data = bytes(b)      # the first tile's stream: the decoder reports an error
+        if i == 4:
+            c = C.Container(data); e = c.levels[0]; b = bytearray(data); b[e["index_off"] + 5] ^= 1; data = bytes(b)
+        if i == 5:
+            b = bytearray(data); b[9] ^= 0x40; data = bytes(b)
+        add(i, data, thumb, size, f"V1 picture {i:02d}")
+    canvas, rect, thumb, size = tgy.render(imgs[2]); add(2, tgy.pack_tgy(canvas, rect, thumb, size), thumb, size, "V0 picture 02")
+    order = sorted(range(len(ents)), key=lambda k: ents[k]["path"]); (d / "tau-library.tdb").write_bytes(tgy.pack_index([ents[k] for k in order], [ths[k] for k in order]))
+
 def make_set(d, n=18):
     ents, ths = [], []
     for i in range(n):
@@ -62,7 +87,7 @@ def build(workdir, fw=None):
     return True
 
 SCENARIOS = ("resume5", "resume17", "badcrc", "toohigh", "off", "layout0", "ocean_light", "badlook")     # boot scenarios: the saved state, the grid must open on picture 6 or 18, or on picture 1 when it is not the same picture / resume is off / the file is not ours
-BIGSET = None; ZSET = None
+BIGSET = None; ZSET = None; V1SET = None
 def run(workdir, setdir):
     r = subprocess.run([str(workdir / "t"), str(setdir)], capture_output=True, text=True, timeout=600)
     rc, out = r.returncode, r.stdout
@@ -74,12 +99,18 @@ def run(workdir, setdir):
     if ZSET is None: ZSET = Path(tempfile.mkdtemp()); make_zoom_set(ZSET)
     r = subprocess.run([str(workdir / "t"), str(ZSET), "zoom"], capture_output=True, text=True, timeout=900)
     if r.returncode: rc = 1; out += "\nFAIL scenario zoom\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
+    global V1SET
+    if V1SET is None: V1SET = Path(tempfile.mkdtemp()); make_v1_set(V1SET)
+    for sc in ("v1", "v1nohw"):
+        r = subprocess.run([str(workdir / "t"), str(V1SET), sc], capture_output=True, text=True, timeout=900)
+        if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
+        else: out += "\n" + r.stdout
     for sc in ("big", "bigresume250", "bigresume299"):
         r = subprocess.run([str(workdir / "t"), str(BIGSET), sc], capture_output=True, text=True, timeout=900)
         if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
     return rc, out
 
-def mutants(setdir):
+def mutants(setdir, tail=None):
     muts = [("gallery_app.c", "REG_WR(R_LAND_BASE, GAL_PLANE_BASE);", "REG_WR(R_LAND_BASE, GAL_PLANE_BASE + 2u);"),
             ("gallery_app.c", "0x40000000u + c, len,", "0x40000000u, len,"),
             ("gallery_app.c", "t->canvas_off + c, 0x40000000u", "t->canvas_off, 0x40000000u"),
@@ -204,6 +235,16 @@ def mutants(setdir):
             ("gallery_app.c", "const int32_t row = e < 2 ? ry + e : ry + rh - 4 + e;", "const int32_t row = e < 2 ? ry + e : ry + rh - 3 + e;"),
             ("gallery_app.c", "info.flip_ms = (cycles() - t_rc_t0) / (CLK_HZ / 1000u);", "info.flip_ms = 0u;"),
             ("gallery_fmt.c", "return h->entries_off + i * GX_ENTRY_BYTES;" if False else "uint32_t gx_thumb_off(const gx_head_t *h, uint32_t thumb) { return h->atlas_off + thumb * GX_THUMB_BYTES; }", "uint32_t gx_thumb_off(const gx_head_t *h, uint32_t thumb) { return h->atlas_off + thumb * (GX_THUMB_BYTES - 2u); }")]
+    muts += [                                                                                                      # the version 1 path (open_v1, the hardware decoder)
+        ("gallery_app.c", "REG_WR(R_LAND_BASE, GAL_LAND_BASE); REG_WR(R_LAND_CTRL, 1u);", "REG_WR(R_LAND_BASE, GAL_LAND_BASE + 2u); REG_WR(R_LAND_CTRL, 1u);"),
+        ("gallery_app.c", "if (!tgy_hw_present()) return 7;", ""),
+        ("gallery_app.c", "if (r == TH_HWERR) return 9;", "if (r == TH_HWERR) return 8;"),
+        ("gallery_app.c", "if (r == TH_CRC || r == TH_MAGIC || r == TH_VERSION || r == TH_SHORT) return 3;", ""),
+        ("gallery_app.c", "h4[4] == 1u && h4[5] == 0u) return open_v1(show_progress);", "h4[4] == 1u && h4[5] == 7u) return open_v1(show_progress);"),
+        ("gallery_app.c", "r = tgy_hw_show(&v1f, &v1l, GAL_PLANE_BASE * 2u, v1_tick, &show);", "r = tgy_hw_show(&v1f, &v1l, GAL_LAND_BASE * 2u, v1_tick, &show);"),
+        ("gallery_app.c", "const uint32_t fsize = (uint32_t)h4[48] | (uint32_t)h4[49] << 8 | (uint32_t)h4[50] << 16 | (uint32_t)h4[51] << 24, base = GAL_LAND_BASE * 2u;", "const uint32_t fsize = (uint32_t)h4[48] | (uint32_t)h4[49] << 8 | (uint32_t)h4[50] << 16 | (uint32_t)h4[51] << 24, base = GAL_LAND_BASE * 2u + 2u;"),
+    ]
+    if tail: muts = muts[-tail:]                                                                                # --v1-mutants: only the version 1 path's
     bad = 0
     for i, (f, a, b) in enumerate(muts):
         text = (ROOT / "fw2/gallery" / f).read_text(); assert a in text, (i, a)
@@ -216,6 +257,7 @@ def mutants(setdir):
 if __name__ == "__main__":
     setdir = Path(tempfile.mkdtemp()); make_set(setdir)
     if "--mutants" in sys.argv: sys.exit(1 if mutants(setdir) else 0)
+    if "--v1-mutants" in sys.argv: sys.exit(1 if mutants(setdir, 7) else 0)
     w = Path(tempfile.mkdtemp())
     if not build(w): sys.exit(1)
     rc, out = run(w, setdir); print("\n".join(l for l in out.splitlines() if "FAIL" in l or "PASSED" in l)); sys.exit(rc)

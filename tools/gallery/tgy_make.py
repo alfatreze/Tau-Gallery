@@ -38,6 +38,26 @@ def from_image(img, quality=92, fit_quality=90):
     levels = ([lvl] if lvl else []) + [dict(kind=C.KIND_FULL, pic=full, rect=rect if not lvl else (0, 0, rgb.shape[1], rgb.shape[0]))]
     return C.write_container(rgb.shape[1], rgb.shape[0], 1, thumb_of(small), levels)
 
+def canvas_container(path, prep, quality=92, fit_quality=90, upscale=False, full=True):
+    """The container for the gallery APP (docs/TGY_HW_DMA.md): the fit level is the WHOLE 800 x 720 canvas (the picture fitted and centred on black, the black bars are part of the encoded picture), so the hardware decoder writes every
+    byte of the viewer plane and the firmware never clears it. `prep` = tgy.prepare(Image) (oriented, sRGB). A picture larger than the canvas also gets its full-resolution level (a JPEG file losslessly, anything else encoded at
+    `quality`) for later zoom; `full=False` omits it. Returns (container bytes, thumbnail RGB565 bytes, (width, height))."""
+    canvas, rect, thumb, size = tgy.render_prepared(prep, upscale=upscale)
+    rgb = np.frombuffer(canvas, np.uint8).reshape(tgy.CANVAS_H, tgy.CANVAS_W, 3)
+    levels = [dict(kind=C.KIND_FIT, pic=E.encode_rgb(rgb, fit_quality, 2), rect=(0, 0, tgy.CANVAS_W, tgy.CANVAS_H))]; orient = 1
+    if full and (prep.width > tgy.CANVAS_W or prep.height > tgy.CANVAS_H):
+        pic = None; data = Path(path).read_bytes() if path is not None else b""
+        try:
+            j = jpegcoef.read_jpeg(data); orient = int(Image.open(io.BytesIO(data)).getexif().get(0x0112, 1) or 1)
+            if orient in ORIENT: assert (j.width, j.height) == (prep.height, prep.width) or orient in (2, 3, 4)
+            elif orient != 1: orient = 1
+            pic = j
+            if (j.width, j.height) not in ((prep.width, prep.height), (prep.height, prep.width)): pic = None
+        except (ValueError, IndexError, StopIteration, KeyError, AssertionError, OSError): pic = None
+        if pic is None: orient = 1; pic = E.encode_rgb(np.asarray(prep), quality, 2)
+        levels.append(dict(kind=C.KIND_FULL, pic=pic, rect=(0, 0, prep.width, prep.height)))
+    return C.write_container(prep.width, prep.height, orient, thumb, levels), thumb, (prep.width, prep.height)
+
 def convert(path, quality=92, fit_quality=90):
     data = Path(path).read_bytes()
     try: return from_jpeg(data, fit_quality), "jpeg-lossless"
