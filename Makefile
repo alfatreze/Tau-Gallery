@@ -1004,3 +1004,9 @@ test-tgy-container:
 	$(PYTHON) sim/test_tgy_container.py --mutants
 	$(PYTHON) sim/test_tgy_container_vectors.py
 
+# The C decoder of the frozen TGY symbol layer (fw2/gallery/tgy_dec.c): conformance vectors, random tiles, sanitizer fuzz, tables, 23 mutants, RISC-V size.
+.PHONY: test-tgy-dec-c
+test-tgy-dec-c:
+	$(PYTHON) sim/test_tgy_dec_c.py
+	$(PYTHON) sim/test_tgy_dec_c.py --mutants
+

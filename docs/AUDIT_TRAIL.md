@@ -16391,3 +16391,7 @@ New: `tools/gallery/tgymodel.py` (symbol layer over the TVC coder, one binarisat
 
 Spec, reference writer and reader, converter, pixel-source encoder, vectors, 13 tests and 13 mutants (docs/M3_STREAMING_NOTE.md section 17). Host only: no firmware, RTL or Pocket change.
 
+## B-1049: C decoder of the TGY symbol layer v0 (owner: "resume", 2026-11-12)
+
+`fw2/gallery/tgy_dec.c` and `.h`, `sim/tgy_dec_harness.c`, `sim/test_tgy_dec_c.py` (`make test-tgy-dec-c`): vectors, 60 random tiles, 4,000 fuzzed streams under sanitizers, tables check, 23 of 23 mutants killed, 2,132 bytes of rv32im code. Host only; not built into the firmware yet, nothing on a Pocket. Details: docs/M3_STREAMING_NOTE.md section 18.
+
