@@ -19,8 +19,8 @@ int tgy_open(tgy_file_t *f, const uint8_t *img, uint32_t n, uint32_t base)
     if (gf_crc32(img, 52u) != th32(img + 52)) return TH_CRC;
     const uint32_t nlev = th32(img + 20), lt = th32(img + 24), tab = th32(img + 40), tlen = th32(img + 44), size = th32(img + 48);
     if (n > size || (base & 1u)) return base & 1u ? TH_ODD : TH_RANGE;                 /* n bytes of the file are resident: the whole file, or a prefix (the fit level first) */
-    if (nlev < 1u || nlev > 16u || lt < TH_HEAD || lt + nlev * TH_LEVEL > 4096u) return TH_RANGE;         /* the level table and the tables are inside the first 4 KB (container spec section 1) */
-    if (tab < TH_HEAD || tlen < 2u || tab + tlen > 4096u) return TH_RANGE;
+    if (nlev < 1u || nlev > 16u || lt < TH_HEAD || lt > 4096u || nlev * TH_LEVEL > 4096u - lt) return TH_RANGE;         /* the level table and the tables are inside the first 4 KB (container spec section 1) */
+    if (tab < TH_HEAD || tab > 4096u || tlen < 2u || tlen > 4096u - tab) return TH_RANGE;
     const uint32_t nt = th16(img + tab);
     if (nt > 8u || 2u + nt * 128u > tlen || (tab & 1u)) return TH_RANGE;
     f->hdr = img; f->base = base; f->n = n; f->size = size; f->width = th32(img + 8); f->height = th32(img + 12); f->nlevels = nlev; f->level_off = lt; f->tables_off = tab; f->ntables = nt;

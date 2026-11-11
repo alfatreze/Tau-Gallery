@@ -797,6 +797,11 @@ set_global_assignment -name SEARCH_PATH core
 set_global_assignment -name SYSTEMVERILOG_FILE core/tau_gfx.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/tau_talos.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/tau_scanout.sv
+# Tau Gallery modules (found through SEARCH_PATH core in every fit so far; listed so test_check_qsf_files holds and a missing file is an error, B-1063)
+set_global_assignment -name SYSTEMVERILOG_FILE core/tau_scanout_v.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/tau_vidmode.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/tau_land.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/tau_sdram_p2mux.sv
 set_global_assignment -name VERILOG_FILE core/font_rom.v
 set_global_assignment -name VERILOG_FILE core/font_ram.v
 # -- the shared SDRAM PHY + sched_v + the player's adapters (the only SDRAM path since D-T13; fits sa2-b927 and def-b931, TAU DEV 200/201) --

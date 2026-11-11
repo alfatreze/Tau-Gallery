@@ -45,7 +45,7 @@ int gt_parse(const uint8_t *b, uint32_t n, gt_info_t *t)
     if (gf_crc32(b, 52u) != rd32(b + 52)) return GF_CRC;
     const uint32_t nlev = rd32(b + 20), lt = rd32(b + 24), fsize = rd32(b + 48);
     t->width = rd32(b + 8); t->height = rd32(b + 12); t->file_size = fsize; t->thumb_off = rd32(b + 28);
-    if (lt < 64u || nlev == 0u || nlev > 16u || lt + nlev * 48u > n) return GF_RANGE;
+    if (lt < 64u || nlev == 0u || nlev > 16u || lt > n || nlev * 48u > n - lt) return GF_RANGE;
     for (uint32_t i = 0; i < nlev; i++) {
         const uint8_t *e = b + lt + i * 48u;
         if (e[16] != 0u || e[17] != 0u || e[18] != 0u || e[19] != 0u) continue;                       /* layout raster, mode RAW, RGB888, kind fit canvas */
@@ -65,7 +65,7 @@ int gt_zoom_level(const uint8_t *b, uint32_t n, uint32_t k, gt_zoom_t *z)
     if (rd16(b + 4) != 0u || rd16(b + 6) != 64u) return GF_VERSION;
     if (gf_crc32(b, 52u) != rd32(b + 52)) return GF_CRC;
     const uint32_t nlev = rd32(b + 20), lt = rd32(b + 24), fsize = rd32(b + 48), width = rd32(b + 8);
-    if (lt < 64u || nlev == 0u || nlev > 16u || lt + nlev * 48u > n || width == 0u) return GF_RANGE;
+    if (lt < 64u || nlev == 0u || nlev > 16u || lt > n || nlev * 48u > n - lt || width == 0u) return GF_RANGE;
     uint32_t seen = 0;
     for (uint32_t i = 0; i < nlev; i++) {
         const uint8_t *e = b + lt + i * 48u;
