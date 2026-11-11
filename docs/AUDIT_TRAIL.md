@@ -16407,3 +16407,7 @@ Spec, reference writer and reader, converter, pixel-source encoder, vectors, 13 
 
 `src/fpga/core/tau_tgy_idct.sv`, `sim/tb_tau_tgy_idct.v`, `sim/gen_tgy_idct_vectors.py`, `docs/TGY_HW_IDCT.md`, `make test-rtl-tgy-idct`: 2,870 vectors bit-exact against the Python reference, 9 of 9 mutants killed, 30 clocks per block (about 115 microseconds per 384-block tile at 100 MHz, simulated). Not synthesised, no fit, nothing on a Pocket; the core's macro bundle is unchanged (the module is not instantiated anywhere yet). Details: docs/M3_STREAMING_NOTE.md section 21.
 
+
+## B-1053: RTL chroma upsampling and colour unit (owner: "go ahead with the upsample and colour unit", 2026-11-11)
+
+`src/fpga/core/tau_tgy_recon.sv`, `sim/tb_tau_tgy_recon.v`, `sim/gen_tgy_recon_rtl_vectors.py`, `docs/TGY_HW_RECON.md`, `make test-rtl-tgy-recon`: 144 whole tiles (all sizes, saturation, every Cb/Cr pair, real photo tiles, random `hold`) bit-exact against `tgy_recon.py` in both configurations (C444 0 and 1), 17 of 17 mutants killed (three equivalent first drafts replaced), one pixel per clock (16,582 clocks for a 128 x 128 tile). Not synthesised, no fit, nothing on a Pocket, not instantiated in the core. Estimated about 40 M10K (needs the main RAM reduction). Next: tile controller, entropy decoder RTL, then Quartus (owner's yes).
