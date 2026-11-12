@@ -16601,3 +16601,19 @@ Package `work/diagnostics/tau-dev-017` (0.1.0-dev.17+e04023b, ROM 1e251e6e..., s
 ## B-1093: DEV 017 installed on the TauV card (owner: "Yes, install", 2026-11-12)
 
 `python3 tools/install_dev_core.py work/diagnostics/tau-dev-017/pocket --card /Volumes/TauV --yes` after the clean dry run of B-1092: `alfatreze.Tau Gallery DEV 017` (0.1.0-dev.17+e04023b, the m1d seed 1 bitstream 4879a187..., ROM 1e251e6e..., the v1 zoom with the pipeline switch on the Info page), no media. Files identical by SHA-256, card checked against the compat manifest (0 errors, 0 warnings), 5 catalog caches deleted, 16 junk files removed, ejected. DEV 013 to 017 are on the card; the library is unchanged. Not run on a Pocket yet: the A/B pan of B-1091 (zoom `unsplash-1470071459604`, the same pan twice, pipeline OFF then ON via A on the Info page, START, Info, a screenshot each time, and which felt better).
+
+## B-1094: DEV 017 on a Pocket: the pipeline on against off, same build, same hands (screenshots 2026-11-12 20:54 and 20:55)
+
+Evidence label: HARDWARE (two Pocket screenshots, `Memories/Screenshots/20261112_205437.png` pipeline OFF and `_205514.png` pipeline ON, copied read-only to the git-ignored `work/pocket-shots/dev017/`; owner: "testing again with on, the stalls do seem slightly better"). The Info page with its 18 rows is readable, nothing overlaps or is cut off. Same picture (`unsplash-1470071459604`), same kind of pan:
+
+| | pipeline OFF | pipeline ON |
+|---|---|---|
+| ZOOM OPEN (first view) | 1003 ms | **798 ms** (-20 %) |
+| TILES READ (count, avg, max) | 656, 8.2, 16.3 ms | 815, 8.6, 16.9 ms |
+| TILES DECODED | 656 done, 0 unused | 790 done, **25 unused** (3 %) |
+| TILE DECODE (decoder's counter) | avg 4.3, max 7.1 ms | avg 4.5, max 7.2 ms |
+| LONGEST PASS | 32.4 ms | 32.6 ms |
+| PAN STALLS | 27 of 625 frames | **12 of 625** (-56 %) |
+| LONGEST STALL | 3 frames in a row | **2 frames in a row** |
+
+Findings: (1) the pipeline does what it should: per tile read and decode cost the same in both modes, the first view is 20 % faster, the stalled frames fall by more than half and the longest freeze is 2 frames (about 33 ms) instead of 3 (50 ms); (2) the suspicion of B-1090 that wrong prefetches were the problem is refuted: 25 of 815 reads (3 %) were unused; the higher read count of DEV 016 is that the pipeline decodes more tiles for the same pan (790 against 656: the faster view re-centres its window more often), not wasted reads; (3) the owner's first impression of DEV 016 ("stalled more") was not reproduced in a same-session comparison, where ON felt slightly better: the earlier verdict compared two sessions by hand; (4) the longest pass is 32.4 ms in BOTH modes, longer than a read plus a decode (16.3 + 7.1 = 23.4 ms OFF): something else takes about 32 ms in one pass and it does not depend on the pipeline: not identified (candidates: the pass that starts a re-centre or flips the window, a Talos copy and its fence, the first pass of a zoom); (5) what is left is 12 stalled frames of 625 (1.9 %), each at most 2 frames in a row. The card read (8.6 ms average) is now the bottleneck per tile (decode 4.5 ms is hidden). Not measured: per pan direction, the cause of the 32 ms pass, whether a card read of a less aligned superset (about 4 KB less data a tile, 512 byte alignment) is as fast.
