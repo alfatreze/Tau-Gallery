@@ -530,6 +530,7 @@ static int map_mode(void)
         }
     }
 }
+static void run_details(void);
 static void viewer(void)
 {
     uint32_t prev = REG_RD(R_INPUT) & 0xFFFFu, held = 0u, next_tick = 0u;
@@ -549,6 +550,11 @@ static void viewer(void)
                 continue;
             }
             zoom_goto(-1);
+        }
+        if ((edge & KEY_SELECT) && !(edge & (KEY_LEFT | KEY_RIGHT))) {                                                                 /* Select: the details page (not Select + Left / Right) */
+            gal_view_off(); run_details();                                                                                            /* the picture's plane in SDRAM is not touched by the page: the view is simply switched on again */
+            if (!gal_view_on()) { loaded_page = 0xFFFFFFFFu; draw_page(); say("VIEWER DID NOT START", BAD); return; }
+            prev = REG_RD(R_INPUT) & 0xFFFFu; held = 0u; next_tick = cycles(); continue;
         }
         if (edge & KEY_A) { if (zn > 0u) { zoom_goto((int)zn - 1); held = 0u; next_tick = cycles(); } continue; }                   /* A: the last stop (1:1) */
         if (edge & KEY_R1) { if (zn > 0u) { zoom_goto(0); held = 0u; next_tick = cycles(); } continue; }                                /* R1: the first stop */
@@ -640,10 +646,42 @@ static void draw_settings(void)
     gfx_text(6, PAGE_Y0 + 2u * LINE_H, "ON: the grid opens on the last", DIM, BG); gfx_text(6, PAGE_Y0 + 3u * LINE_H - 2u, "picture you looked at.", DIM, BG);
     page_foot("LEFT RIGHT CHANGE   B BACK", 0, 0);
 }
+static void frame_box(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t col)           /* a 1 px outline */
+{
+    gfx_rect(x, y, w, 1, col); gfx_rect(x, y + h - 1u, w, 1, col); gfx_rect(x, y, 1, h, col); gfx_rect(x + w - 1u, y, 1, h, col);
+}
+#define DET_LINE 16u
+#define DET_HX0 6u
+#define DET_HX1 204u
+#define DET_HY0 164u
+#define DET_HY1 246u
+#define DET_HW 190u
+#define DET_HH 76u
+/* The picture details page (gallery_pages.h gd_*): the index's facts, placeholders for what is not read yet, and four empty histogram frames. */
+static void draw_details(const gd_t *d)
+{
+    gd_row_t r[GD_ROWS]; gd_format(d, r); page_clear("DETAILS");
+    for (uint32_t i = 0; i < GD_ROWS; i++) {
+        const uint32_t y = PAGE_Y0 + i * DET_LINE, pending = i >= 4u;
+        gfx_text(6, y, r[i].label, DIM, BG); gfx_text(110, y, r[i].value, pending ? DIM : FG, BG);
+    }
+    for (uint32_t h = 0; h < GD_HIST_N; h++) {
+        const uint32_t x = (h & 1u) ? DET_HX1 : DET_HX0, y = (h & 2u) ? DET_HY1 : DET_HY0;
+        frame_box(x, y, DET_HW, DET_HH, DIM); gfx_text(x + 6u, y + 6u, gd_hist_labels[h], ACC, BG); gfx_text(x + 6u, y + 34u, GD_HIST_NOTE, DIM, BG);
+    }
+    page_foot("B OR SELECT BACK", 0, 0);
+}
 /* Waits for the next key press (an edge) and returns it. */
 static uint32_t next_edge(uint32_t *prev)
 {
     for (;;) { const uint32_t keys = REG_RD(R_INPUT) & 0xFFFFu, edge = keys & ~*prev; *prev = keys; if (edge) { last_act = cycles(); return edge; } settings_tick(); }
+}
+/* The details page of the selected picture; returns when B or Select closes it. The caller redraws what was under it. */
+static void run_details(void)
+{
+    const gx_entry_t *e = &ent[sel - page * PER_PAGE]; const gd_t d = { e->name, sel, head.count, e->size, e->width, e->height };
+    uint32_t prev = REG_RD(R_INPUT) & 0xFFFFu; draw_details(&d);
+    while (!gd_input(next_edge(&prev))) { }
 }
 static void run_pages(void)
 {
@@ -703,5 +741,6 @@ int main(void)
         else if (edge & KEY_R1) { select_to(sel + PER_PAGE < head.count ? sel + PER_PAGE : head.count - 1u); }
         else if (edge & KEY_A) open_from_grid();
         else if (edge & KEY_START) { run_pages(); draw_page(); prev = REG_RD(R_INPUT) & 0xFFFFu; }
+        else if (edge & KEY_SELECT) { run_details(); draw_page(); prev = REG_RD(R_INPUT) & 0xFFFFu; }
     }
 }

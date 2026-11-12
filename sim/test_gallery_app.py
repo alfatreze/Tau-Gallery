@@ -86,7 +86,7 @@ def build(workdir, fw=None):
     if r.returncode: print(r.stderr[:3000]); return False
     return True
 
-SCENARIOS = ("resume5", "resume17", "badcrc", "toohigh", "off", "layout0", "ocean_light", "badlook")     # boot scenarios: the saved state, the grid must open on picture 6 or 18, or on picture 1 when it is not the same picture / resume is off / the file is not ours
+SCENARIOS = ("resume5", "resume17", "badcrc", "toohigh", "off", "layout0", "ocean_light", "badlook", "details")     # boot scenarios: the saved state, the grid must open on picture 6 or 18, or on picture 1 when it is not the same picture / resume is off / the file is not ours
 BIGSET = None; ZSET = None; V1SET = None
 def run(workdir, setdir):
     r = subprocess.run([str(workdir / "t"), str(setdir)], capture_output=True, text=True, timeout=600)
@@ -123,6 +123,13 @@ def mutants(setdir, tail=None):
             ("gallery_app.c", "if (a < off || a >= off + GX_THUMB_BYTES) continue;", "if (a < off) continue;"),
             ("gallery_app.c", "path[0] = '/';", "path[0] = 'x';"),
             ("gallery_app.c", "if (edge & KEY_B) { gal_view_off();", "if (edge & KEY_B) { "),
+            ("gallery_app.c", "else if (edge & KEY_SELECT) { run_details(); draw_page();", "else if (0) { run_details(); draw_page();"),                                  # details page: no key on the grid
+            ("gallery_app.c", "else if (edge & KEY_SELECT) { run_details(); draw_page();", "else if (edge & KEY_SELECT) { run_details();"),                          # the grid is not redrawn after it
+            ("gallery_app.c", "if ((edge & KEY_SELECT) && !(edge & (KEY_LEFT | KEY_RIGHT))) {", "if (0) {"),                                                          # details page: no key in the picture view
+            ("gallery_app.c", "if ((edge & KEY_SELECT) && !(edge & (KEY_LEFT | KEY_RIGHT))) {", "if (edge & KEY_SELECT) {"),                                         # Select + Right opens the page instead of stepping on
+            ("gallery_app.c", "gal_view_off(); run_details();", "run_details();"),                                                                                 # the page is drawn under the live picture view
+            ("gallery_app.c", "if (!gal_view_on()) { loaded_page = 0xFFFFFFFFu; draw_page(); say(\"VIEWER DID NOT START\", BAD); return; }\n            prev = REG_RD(R_INPUT) & 0xFFFFu; held = 0u;", "prev = REG_RD(R_INPUT) & 0xFFFFu; held = 0u;"),                # the view is not switched on again
+            ("gallery_app.c", "const gx_entry_t *e = &ent[sel - page * PER_PAGE]; const gd_t d", "const gx_entry_t *e = &ent[0]; const gd_t d"),                        # the page of the first picture, not the selected one
             ("gallery_app.c", "(sel + 1u) % head.count : (sel + head.count - 1u) % head.count;", "(sel + 1u) % head.count : (sel + head.count - 1u);"),
             ("gallery_app.c", "if (np != page) { page = np; if (!load_page())", "if (np != page) { if (!load_page())"),
             ("gallery_app.c", "else if (edge & KEY_R1) { select_to(sel + PER_PAGE < head.count ? sel + PER_PAGE : head.count - 1u); }", "else if (edge & KEY_R1) { select_to(sel + PER_PAGE < head.count ? sel + PER_PAGE : sel); }"),

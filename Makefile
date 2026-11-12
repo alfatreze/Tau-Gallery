@@ -48,6 +48,7 @@ test-host:
 	$(PYTHON) tools/triad/test_director.py
 	$(PYTHON) tools/check_splash_asset.py
 	$(PYTHON) sim/test_check_frames.py
+	$(PYTHON) sim/test_merge_index.py
 	$(PYTHON) tools/check_tau_package.py
 	$(PYTHON) tools/check_claude_md.py
 	$(PYTHON) sim/test_check_claude_md.py

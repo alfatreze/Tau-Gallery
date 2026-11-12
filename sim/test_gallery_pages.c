@@ -99,6 +99,29 @@ int main(void)
         chk("theme: B closes, A and Start do nothing", gt_input(&g, &l, 2u, GP_KEY_B) == GT_CLOSE && gt_input(&g, &l, 2u, GP_KEY_A) == GT_STAY && gt_input(&g, &l, 2u, GP_KEY_START) == GT_STAY);
         chk("theme: a build with one theme stays on theme 0", (l.theme = 0u, g.sel = GT_THEME, gt_input(&g, &l, 1u, 1u << 3) == GT_CHANGED && l.theme == 0u));
     }
+    {   /* ---- Details ---- */
+        gd_row_t r[GD_ROWS]; gd_t d = { "Sunset over the harbour", 4u, 52u, 2592768u, 2560u, 1705u };
+        gd_format(&d, r);
+        chk("details: the name is the picture's", !strcmp(r[0].label, "NAME") && !strcmp(r[0].value, "Sunset over the harbour"));
+        chk("details: the position is 1-based (index 4 of 52 is picture 5)", !strcmp(r[1].label, "PICTURE") && !strcmp(r[1].value, "5 OF 52"));
+        chk("details: the size is width X height", !strcmp(r[2].label, "SIZE") && !strcmp(r[2].value, "2560 X 1705"));
+        chk("details: 2,592,768 bytes is 2.4 MB", !strcmp(r[3].label, "FILE") && !strcmp(r[3].value, "2.4 MB"));
+        chk("details: the rows that need unread data say so", !strcmp(r[4].value, GD_NOT_READ) && !strcmp(r[5].value, GD_NOT_READ) && !strcmp(r[6].value, GD_NOT_READ) && !strcmp(r[7].value, GD_NOT_READ)
+            && !strcmp(r[4].label, "FORMAT") && !strcmp(r[5].label, "CAMERA") && !strcmp(r[6].label, "TAKEN") && !strcmp(r[7].label, "EXPOSURE"));
+        char b[28]; gd_size(b, 0u) [0] = 0; chk("details: 0 bytes", !strcmp(b, "0 B")); *gd_size(b, 1023u) = 0; chk("details: 1023 bytes stays in bytes", !strcmp(b, "1023 B"));
+        *gd_size(b, 1024u) = 0; chk("details: 1024 bytes is 1 KB", !strcmp(b, "1 KB")); *gd_size(b, 1048575u) = 0; chk("details: just under 1 MiB is 1023 KB", !strcmp(b, "1023 KB"));
+        *gd_size(b, 1048576u) = 0; chk("details: 1 MiB is 1.0 MB", !strcmp(b, "1.0 MB")); *gd_size(b, 4294967295u) = 0; chk("details: the largest size does not overflow (4095.9 MB)", !strcmp(b, "4095.9 MB"));
+        d.width = 0u; gd_format(&d, r); chk("details: a picture whose index has no size says UNKNOWN", !strcmp(r[2].value, "UNKNOWN"));
+        d.width = 800u; d.height = 0u; gd_format(&d, r); chk("details: so does a missing height", !strcmp(r[2].value, "UNKNOWN"));
+        gd_t longn = { "0123456789012345678901234567890123456789", 0u, 1u, 10u, 1u, 1u }; gd_format(&longn, r);
+        chk("details: a long name is cut to the column (26) and ends", strlen(r[0].value) == 26u && !strncmp(r[0].value, "01234567890123456789012345", 26));
+        { uint32_t okw = 1; gd_t w = { "N", 4294967294u, 4294967295u, 4294967295u, 4294967295u, 4294967295u }; gd_format(&w, r); for (uint32_t i = 0; i < GD_ROWS; i++) if (strlen(r[i].value) > 27u) okw = 0; chk("details: the widest values fit the 28 byte value field", okw); }
+        chk("details: B closes", gd_input(GP_KEY_B) == 1); chk("details: Select closes (it opens the page, so it toggles)", gd_input(GP_KEY_SELECT) == 1);
+        chk("details: A, Up, Down, Left, Right and Start do not close", gd_input(GP_KEY_A) == 0 && gd_input(GP_KEY_UP) == 0 && gd_input(GP_KEY_DOWN) == 0 && gd_input(GP_KEY_LEFT) == 0 && gd_input(1u << 3) == 0 && gd_input(GP_KEY_START) == 0);
+        chk("details: four histogram frames, in the order luma, red, green, blue", GD_HIST_N == 4u && !strcmp(gd_hist_labels[0], "LUMA") && !strcmp(gd_hist_labels[1], "RED") && !strcmp(gd_hist_labels[2], "GREEN") && !strcmp(gd_hist_labels[3], "BLUE"));
+        chk("details: the histogram note fits a frame (16 characters)", strlen(GD_HIST_NOTE) <= 16u);
+        { uint32_t found = 0; for (uint32_t i = 0; i < GC_N; i++) if (!strcmp(gc_rows[i].key, "SELECT") && !strcmp(gc_rows[i].what, "PICTURE DETAILS")) found++; chk("controls: SELECT is listed for the grid and for the picture view", found == 2u); }
+    }
     int ok = 1;
     for (uint32_t p = 0; p < GH_PAGES; p++) {
         if (gh_pages[p].n > 17u) ok = 0;

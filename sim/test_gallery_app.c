@@ -17,7 +17,7 @@
 static uint16_t mem[HW_N];                         /* SDRAM, halfwords: the plane at 0x200000 */
 static uint16_t fb[512u * 1024u];                  /* the UI framebuffer, halfwords, stride 512 */
 static uint32_t clk, irq_pend, vid_req, vid_bus, vid_sw, vid_due, vbase, vstride, land_base, land_words, land_ovf, input_n;
-static int force_ovf, force_short, viewer_dead, fail_pic_reads, pass_pic_reads;
+static int force_ovf, force_short, viewer_dead, fail_pic_reads, pass_pic_reads; static uint32_t v1_starts_before;
 static int zb_ok_phase = 0; static int32_t map_cx, map_cy, map_rx1, map_rw2, map_x0, map_y0, map_rx0, map_ry0, map_ex, map_ey, map_rw1;
 static uint32_t rc_lead_n, rc_lead_bad; static uint32_t rc_prev, rc_starts, rc_retarget; static int32_t rc_bx, rc_by;
 static void ldr_lead_probe(void);
@@ -376,7 +376,19 @@ static void checkpoint(int n)
     case 203: chk(203, said("DECODER ERROR") && vid_bus == 0u); clear_texts(); break;                                                                                         /* a damaged stream: the viewer is left and the status line says so */
     case 204: chk(204, said("PICTURE DAMAGED")); clear_texts(); break;                                                                                                        /* a damaged tile index */
     case 205: chk(205, said("NOT A TGY PICTURE")); clear_texts(); break;                                                                                                      /* a damaged header */
+    case 207: force_ovf = 1; v1_starts_before = tg.starts; clear_texts(); break;                                                                                              /* the landing path counts an overflow: the next open must not show a damaged picture */
+    case 208: chk(208, said("PICTURE DAMAGED IN TRANSFER") && vid_bus == 0u && tg.starts == v1_starts_before); force_ovf = 0; clear_texts(); break;                           /* a version 1 picture whose landing overflowed is refused before the decoder starts */
     case 206: chk(206, said("NEEDS THE HW DECODER") && tg.starts == 0u); clear_texts(); break;                                                                                /* a core without the decoder */
+    case 300: chk(300, thumbs_on_screen(0, 16u) && !strcmp(last_text(), "1/18")); break;                                                                               /* the details scenario: the grid, picture 1 selected */
+    case 309: chk(309, vid_bus == 1u && plane_is(3) && sel == 3u && !said("DETAILS")); break;                                                                  /* Select + Right together is the next picture, not the page */
+    case 301: chk(301, said("DETAILS") && said("NAME") && said("Picture 00") && said("1 OF 18") && said("SIZE") && said("FILE") && said("NOT READ YET") && said("NOT COMPUTED YET") && said("LUMA") && said("RED") && said("GREEN") && said("BLUE") && said("B OR SELECT BACK") && !thumbs_on_screen(0, 16u)); clear_texts(); break;      /* Select on the grid: the page of the selected picture */
+    case 302: chk(302, thumbs_on_screen(0, 16u) && !strcmp(last_text(), "1/18") && !said("DETAILS")); clear_texts(); break;                                                                  /* B: the grid again, nothing changed */
+    case 303: chk(303, said("DETAILS") && said("Picture 01") && said("2 OF 18") && !said("Picture 00")); clear_texts(); break;                                               /* Right, Select: the next picture's page */
+    case 304: chk(304, thumbs_on_screen(0, 16u) && !strcmp(last_text(), "2/18") && sel == 1u); break;                                                                          /* Select closes it too */
+    case 305: chk(305, vid_bus == 1u && vbase == GAL_PLANE_BASE && plane_is(1) && land_ovf == 0u); break;                                                                      /* A: the picture view */
+    case 306: chk(306, vid_bus == 0u && said("DETAILS") && said("Picture 01") && said("2 OF 18")); clear_texts(); break;                                                       /* Select in the picture view: the page replaces it (the viewer is off) */
+    case 307: chk(307, vid_bus == 1u && vbase == GAL_PLANE_BASE && plane_is(1) && land_ovf == 0u && !said("DETAILS")); break;                                                  /* B: the same picture is back on screen */
+    case 308: chk(308, vid_bus == 1u && plane_is(2) && sel == 2u); clear_texts(); break;                                                                                                     /* and the view still steps to the next picture */
     case 1: chk(50, th_role[TR_TEXT_PRIMARY] == 0xFFFFu && th_role[TR_BG_BOTTOM] == 0u && text_mode == 0u); chk(1, thumbs_on_screen(0, count < 16u ? count : 16u)); snprintf(want, sizeof want, "1/%u", count); chk(2, said(want)); chk(3, said("TAU GALLERY") && !said("FAILED")); break;
     case 2: snprintf(want, sizeof want, "3/%u", count); chk(4, !strcmp(last_text(), want)); chk(20, said("Picture 02")); break;
     case 3: chk(5, vid_bus == 1u && vbase == GAL_PLANE_BASE && vstride == 1200u); chk(6, plane_is(2)); snprintf(path, sizeof path, "/Assets/tau_gallery/common/photos/p%02u.tgy", 2u); chk(7, !strcmp(last_open, path)); chk(8, land_ovf == 0u && land_words == 1728512u / 4u); break;
@@ -393,7 +405,7 @@ static void checkpoint(int n)
     case 14: chk(22, said("PICTURE DAMAGED IN TRANSFER") && vid_bus == 0u); force_short = 0; viewer_dead = 1; clear_texts(); break;     /* a lost word without an overflow is damage too */
     case 15: chk(23, said("VIEWER DID NOT START")); break;
     case 16: chk(24, said("CONTROLS") && said("HELP") && said("INFO") && said("A OPEN") && !thumbs_on_screen(0, count < 16u ? count : 16u)); clear_texts(); break;           /* Start: the menu replaces the grid */
-    case 17: chk(25, said("OPEN THE PICTURE") && said("1/22") && !said("HELP")); clear_texts(); break;                                                           /* A on Controls: the list, its first row of 22 */
+    case 17: snprintf(want, sizeof want, "1/%u", (unsigned)GC_N); chk(25, said("OPEN THE PICTURE") && said(want) && !said("HELP")); clear_texts(); break;                                                           /* A on Controls: the list, its first row of 22 */
     case 18: chk(26, said("CONTROLS") && said("HELP") && !said("OPEN THE PICTURE")); clear_texts(); break;                                                       /* B: back in the menu */
     case 19: chk(27, said("ADD PHOTOS") && said("1/3") && !said("MENU")); clear_texts(); break;                                                                  /* Down, A: Help page 1 of 3 */
     case 20: chk(28, said("WHERE THINGS ARE") && said("2/3") && !said("ADD PHOTOS")); clear_texts(); break;                                                      /* Down turns the page */
@@ -560,9 +572,15 @@ int main(int argc, char **argv)
         if (!setjmp(done)) gallery_app_main();
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
     }
+    if (argc > 2 && !strcmp(argv[2], "details")) {                                                       /* the picture details page: from the grid and from the picture view */
+        const uint32_t SD[] = { CP(300), KEY_SELECT, 0, CP(301), KEY_B, 0, CP(302), KEY_RIGHT, 0, KEY_SELECT, 0, CP(303), KEY_SELECT, 0, CP(304), KEY_A, 0, CP(305), KEY_SELECT, 0, CP(306), KEY_B, 0, CP(307), KEY_RIGHT, 0, CP(308), KEY_SELECT | KEY_RIGHT, 0, CP(309), END };
+        nscript = (int)(sizeof SD / sizeof SD[0]); memcpy(script, SD, sizeof SD);
+        if (!setjmp(done)) gallery_app_main();
+        printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
+    }
     if (argc > 2 && (!strcmp(argv[2], "v1") || !strcmp(argv[2], "v1nohw"))) {                          /* version 1 pictures drawn by the hardware decoder, in a library that also has a version 0 picture */
         if (!strcmp(argv[2], "v1nohw")) { tgy_present = 0; const uint32_t S5[] = { KEY_A, 0, CP(206), END }; nscript = 4; memcpy(script, S5, sizeof S5); }
-        else { const uint32_t S5[] = { KEY_A, 0, CP(200), KEY_RIGHT, 0, CP(201), KEY_RIGHT, 0, CP(202), KEY_RIGHT, 0, CP(203), KEY_RIGHT, 0, KEY_A, 0, CP(204), KEY_RIGHT, 0, KEY_A, 0, CP(205), END }; nscript = (int)(sizeof S5 / sizeof S5[0]); memcpy(script, S5, sizeof S5); }
+        else { const uint32_t S5[] = { KEY_A, 0, CP(200), KEY_RIGHT, 0, CP(201), KEY_RIGHT, 0, CP(202), KEY_RIGHT, 0, CP(203), KEY_RIGHT, 0, KEY_A, 0, CP(204), KEY_RIGHT, 0, KEY_A, 0, CP(205), KEY_LEFT, 0, KEY_LEFT, 0, KEY_LEFT, 0, KEY_LEFT, 0, CP(207), KEY_A, 0, CP(208), END }; nscript = (int)(sizeof S5 / sizeof S5[0]); memcpy(script, S5, sizeof S5); }
         if (!setjmp(done)) gallery_app_main();
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
     }

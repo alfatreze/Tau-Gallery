@@ -15,6 +15,7 @@
 #define GP_KEY_LEFT  (1u << 2)
 #define GP_KEY_A     (1u << 4)
 #define GP_KEY_B     (1u << 5)
+#define GP_KEY_SELECT (1u << 14)
 #define GP_KEY_START (1u << 15)
 
 /* ---- the menu ---- */
@@ -52,10 +53,12 @@ static const gc_row_t gc_rows[] = {
     { "L1 / R1",        "PAGE BACK / ON"      },
     { "A",              "OPEN THE PICTURE"    },
     { "START",          "MENU"                },
+    { "SELECT",         "PICTURE DETAILS"     },
     { "PICTURE",        ""                    },
     { "LEFT / RIGHT",   "PREVIOUS / NEXT"     },
     { "A",              "ZOOM IN (IF IT CAN)" },
     { "B",              "BACK TO THE GRID"    },
+    { "SELECT",         "PICTURE DETAILS"     },
     { "ZOOMED IN",      ""                    },
     { "D-PAD",          "PAN"                 },
     { "START",          "MAP: JUMP TO A SPOT" },
@@ -218,4 +221,55 @@ static inline void gi_format(const gi_t *d, gi_row_t r[GI_ROWS])
 }
 /* One key edge: returns 1 when the page should close (back to the menu). */
 static inline int gi_input(uint32_t edge) { return (edge & (GP_KEY_LEFT | GP_KEY_B)) != 0; }
+
+/* ---- Details: one picture's information and its histograms (a PLACEHOLDER page: the rows that need data the firmware does not read yet say NOT READ YET, and the four histogram frames are empty).
+ * Select opens it from the grid (the selected picture) and from the picture view (not while zoomed in: Select + Left / Right is the zoomed view's previous / next); B or Select closes it. ---- */
+#define GD_ROWS 8u
+#define GD_HIST_N 4u
+#define GD_NOT_READ "NOT READ YET"
+#define GD_HIST_NOTE "NOT COMPUTED YET"
+static const char *const gd_hist_labels[GD_HIST_N] = { "LUMA", "RED", "GREEN", "BLUE" };
+typedef struct { const char *name; uint32_t index, count, size, width, height; } gd_t;          /* index is 0-based; size is the file's bytes; width and height 0 when the index does not say */
+typedef struct { const char *label; char value[28]; } gd_row_t;
+/* "12.3 MB" from 1 MiB up (one decimal, rounded down), "812 KB" from 1 KiB, "512 B" below */
+static inline char *gd_size(char *q, uint32_t bytes)
+{
+    if (bytes >= 1048576u) { const uint32_t tenths = (uint32_t)(((uint64_t)bytes * 10u) / 1048576u); q = gi_u(q, tenths / 10u); *q++ = '.'; q = gi_u(q, tenths % 10u); return gi_s(q, " MB"); }
+    if (bytes >= 1024u) { q = gi_u(q, bytes / 1024u); return gi_s(q, " KB"); }
+    q = gi_u(q, bytes); return gi_s(q, " B");
+}
+static inline void gd_format(const gd_t *d, gd_row_t r[GD_ROWS])
+{
+    char *q; uint32_t n;
+    r[0].label = "NAME"; q = r[0].value; for (n = 0; d->name[n] && n < 26u; n++) *q++ = d->name[n]; *q = 0;                          /* cut to the column, never past it */
+    r[1].label = "PICTURE";
+#if BUG == 10
+    q = gi_u(r[1].value, d->index); q = gi_s(q, " OF "); q = gi_u(q, d->count); *q = 0;                                               /* 0-based */
+#else
+    q = gi_u(r[1].value, d->index + 1u); q = gi_s(q, " OF "); q = gi_u(q, d->count); *q = 0;
+#endif
+    r[2].label = "SIZE";
+    if (d->width == 0u || d->height == 0u) { q = gi_s(r[2].value, "UNKNOWN"); *q = 0; }
+#if BUG == 11
+    else { q = gi_u(r[2].value, d->height); q = gi_s(q, " X "); q = gi_u(q, d->width); *q = 0; }                                       /* height first */
+#else
+    else { q = gi_u(r[2].value, d->width); q = gi_s(q, " X "); q = gi_u(q, d->height); *q = 0; }
+#endif
+    r[3].label = "FILE";
+#if BUG == 12
+    q = gi_u(r[3].value, d->size / 1024u); q = gi_s(q, " MB"); *q = 0;                                                               /* KB with the MB unit */
+#else
+    q = gd_size(r[3].value, d->size); *q = 0;
+#endif
+    r[4].label = "FORMAT";   q = gi_s(r[4].value, GD_NOT_READ); *q = 0;
+    r[5].label = "CAMERA";   q = gi_s(r[5].value, GD_NOT_READ); *q = 0;
+    r[6].label = "TAKEN";    q = gi_s(r[6].value, GD_NOT_READ); *q = 0;
+    r[7].label = "EXPOSURE"; q = gi_s(r[7].value, GD_NOT_READ); *q = 0;
+}
+/* One key edge: returns 1 when the page should close. */
+#if BUG == 13
+static inline int gd_input(uint32_t edge) { return (edge & GP_KEY_B) != 0; }                                                         /* Select does not close */
+#else
+static inline int gd_input(uint32_t edge) { return (edge & (GP_KEY_B | GP_KEY_SELECT)) != 0; }
+#endif
 #endif
