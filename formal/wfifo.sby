@@ -1,0 +1,33 @@
+[tasks]
+good
+bug1
+bug2
+bug3
+r_equal
+r_quarter
+r_fast
+
+[options]
+mode bmc
+depth 220
+multiclock on
+
+[engines]
+abc bmc3
+
+[script]
+read -formal tau_tgy_wfifo.sv tau_cdc_gray_bus.sv tau_cdc_sync1.sv wfifo_formal.sv
+good: chparam -set AW 2 wfifo_formal
+bug1: chparam -set AW 2 -set BUG 1 wfifo_formal
+bug2: chparam -set AW 2 -set BUG 2 wfifo_formal
+bug3: chparam -set AW 2 -set BUG 3 wfifo_formal
+r_equal: chparam -set AW 2 -set KW 0 -set KR 0 wfifo_formal
+r_quarter: chparam -set AW 2 -set KW 0 -set KR 2 wfifo_formal
+r_fast: chparam -set AW 2 -set KW 1 -set KR 0 wfifo_formal
+prep -top wfifo_formal
+
+[files]
+../src/fpga/core/tau_tgy_wfifo.sv
+../src/fpga/core/tau_cdc_gray_bus.sv
+../src/fpga/core/tau_cdc_sync1.sv
+wfifo_formal.sv

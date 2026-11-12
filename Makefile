@@ -1118,3 +1118,8 @@ test-rtl-tgy-wfifo:
 	for b in 1 2 3; do iverilog -g2012 -P tb_tau_tgy_wfifo.BUG=$$b -o $(RTL_BUILD_DIR)/wfm.out sim/tb_tau_tgy_wfifo.v src/fpga/core/tau_tgy_wfifo.sv src/fpga/core/tau_cdc_gray_bus.sv src/fpga/core/tau_cdc_sync1.sv && if vvp $(RTL_BUILD_DIR)/wfm.out | /usr/bin/grep -q "^WFIFO PASSED"; then echo "MUTANT SURVIVED: $$b"; exit 1; else echo "mutant killed: $$b"; fi; done
 	# a sweep of ratios and phases of the two unrelated clocks (writer half period, reader half period, reader phase, all in ps)
 	for c in '5000 10000 3300' '5000 5000 700' '5000 5000 0' '5000 5000 2500' '5000 7000 1100' '5000 3000 2900' '5000 3333 1' '10000 3500 100' '3000 10000 1700' '5000 13333 4999' '4000 4001 10'; do set -- $$c; iverilog -g2012 -P tb_tau_tgy_wfifo.WH_PS=$$1 -P tb_tau_tgy_wfifo.RH_PS=$$2 -P tb_tau_tgy_wfifo.RP_PS=$$3 -o $(RTL_BUILD_DIR)/wfs.out sim/tb_tau_tgy_wfifo.v src/fpga/core/tau_tgy_wfifo.sv src/fpga/core/tau_cdc_gray_bus.sv src/fpga/core/tau_cdc_sync1.sv && if vvp $(RTL_BUILD_DIR)/wfs.out | /usr/bin/grep -q '^WFIFO PASSED'; then echo "sweep ok: $$c"; else echo "SWEEP FAILED: $$c"; exit 1; fi; done
+
+# Tau Gallery: bounded formal check of the two clock FIFO (sby + yosys, brew install yosys sby; ~10 min, so NOT in gate): the design must PASS, the mutants must FAIL.
+.PHONY: test-formal-wfifo
+test-formal-wfifo:
+	python3 formal/run_formal.py wfifo
