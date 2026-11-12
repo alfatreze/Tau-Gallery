@@ -10,6 +10,37 @@ static uint32_t rs = 12345u;
 static uint32_t rnd(void) { rs ^= rs << 13; rs ^= rs >> 17; rs ^= rs << 5; return rs; }
 static int in_list(const gv_tile_t *l, uint32_t n, int tx, int ty) { for (uint32_t i = 0; i < n; i++) if (l[i].tx == tx && l[i].ty == ty) return 1; return 0; }
 
+/* REFERENCE for the stable merge sort of gv_tiles_needed: the earlier version of the function, which sorted by insertion (B-1097 replaced it: 4 ms of CPU a tile pass on a Pocket). The new order must be identical, element by element. */
+static inline uint32_t gv_tiles_needed_ref(const gv_stop_t *s, int32_t vx, int32_t vy, int32_t wx, int32_t wy, int dx, int dy, gv_tile_t *out)
+{
+    const int32_t ntx = (int32_t)gv_storage(s->w) / GV_TILE, nty = (int32_t)gv_storage(s->h) / GV_TILE;
+    const int32_t cx = vx + GV_SCREEN_W / 2, cy = vy + GV_SCREEN_H / 2;
+    int32_t key[GV_MAX_TILES]; uint32_t n = 0;
+    for (int32_t ty = wy / GV_TILE; ty < wy / GV_TILE + GV_WIN_TY && ty < nty; ty++) {
+        for (int32_t tx = wx / GV_TILE; tx < wx / GV_TILE + GV_WIN_TX && tx < ntx; tx++) {
+            const int32_t x0 = tx * GV_TILE, y0 = ty * GV_TILE;
+            const int on = x0 < vx + GV_SCREEN_W && x0 + GV_TILE > vx && y0 < vy + GV_SCREEN_H && y0 + GV_TILE > vy;
+            const int32_t mx = x0 + GV_TILE / 2 - cx, my = y0 + GV_TILE / 2 - cy;
+            /* screen tiles: by distance to the screen centre. Ring tiles, three tiers: the strip the pan will bring on screen next (ahead along a travelling axis, within the screen's band on the other axis: the visible columns and rows, nearest first), then the corners ahead (nearest first), then the rest by distance. */
+            int32_t k;
+            if (on) k = (mx * mx + my * my) / 16;
+            else {
+                const int32_t vr = vx + GV_SCREEN_W, vb = vy + GV_SCREEN_H;
+                const int aheadx = dx > 0 ? x0 >= vr : dx < 0 ? x0 + GV_TILE <= vx : 0, aheady = dy > 0 ? y0 >= vb : dy < 0 ? y0 + GV_TILE <= vy : 0;
+                const int overx = x0 < vr && x0 + GV_TILE > vx, overy = y0 < vb && y0 + GV_TILE > vy;
+                const int32_t gapx = x0 >= vr ? x0 - vr : x0 + GV_TILE <= vx ? vx - (x0 + GV_TILE) : 0, gapy = y0 >= vb ? y0 - vb : y0 + GV_TILE <= vy ? vy - (y0 + GV_TILE) : 0;
+                if ((aheadx && overy) || (aheady && overx)) k = 0x10000000 + ((aheadx && overy) ? gapx : gapy);
+                else if (aheadx || aheady) k = 0x20000000 + gapx + gapy;
+                else k = 0x30000000 + (gapx * gapx + gapy * gapy) / 16;
+            }
+            uint32_t i = n++;
+            while (i > 0u && key[i - 1u] > k) { key[i] = key[i - 1u]; out[i] = out[i - 1u]; i--; }
+            key[i] = k; out[i].tx = (int16_t)tx; out[i].ty = (int16_t)ty; out[i].ring = on ? 0u : 1u;
+        }
+    }
+    return n;
+}
+
 int main(void)
 {
     /* ---- the ladder ---- */
@@ -119,6 +150,25 @@ int main(void)
     s = gv_make_stop(800, 600, Q16 / 2 > 0 ? Q16 : Q16); gv_window_for(&s, 0, -60, &wx, &wy);
     chk("a stop smaller than the window: the window origin is 0, 0", wx == 0 && wy == 0);
 
+
+    /* ---- the merge sort gives exactly the order of the insertion sort (stable: equal keys keep their raster order) ---- */
+    { static uint32_t seed2 = 0x2545F491u; int same = 1;                                                    /* its own generator: the shared one must not move, later tests depend on its sequence */
+      #define rnd2() (seed2 = seed2 * 1664525u + 1013904223u, seed2 >> 8)
+       uint32_t cmp = 0u, ties_possible = 0u;
+      const int32_t sizes[][2] = { { 4000, 3000 }, { 6000, 3575 }, { 1000, 900 }, { 2000, 1700 }, { 801, 721 }, { 3648, 5472 }, { 300, 5000 }, { 5000, 300 } };
+      for (int si = 0; si < 8; si++) {
+        gv_stop_t st = gv_make_stop(sizes[si][0], sizes[si][1], Q16);
+        for (int i = 0; i < 600 && same; i++) {
+            int32_t vx = (int32_t)(rnd2() % (uint32_t)(sizes[si][0] + 1)), vy = (int32_t)(rnd2() % (uint32_t)(sizes[si][1] + 1)), wx2, wy2; gv_clamp(&st, &vx, &vy); gv_window_for(&st, vx, vy, &wx2, &wy2);
+            const int ddx = (int)(rnd2() % 3) - 1, ddy = (int)(rnd2() % 3) - 1; gv_tile_t a[GV_MAX_TILES], b[GV_MAX_TILES];
+            const uint32_t na = gv_tiles_needed(&st, vx, vy, wx2, wy2, ddx, ddy, a), nb = gv_tiles_needed_ref(&st, vx, vy, wx2, wy2, ddx, ddy, b);
+            if (na != nb) { same = 0; break; }
+            for (uint32_t k2 = 0; k2 < na; k2++) { cmp++; if (a[k2].tx != b[k2].tx || a[k2].ty != b[k2].ty || a[k2].ring != b[k2].ring) { same = 0; break; } }
+            if (na > 60u) ties_possible++;
+        }
+      }
+      chk("the needed-tile list from the merge sort equals the insertion sort's, element by element (4,800 viewports, 8 picture sizes)", same && cmp > 100000u && ties_possible > 1000u); }
+      #undef rnd2
     /* ---- the tiles a viewport needs ---- */
     gv_tile_t need[GV_MAX_TILES]; int okt = 1; int okfirst = 1, okord = 1, okdup = 1, okwin = 1, okcount = 1;
     s = gv_make_stop(4000, 3000, Q16);

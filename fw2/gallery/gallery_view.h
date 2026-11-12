@@ -203,11 +203,29 @@ static inline uint32_t gv_tiles_needed(const gv_stop_t *s, int32_t vx, int32_t v
                 if (k < 0x20000000) k = 0x10000000 + 0xFFFFF - (k - 0x10000000);          /* the strip farthest first */
 #endif
             }
-            uint32_t i = n++;
-            while (i > 0u && key[i - 1u] > k) { key[i] = key[i - 1u]; out[i] = out[i - 1u]; i--; }
-            key[i] = k; out[i].tx = (int16_t)tx; out[i].ty = (int16_t)ty; out[i].ring = on ? 0u : 1u;
+            key[n] = k; out[n].tx = (int16_t)tx; out[n].ty = (int16_t)ty; out[n].ring = on ? 0u : 1u; n++;
         }
     }
+    /* Stable bottom-up merge sort of the indices by key (ties keep their raster order, exactly what the insertion sort of earlier builds gave; that one cost 4 ms of CPU on every tile pass with 110 tiles, measured on a Pocket,
+     * docs/AUDIT_TRAIL.md B-1097). */
+    uint8_t ia[GV_MAX_TILES], ib[GV_MAX_TILES]; uint8_t *src = ia, *dst = ib;
+    for (uint32_t i = 0; i < n; i++) ia[i] = (uint8_t)i;
+    for (uint32_t w = 1u; w < n; w *= 2u) {
+        for (uint32_t lo = 0; lo < n; lo += 2u * w) {
+            const uint32_t mid = lo + w < n ? lo + w : n, hi = lo + 2u * w < n ? lo + 2u * w : n; uint32_t a = lo, b = mid, o = lo;
+#if BUG == 23
+            while (a < mid && b < hi) dst[o++] = key[src[a]] < key[src[b]] ? src[a++] : src[b++];                  /* not stable: equal keys take the right one first */
+#else
+            while (a < mid && b < hi) dst[o++] = key[src[b]] < key[src[a]] ? src[b++] : src[a++];
+#endif
+            while (a < mid) dst[o++] = src[a++];
+            while (b < hi) dst[o++] = src[b++];
+        }
+        uint8_t *t = src; src = dst; dst = t;
+    }
+    gv_tile_t tmp[GV_MAX_TILES];
+    for (uint32_t i = 0; i < n; i++) tmp[i] = out[src[i]];
+    for (uint32_t i = 0; i < n; i++) out[i] = tmp[i];
     return n;
 }
 
