@@ -16643,3 +16643,10 @@ Package `work/diagnostics/tau-dev-019` (0.1.0-dev.19+2206b5b, ROM 20db1e30..., s
 
 What: after the owner's yes, `tools/install_dev_core.py work/diagnostics/tau-dev-019/pocket --card /Volumes/TauV --yes` ran. Backup `work/card-backups/20261112-223806`; bitstream (4879a187...), ROM (20db1e30...) and tau-cold.bin copied and verified identical by SHA-256; card check against v0.1.0-dev.19: 0 errors, 0 warnings; 5 catalog caches deleted (the Pocket rebuilds them), 16 junk files removed, card ejected. The library index and pictures were not touched (no media in this package).
 Evidence: host (installer verification). NOT RUN ON A POCKET YET: the effect of the merge sort (PASS SPLIT N, LONGEST PASS, ZOOM OPEN, PAN STALLS) is unmeasured; owner to repeat the pan on `unsplash-1470071459604` and send the Info screenshot.
+
+## B-1100: DEV 019 on a Pocket: the merge sort pays off (follows B-1099)
+
+Evidence: HARDWARE (owner's Info screenshot, `work/pocket-shots/dev019/20261112_234502.png`), same picture (`unsplash-1470071459604`), pipeline ON, one session.
+Result (DEV 018 -> DEV 019): PASS SPLIT `P0 C0 N4 J25 S0` -> `P0 C0 N1 J25 S0`; LONGEST PASS 29.5 -> 25.6 ms; ZOOM OPEN 790 -> 481 ms (the first view runs about 100 tile passes, about 3 ms saved on each, so the large drop is expected); ZOOM LAND 3 ms, ZOOM COPY 2 ms, ZOOM FLIP 102 ms; TILES READ 1091 avg 9.2 max 18.2 ms; TILES DECODED 1073 done, 18 unused; TILE DECODE avg 4.6 max 7.2 ms; PAN STALLS 0 of 625 frames; LONGEST STALL 0; no error.
+Reading: the sort is gone from the critical path (N1 left). J (card read of a tile plus the next tile's read after a prefetch miss) is now the whole pass and the bottleneck. Caveats: one session, a longer pan than DEV 018 (1091 tiles read against 850), and stalls were already 0 in DEV 018, so the stall count cannot show a gain; the owner's feel of the pan is not reported yet.
+Not done: card-data reduction per tile (512 B alignment, unknown APF behaviour) and batching contiguous tiles for vertical pans remain options; remaining J of 25 ms is the prefetch-miss pass.
