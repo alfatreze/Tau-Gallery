@@ -143,7 +143,7 @@ with tempfile.TemporaryDirectory() as td:
     check("dev channel: installs beside TAU, reads TAU's library in place, never touches TAU's own tau-assets.bin",
           rc == 0 and "read in place from Assets/tau_gallery/common" in out and (card / "Assets/tau_gallery_dev/alfatreze.Tau Gallery DEV 1/tau.rom").exists()
           and not (card / "Assets/tau_gallery_dev/common").exists() and (card / "Assets/tau_gallery/common/tau-assets.bin").read_bytes() == tau_assets_before)
-    rc, out = run(devpkg(2), "--card", card, "--backup-dir", td / "bk-d2", "--no-eject", "--yes")
+    rc, out = run(devpkg(2), "--card", card, "--keep-old", "--backup-dir", td / "bk-d2", "--no-eject", "--yes")
     rc, out = run("--card", card, "--remove", "alfatreze.Tau Gallery DEV 1", "--backup-dir", td / "bk-rd1", "--no-eject", "--yes")
     check("dev channel: removing one dev build keeps the TAU Dev platform for the others and TAU's media",
           rc == 0 and not (card / "Cores/alfatreze.Tau Gallery DEV 1").exists() and (card / "Platforms/tau_gallery_dev.json").exists()
@@ -152,6 +152,21 @@ with tempfile.TemporaryDirectory() as td:
     check("dev channel: removing the last dev build removes the TAU Dev platform and leaves TAU alone",
           rc == 0 and not (card / "Assets/tau_gallery_dev").exists() and not (card / "Platforms/tau_gallery_dev.json").exists()
           and (card / "Platforms/tau_gallery.json").exists() and (card / "Assets/tau_gallery/common/tau-library.tdb").exists())
+
+    # Older numbered dev builds are removed by every dev install (owner rule 2026-11-12), unless --keep-old
+    rc, out = run(devpkg(11), "--card", card, "--keep-old", "--backup-dir", td / "bk-d11", "--no-eject", "--yes")
+    p12 = devpkg(12)
+    rc, out = run(p12, "--card", card, "--backup-dir", td / "bk-d12x", "--no-eject")
+    check("dev channel: the dry run names the older dev builds it would remove and writes nothing", rc == 0 and "older dev builds removed after the install" in out and "DEV 11" in out.split("removed after the install")[1].split("\n")[0]
+          and (card / "Cores/alfatreze.Tau Gallery DEV 11").exists() and not (card / "Cores/alfatreze.Tau Gallery DEV 12").exists())
+    rc, out = run(p12, "--card", card, "--backup-dir", td / "bk-d12", "--no-eject", "--yes")
+    check("dev channel: a new dev install removes the older numbered dev build (with a backup), keeps the new one, the platform and TAU's media",
+          rc == 0 and "DEV 11" in out and not (card / "Cores/alfatreze.Tau Gallery DEV 11").exists() and (card / "Cores/alfatreze.Tau Gallery DEV 12").exists()
+          and (td / "bk-d12/alfatreze.Tau Gallery DEV 11").exists() and (card / "Platforms/tau_gallery_dev.json").exists() and (card / "Assets/tau_gallery/common/tau-library.tdb").exists())
+    rc, out = run(devpkg(3), "--card", card, "--backup-dir", td / "bk-d3", "--no-eject", "--yes")
+    check("dev channel: a lower number is not 'older' than the installed one: DEV 12 stays when DEV 3 is installed", rc == 0 and (card / "Cores/alfatreze.Tau Gallery DEV 12").exists() and (card / "Cores/alfatreze.Tau Gallery DEV 3").exists())
+    run("--card", card, "--remove", "alfatreze.Tau Gallery DEV 12", "--backup-dir", td / "bk-rd12", "--no-eject", "--yes")
+    run("--card", card, "--remove", "alfatreze.Tau Gallery DEV 3", "--backup-dir", td / "bk-rd3", "--no-eject", "--yes")
 
     # Release manifest (tau-compat.json schema 2): obsolete files removed, card checked; a non-matching --compat stops before writing.
     import zipfile

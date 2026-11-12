@@ -21,7 +21,7 @@ duplicate that used to make every backup about 0.8 GB (B-542); --backup-media ke
 
 If the procedure changes, change THIS script and the doc together (owner rule, 2026-09-25).
 """
-import argparse, datetime, filecmp, hashlib, json, os, shutil, subprocess, sys
+import argparse, datetime, filecmp, hashlib, json, os, re, shutil, subprocess, sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -231,6 +231,7 @@ def main():
     ap.add_argument("--carry-from", metavar="CORE_ID", help="copy this core's media to the new core and rebuild the library index")
     ap.add_argument("--assets", type=Path, metavar="FILE", help="tau-assets.bin (themes/meter presets) to install; default: <package>/../tau-assets.bin, else the --carry-from core's copy")
     ap.add_argument("--remove", action="append", default=[], metavar="CORE_ID", help="core to remove after a verified install (repeatable)")
+    ap.add_argument("--keep-old", action="store_true", help="do NOT remove the older numbered dev builds (alfatreze.<name> DEV NN with a lower NN) that are on the card; by default every install removes them (owner standing rule 2026-11-12), after the new core is verified and with a backup")
     ap.add_argument("--replace", action="store_true", help="the new core already exists on the card: back it up and refresh its core files (its media stays)")
     ap.add_argument("--allow-release", action="store_true", help="permit touching the release cores (TAU, TAU Diagnostics, TAU Preview, TAU Preview Diagnostics, and the old TAU_DIAGNOSTIC)")
     ap.add_argument("--backup-dir", type=Path, help="default: work/card-backups/<timestamp>")
@@ -293,6 +294,12 @@ def main():
     if compat is None:
         print("compat:  no release manifest for this package (card check skipped)")
 
+    m_dev = re.fullmatch(r"(.* DEV )(\d+)", new_id)
+    if m_dev and not a.keep_old:                                               # every dev install removes the older numbered dev builds of the same family (never a release core)
+        old = sorted((d.name for d in (card / "Cores").iterdir() if d.is_dir() and d.name.startswith(m_dev.group(1)) and d.name[len(m_dev.group(1)):].isdigit()
+                      and int(d.name[len(m_dev.group(1)):]) < int(m_dev.group(2)) and d.name not in RELEASE_CORES and d.name not in a.remove), key=lambda n: int(n[len(m_dev.group(1)):]))
+        if old: print(f"older dev builds removed after the install (--keep-old to keep them): {', '.join(old)}")
+        a.remove += old
     for c in a.remove + ([new_id] if a.replace else []):
         if c in RELEASE_CORES and not a.allow_release:
             die(f"{c} is a release core; refusing without --allow-release")

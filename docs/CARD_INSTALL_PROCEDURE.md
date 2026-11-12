@@ -187,6 +187,7 @@ the cold image loaded (spec section 7 probe, item 2).
 - **Remove only:** `python3 tools/install_dev_core.py --remove CORE_ID [--remove ...]` with no package. It runs a dry run unless
   `--yes` is given, then makes a verified backup, removes the cores, clears the caches and ejects. Release cores stay protected unless
   `--allow-release` is given.
+- **Older dev builds are removed on every dev install (owner rule, 2026-11-12):** installing `... DEV NN` also removes every `... DEV MM` on the card with MM < NN (never a release core), after the new core is verified and with the usual backup of what is removed; the dry run lists them. `--keep-old` keeps them. A lower number than one on the card is not 'older'. The shared platform, TAU's media and library stay.
 - **Shared platforms:** when another core lists the same platform (several Tau builds under TAU), removing or replacing a core
   touches only `Cores/<core>` and `Assets/<platform>/<core>`. The platform's `common/` media, library index, `tau-assets.bin` and
   `Platforms/<platform>.*` are kept.
