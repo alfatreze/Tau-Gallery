@@ -452,11 +452,11 @@ def lib_format(pkg): return [e["format"]["name"] for e in tc.layout(pkg) if e["p
 check(lib_format(gallery_pkg(["tgy"])) == ["tgix"], "a gallery package (picture slot of .tgy files) expects the TGIX picture index")
 check(lib_format(gallery_pkg(["flac", "mp3"])) == ["tau-library"], "an audio package still expects the audio library index")
 with tempfile.TemporaryDirectory() as _t:
-    _t = Path(_t); fm = {"name": "tgix", "version": 0}
+    _t = Path(_t); fm = {"name": "tgix", "version": 1}
     good = _t / "g.tdb"; good.write_bytes(b"TGIX" + b"\0\0" + b"\x20\0" + b"\0" * 40); check(tc._format_ok(good, fm) is None, "a TGIX index passes")
     aud = _t / "a.tdb"; aud.write_bytes((0x42494C54).to_bytes(4, "little") + b"\0" * 40); check("TGIX" in (tc._format_ok(aud, fm) or ""), "an audio library index is refused as a gallery index")
     sh = _t / "s.tdb"; sh.write_bytes(b"TGIX\0\0"); check(tc._format_ok(sh, fm) is not None, "a truncated TGIX header is refused")
-    new = _t / "n.tdb"; new.write_bytes(b"TGIX" + b"\x05\0" + b"\x20\0" + b"\0" * 40); check("version" in (tc._format_ok(new, fm) or ""), "a newer TGIX version is refused")
+    new = _t / "n.tdb"; new.write_bytes(b"TGIX" + b"\x01\0" + b"\x20\0" + b"\0" * 40); check("version" in (tc._format_ok(new, fm) or ""), "a newer TGIX version is refused")
 
 print(f"tau-compat: {fails} failure(s)")
 sys.exit(1 if fails else 0)

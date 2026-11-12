@@ -305,7 +305,7 @@ def firmware_formats(root=ROOT):
         raise CompatError("cannot read the TAUA version check (fw/assets_core.h) or the cover file name (fw/timg.inc)")
     t = tree_facts(root)
     return {"tau-library.tdb": {"name": "tau-library", "version": t["library_index_version"]},
-            "tgix": {"name": "tgix", "version": 0},                                      # the gallery's picture index (tools/gallery/tgy.py IDX_VERSION): the same file name, another format
+            "tgix": {"name": "tgix", "version": 1},                                      # the gallery's picture index: the same file name, another format. The schema's versions start at 1: this reader reads a TGIX version field (tools/gallery/tgy.py IDX_VERSION, 0 today) below `version`
 
             "tau-assets.bin": {"name": "TAUA", "version": int(taua.group(1)), "sections": t["assets_sections"],
                                "max_bytes": t["assets_read_limit_bytes"], "preserve_unknown_sections": True},
@@ -459,8 +459,8 @@ def _format_ok(path, fmt):
     elif n == "tgix":
         if len(b) < 32 or b[:4] != b"TGIX":
             return "not a gallery picture index (magic TGIX)"
-        if int.from_bytes(b[4:6], "little") > fmt["version"]:
-            return f"gallery index version {int.from_bytes(b[4:6], 'little')}, this release reads <= {fmt['version']}"
+        if int.from_bytes(b[4:6], "little") >= fmt["version"]:
+            return f"gallery index version {int.from_bytes(b[4:6], 'little')}, this release reads below {fmt['version']}"
     elif n == "TAUA":
         if len(b) < 12 or b[:4] != b"TAUA":
             return "not a TAUA container (magic)"

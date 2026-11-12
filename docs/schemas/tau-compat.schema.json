@@ -141,7 +141,8 @@
                         "tau-library",
                         "TAUA",
                         "TIM1",
-                        "interact_persist"
+                        "interact_persist",
+                        "tgix"
                       ]
                     },
                     "version": {
