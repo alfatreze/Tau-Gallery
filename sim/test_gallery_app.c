@@ -17,7 +17,7 @@
 static uint16_t mem[HW_N];                         /* SDRAM, halfwords: the plane at 0x200000 */
 static uint16_t fb[512u * 1024u];                  /* the UI framebuffer, halfwords, stride 512 */
 static uint32_t clk, irq_pend, vid_req, vid_bus, vid_sw, vid_due, vbase, vstride, land_base, land_words, land_ovf, input_n;
-static int force_ovf, force_short, viewer_dead, fail_pic_reads, pass_pic_reads; static uint32_t v1_starts_before, land_unaligned, zt_n_212;
+static int force_ovf, force_short, viewer_dead, fail_pic_reads, pass_pic_reads; static uint32_t v1_starts_before, land_unaligned, zt_n_212, rwd_241;
 static int zb_ok_phase = 0; static int32_t map_cx, map_cy, map_rx1, map_rw2, map_x0, map_y0, map_rx0, map_ry0, map_ex, map_ey, map_rw1;
 static uint32_t rc_lead_n, rc_lead_bad; static struct { uint32_t src, len, dst, pitch, geom, qy, qc, status, polls, cycles; uint16_t ty[64], tc[64]; int tables_ok; uint32_t starts, loads; int corrupt_next; int pending; uint32_t p_src, p_len, p_dst, p_pitch, p_geom; } tg;
 static uint32_t reads_while_decoding;
@@ -423,6 +423,12 @@ static void checkpoint(int n)
         chk(234, !v1_land_stream(0, 0, 0u, &o) && v1_pre.valid == 0u); v1_pre.valid = 0u;                                                                              /* a read into its buffer takes it away */
         v1_pre.valid = 1u; v1_pre.buf = 1u; chk(235, v1_land_stream(0, 0, 1u, &o) == 0 && v1_pre.valid == 0u); v1_pre.valid = 0u; force_ovf = 1; v1_pre.valid = 1u; v1_pre.buf = 0u;
         chk(236, v1_land_stream(0, 0, 0u, &o) == 1 && v1_pre.valid == 0u); force_ovf = 0; v1_pre.valid = 0u; } break;                                                         /* even a failed read takes it away */
+    case 250: chk(250, zn == 1u && zs[0].w == 2000u && zs[0].h == 1700u && zk < 0); break;                                                                                      /* a picture larger than the window: its zoom stop */
+    case 251: chk(251, info.zt_catch > 0u && info.zt_catch > info.zt_moved && info.zt_stall_run_max >= 1u && info.zt_stall_run_max <= info.zt_catch - info.zt_moved && info.zt_n >= info.zt_dec_n); break;      /* a long pan outruns the tile reads: frames stalled, and the longest run of them is at least one and at most all of them */
+    case 240: chk(240, said("ZOOM PIPELINE") && said("ON") && !said("OFF") && v1_pipe_off == 0u && said("A TOGGLE ZOOM PIPELINE")); clear_texts(); break;                                                      /* the Info page shows the switch, on */
+    case 241: chk(241, said("OFF") && v1_pipe_off == 1u); rwd_241 = reads_while_decoding; clear_texts(); break;                                                                               /* A turned it off */
+    case 242: chk(242, zk == 0 && z_shown && v1_view_matches("v00_full.rgb", 1000u, 900u) && reads_while_decoding == rwd_241 && info.zt_n == info.zt_dec_n && info.zt_n >= 40u); break;             /* with the pipeline off: no card read while the decoder runs, one read a decode, the same pixels */
+    case 243: chk(243, said("ON") && v1_pipe_off == 0u); clear_texts(); break;                                                                                                                /* and A turns it on again */
     case 226: v1z_smax = 100u; break;                                                                                                                                         /* no tile stream is allowed to be longer than 100 bytes */
     case 227: chk(227, said("PICTURE READ FAILED") && vid_bus == 0u && zk < 0); v1z_smax = V1Z_STREAM_MAX; clear_texts(); break;                                             /* the first tile is refused: the zoom is left with the message */
     case 228: force_short = 1; clear_texts(); break;                                                                                                                         /* a landing of one word too few (counted by the landing path) */
@@ -460,7 +466,7 @@ static void checkpoint(int n)
     case 19: chk(27, said("ADD PHOTOS") && said("1/3") && !said("MENU")); clear_texts(); break;                                                                  /* Down, A: Help page 1 of 3 */
     case 20: chk(28, said("WHERE THINGS ARE") && said("2/3") && !said("ADD PHOTOS")); clear_texts(); break;                                                      /* Down turns the page */
     case 22: chk(30, said("INFO") && said("4D50331B") && said("800 X 720") && said("NONE YET") && said("LAST ERROR") && said("L1 LOADED 1 SAVED 0")); snprintf(want, sizeof want, "%u", count); chk(31, said(want)); clear_texts(); break;    /* Info before any picture was opened */
-    case 23: chk(32, said("4D50331B") && count_text("NONE YET") == 8 && said(" MS") && said("432128 WORDS, 0 LOST")); chk(33, said("NONE") && !said("FAILED")); chk(44, said("L1 LOADED 1 SAVED 1")); chk(125, ldr_opens > 0u && ldr_chunks > 0u && ldr_first_ok && ldr_mono && ldr_max >= 100u && ldr_max < 160u); clear_texts(); break;   /* Info after viewing pictures: the last landing */
+    case 23: chk(32, said("4D50331B") && count_text("NONE YET") == 10 && said(" MS") && said("432128 WORDS, 0 LOST")); chk(33, said("NONE") && !said("FAILED")); chk(44, said("L1 LOADED 1 SAVED 1")); chk(125, ldr_opens > 0u && ldr_chunks > 0u && ldr_first_ok && ldr_mono && ldr_max >= 100u && ldr_max < 160u); clear_texts(); break;   /* Info after viewing pictures: the last landing */
     case 24: chk(34, said("OPEN FAILED") && said("0 WORDS, 0 LOST")); clear_texts(); break;                                                                          /* Info after a failed open: the error, and no landing counts carried over */
     case 25: chk(35, said("RESUME LAST PICTURE") && said("ON") && !said("OFF")); clear_texts(); break;                                                                    /* Settings page, resume on (the default) */
     case 26: chk(36, said("OFF") && (setw[2] & 1u) == 0u && set_writes == 0); clear_texts(); break;                                                                   /* toggled off: shown, but not yet written */
@@ -629,18 +635,24 @@ int main(int argc, char **argv)
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
     }
     if (argc > 2 && !strcmp(argv[2], "v1zoom")) {                                                          /* zoom of a version 1 picture: its full level decoded by the hardware into the window */
-        uint32_t S6[2048]; int k = 0;
+        uint32_t S6[8192]; int k = 0;
 #define H6(key, n) do { for (int _i = 0; _i < (n); _i++) S6[k++] = (key); } while (0)
         S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(210); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 200); S6[k++] = CP(211);
         S6[k++] = CP(230); H6(KEY_RIGHT, 40); H6(KEY_DOWN, 30); H6(0, 300); S6[k++] = CP(212); S6[k++] = CP(231); S6[k++] = CP(232);
         S6[k++] = KEY_A; S6[k++] = 0; H6(0, 3); S6[k++] = CP(213); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 200); S6[k++] = CP(214);
-        S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); S6[k++] = CP(219);                                          /* back to fit, then to the grid; the index buffer too small */
+        S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3);
+        S6[k++] = KEY_START; S6[k++] = 0; S6[k++] = KEY_DOWN; S6[k++] = 0; S6[k++] = KEY_DOWN; S6[k++] = 0; S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(240);                       /* the menu: Info, with the pipeline row */
+        S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(241); S6[k++] = KEY_B; S6[k++] = 0; S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3);                                                         /* A on the Info page switches the pipeline off; back to the grid */
+        S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = KEY_A; S6[k++] = 0; H6(0, 200); S6[k++] = CP(242); S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3);   /* a zoom with the pipeline off */
+        S6[k++] = KEY_START; S6[k++] = 0; S6[k++] = KEY_DOWN; S6[k++] = 0; S6[k++] = KEY_DOWN; S6[k++] = 0; S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(243);
+        S6[k++] = KEY_B; S6[k++] = 0; S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); S6[k++] = CP(219);                                          /* back to fit, then to the grid; the index buffer too small */
         S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(220); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 20);                                                    /* open v00: no zoom stop; A does nothing */
         S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(221);                                                    /* open v00 again: a stop; then the index read fails */
         S6[k++] = KEY_A; S6[k++] = 0; H6(0, 20); S6[k++] = CP(222); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 200); S6[k++] = CP(223);
         S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); S6[k++] = KEY_RIGHT; S6[k++] = 0; S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(224);
         S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); for (int i = 0; i < 5; i++) { S6[k++] = KEY_RIGHT; S6[k++] = 0; } S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(215); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 20); S6[k++] = CP(216);      /* the rotated picture is v06 */
-        S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); for (int i = 0; i < 6; i++) { S6[k++] = KEY_LEFT; S6[k++] = 0; } S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(217); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 60); S6[k++] = CP(218); S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(226); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 60); S6[k++] = CP(227); S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(228); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 60); S6[k++] = CP(229); S6[k++] = CP(225); S6[k++] = END;
+        S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); for (int i = 0; i < 6; i++) { S6[k++] = KEY_LEFT; S6[k++] = 0; } S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(217); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 60); S6[k++] = CP(218); S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(226); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 60); S6[k++] = CP(227); S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(228); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 60); S6[k++] = CP(229); S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); for (int i = 0; i < 7; i++) { S6[k++] = KEY_RIGHT; S6[k++] = 0; } S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(250);
+        S6[k++] = KEY_A; S6[k++] = 0; H6(0, 400); S6[k++] = CP(230); H6(KEY_RIGHT, 120); H6(0, 100); S6[k++] = CP(251); S6[k++] = CP(231); S6[k++] = CP(225); S6[k++] = END;
         nscript = k; memcpy(script, S6, (size_t)k * sizeof S6[0]);
         if (!setjmp(done)) gallery_app_main();
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;

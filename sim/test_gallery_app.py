@@ -61,6 +61,8 @@ def make_v1_set(d):
     ex = _I.Exif(); ex[0x0112] = 3; bio = _io.BytesIO(); TJ.picture(1000, 900, seed=10).save(bio, "JPEG", quality=90, exif=ex)                 # a 1000 x 900 JPEG whose EXIF orientation is 180 degrees: its full level is stored unrotated, the viewer would have to rotate it: no zoom
     (d / "src6.jpg").write_bytes(bio.getvalue()); prep6 = tgy.prepare(_I.open(d / "src6.jpg"))
     data6, thumb6, size6 = tgy_make.canvas_container(d / "src6.jpg", prep6); add(6, data6, thumb6, size6, "V1 rotated 06")
+    big = TJ.picture(2000, 1700, seed=11); (d / "src7.jpg").write_bytes(b""); big.save(d / "src7.jpg", "JPEG", quality=90); prep7 = tgy.prepare(_I.open(d / "src7.jpg"))      # larger than the 11 x 10 tile window (1408 x 1280): a pan has to load tiles, so the view can stall
+    data7, thumb7, size7 = tgy_make.canvas_container(d / "src7.jpg", prep7); add(7, data7, thumb7, size7, "V1 big 07")
     order = sorted(range(len(ents)), key=lambda k: ents[k]["path"]); (d / "tau-library.tdb").write_bytes(tgy.pack_index([ents[k] for k in order], [ths[k] for k in order]))
 
 def make_set(d, n=18):
@@ -148,7 +150,7 @@ def mutants(setdir, tail=None):
             ("gallery_app.c", "v1_stream_hw(buf) * 2u + off) != TH_OK", "v1_stream_hw(buf) * 2u) != TH_OK"),                                                                         # the decoder reads the superset's start, not the stream's
             ("gallery_app.c", "    t_res[tw][row * GV_WIN_TX + col] = 1u;\n    return 0;\n}\n/* Starts the copy", "    return 0;\n}\n/* Starts the copy"),                                      # a decoded tile is never marked whole
             ("gallery_app.c", "else if (zl.layout == 2u) return v1_tile_decode(tw, col, row, tx, ty);", "else if (zl.layout == 2u) { return 1; }"),                                        # a version 1 tile is never decoded
-            ("gallery_app.c", "    info.zt_n = info.zt_land_sum = info.zt_land_max = info.zt_dec_n = info.zt_dec_sum = info.zt_dec_max = info.zt_pass_max = info.zt_catch = info.zt_moved = 0u;", ""),            # the tile statistics are not reset by a new zoom
+            ("gallery_app.c", "    info.zt_n = info.zt_land_sum = info.zt_land_max = info.zt_dec_n = info.zt_dec_sum = info.zt_dec_max = info.zt_pass_max = info.zt_catch = info.zt_moved = info.zt_stall_run_max = 0u;", ""),            # the tile statistics are not reset by a new zoom
             ("gallery_app.c", "        info.zt_catch++;", ""),                                                                                                                  # frames behind the wanted corner are not counted
             ("gallery_app.c", "{ tile_show(nx, ny); info.zt_moved++; }", "{ tile_show(nx, ny); }"),                                                                         # moved frames are not counted
             ("gallery_app.c", "info.zt_n++; info.zt_land_sum += us;", "info.zt_land_sum += us;"),                                                         # the tiles are not counted
@@ -165,6 +167,11 @@ def mutants(setdir, tail=None):
             ("gallery_app.c", "const uint32_t dec_us = tgy_hw_cycles() / (SDRAM_HZ / 1000000u);", "const uint32_t dec_us = tgy_hw_cycles() / (SDRAM_HZ / 1000u);"),                  # the decoder's cycles in the wrong unit
             ("gallery_app.c", "    if (v1_pre.valid && v1_pre.buf == buf) v1_pre.valid = 0u;", ""),                                                                    # a read into the prefetch buffer leaves the prefetch offered
             ("gallery_app.c", "return p->valid && p->tx == tx && p->ty == ty; }", "return p->valid && p->tx == tx; }"),                                                # a stream of another tile of the column is taken
+            ("gallery_app.c", "else { z_stall_run++; if (z_stall_run > info.zt_stall_run_max) info.zt_stall_run_max = z_stall_run; }", "else { if (z_stall_run > info.zt_stall_run_max) info.zt_stall_run_max = z_stall_run; }"),   # the run of stalled frames is never counted
+            ("gallery_app.c", "if (z_stall_run > info.zt_stall_run_max) info.zt_stall_run_max = z_stall_run;", ""),                                                                    # the longest run is never kept
+            ("gallery_app.c", "if (k == 2) v1_pipe_off ^= 1u;", ""),                                                                                                                   # A on the Info page does nothing
+            ("gallery_app.c", "if (zl.layout == 2u && !v1_pipe_off) for", "if (zl.layout == 2u) for"),                                                                                  # the pipeline cannot be switched off
+            ("gallery_app.c", "info.pipe_off = v1_pipe_off; ", ""),                                                                                                                    # the Info page does not show the switch
             ("gallery_app.c", "else if (edge & KEY_SELECT) { run_details(); draw_page();", "else if (0) { run_details(); draw_page();"),                                  # details page: no key on the grid
             ("gallery_app.c", "else if (edge & KEY_SELECT) { run_details(); draw_page();", "else if (edge & KEY_SELECT) { run_details();"),                          # the grid is not redrawn after it
             ("gallery_app.c", "if ((edge & KEY_SELECT) && !(edge & (KEY_LEFT | KEY_RIGHT))) {", "if (0) {"),                                                          # details page: no key in the picture view

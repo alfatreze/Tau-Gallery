@@ -216,7 +216,7 @@ static const char *const open_msg[] = { "", "OPEN FAILED", "HEADER READ FAILED",
 
 /* open_picture with the Info page's numbers: how long it took (ms), the landing's word counts (only when a landing ran), the status line text. */
 static void zoom_list(void);
-static gi_t info = { 0u, 0u, 0u, GI_NONE, 0u, 0u, 0, 0u, 0u, 0u, GI_NONE, GI_NONE, GI_NONE, GI_NONE, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u };
+static gi_t info = { 0u, 0u, 0u, GI_NONE, 0u, 0u, 0, 0u, 0u, 0u, GI_NONE, GI_NONE, GI_NONE, GI_NONE, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u };
 static gs_vals_t gset; static uint32_t last_act;                                              /* the persisted settings; the clock of the last key or card read (a save waits for a quiet second after it) */
 static uint32_t path_crc(uint32_t i) { const char *s = ent[i - page * PER_PAGE].path; uint32_t n = 0; while (s[n]) n++; return gf_crc32((const uint8_t *)s, n) & GS_M31; }
 static void remember(uint32_t i) { gset.last_idx = i; gset.last_crc = path_crc(i); }       /* the picture the next start resumes on: only one the viewer has shown */
@@ -260,6 +260,7 @@ static tgy_file_t v1fz; static tgy_level_t v1z; static uint8_t v1z_idx[V1Z_IDX_M
 typedef struct { uint32_t valid, buf, off_in_buf; int32_t tx, ty; } v1_pre_t;
 static v1_pre_t v1_pre;
 typedef struct { uint32_t valid, tw; int col, row; int32_t tx, ty; } v1_next_t;
+static uint32_t z_stall_run, v1_pipe_off;                                                    /* frames in a row the shown view stood still; 1 when the pipeline is switched off (the Info page's A) */
 static v1_next_t v1_next;                                                                    /* set by tile_pass: the tile after the one being started, when it also needs the card */
 static void v1_zoom_list(void)                                                               /* a version 1 picture is open: its full level, if this core can decode it and it is upright */
 {
@@ -333,7 +334,7 @@ static void zoom_open(int k, int32_t nx, int32_t ny)
         if (tgy_load_index(&v1fz, &v1z, v1_read_idx, 0, v1z_idx, V1Z_IDX_MAX) != TH_OK) { say("ZOOM INDEX READ FAILED", BAD); zk = -1; return; }
         v1z_idx_ok = 1u;
     }
-    info.zt_n = info.zt_land_sum = info.zt_land_max = info.zt_dec_n = info.zt_dec_sum = info.zt_dec_max = info.zt_pass_max = info.zt_catch = info.zt_moved = 0u; v1_pre.valid = 0u;      /* the tile statistics are those of this zoom */
+    info.zt_n = info.zt_land_sum = info.zt_land_max = info.zt_dec_n = info.zt_dec_sum = info.zt_dec_max = info.zt_pass_max = info.zt_catch = info.zt_moved = info.zt_stall_run_max = 0u; v1_pre.valid = 0u; z_stall_run = 0u;      /* the tile statistics are those of this zoom */
     zl = zs[k]; zk = k; z_stop.w = zl.w; z_stop.h = zl.h; z_stop.scale_q16 = zl.scale_q16; gv_clamp(&z_stop, &nx, &ny);
     z_wx = nx; z_wy = ny; z_sx = -1; z_sy = -1; z_shown = 0u; z_t0 = cycles(); z_first = 1u;
     if (zl.layout == 0u) { z_stride_hw = zl.stride / 2u; z_nch = gv_nchunks((zl.len + 4095u) & ~4095u); z_lo = 0u; z_hi = 0u; }
@@ -489,7 +490,7 @@ static int tile_pass_inner(int dx, int dy, uint32_t held, int moving, int tick)
         for (uint32_t i = 0; i < n; i++) {
             int col, row; if (!gv_win_tile(t_wx[tw], t_wy[tw], need[i].tx, need[i].ty, &col, &row) || t_res[tw][row * GV_WIN_TX + col]) continue;
             v1_next.valid = 0u;
-            if (zl.layout == 2u) for (uint32_t k = i + 1u; k < n; k++) {                      /* version 1: the next tile that needs the card is read while this one decodes */
+            if (zl.layout == 2u && !v1_pipe_off) for (uint32_t k = i + 1u; k < n; k++) {                      /* version 1: the next tile that needs the card is read while this one decodes */
                 int c2, r2; if (!gv_win_tile(t_wx[tw], t_wy[tw], need[k].tx, need[k].ty, &c2, &r2) || t_res[tw][r2 * GV_WIN_TX + c2]) continue;
                 v1_next.valid = 1u; v1_next.tw = tw; v1_next.col = c2; v1_next.row = r2; v1_next.tx = need[k].tx; v1_next.ty = need[k].ty; break;
             }
@@ -509,10 +510,13 @@ static int tile_pass_inner(int dx, int dy, uint32_t held, int moving, int tick)
     if (tick && (z_sx != z_wx || z_sy != z_wy)) {                                            /* follow the wanted corner: diagonal if its tiles are whole, else along one axis */
         const int32_t nx = z_sx + clampi(z_wx - z_sx, -FOLLOW_STEP, FOLLOW_STEP), ny = z_sy + clampi(z_wy - z_sy, -FOLLOW_STEP, FOLLOW_STEP);
         info.zt_catch++;                                                                     /* a frame the shown view is behind the wanted corner; zt_moved of them it could step (the rest are the stalls) */
+        int stepped = 1;
         if (gv_screen_ready(&z_stop, nx, ny, t_wx[t_front], t_wy[t_front], t_res[t_front])) { tile_show(nx, ny); info.zt_moved++; }
         else if (nx != z_sx && gv_screen_ready(&z_stop, nx, z_sy, t_wx[t_front], t_wy[t_front], t_res[t_front])) { tile_show(nx, z_sy); info.zt_moved++; }
         else if (ny != z_sy && gv_screen_ready(&z_stop, z_sx, ny, t_wx[t_front], t_wy[t_front], t_res[t_front])) { tile_show(z_sx, ny); info.zt_moved++; }
-    }
+        else stepped = 0;
+        if (stepped) z_stall_run = 0u; else { z_stall_run++; if (z_stall_run > info.zt_stall_run_max) info.zt_stall_run_max = z_stall_run; }      /* frames in a row the view stood still while the keys were ahead of it: how long a freeze feels */
+    } else if (tick) z_stall_run = 0u;
     return 0;
 }
 static int tile_pass(int dx, int dy, uint32_t held, int moving, int tick)                    /* the pass with its duration: the longest one is the Info page's LONGEST PASS (a slowdown in a pan is a long pass or a stalled frame) */
@@ -711,14 +715,15 @@ static void draw_theme(const gt_t *g, const gt_look_t *l)
     gfx_rect(110, PAGE_Y0 + 3u * LINE_H + 6u, 120, 14, ACC);                                       /* the accent as it is drawn with this theme */
     page_foot("UP DOWN ROW  LEFT RIGHT CHANGE  B BACK", 0, 0);
 }
+#define INFO_LINE_H 17u                          /* 18 rows from y 26 to 315 */
 static void draw_info(void)
 {
     gi_row_t r[GI_ROWS];
-    info.core_version = REG_RD(R_VERSION); info.count = head.count; info.view_caps = REG_RD(R_VIEW_CAPS);
+    info.pipe_off = v1_pipe_off; info.core_version = REG_RD(R_VERSION); info.count = head.count; info.view_caps = REG_RD(R_VIEW_CAPS);
     info.set_layout = gs_stats.layout; info.set_loads = gs_stats.loads; info.set_stores = gs_stats.stores;
     gi_format(&info, r); page_clear("INFO");
-    for (uint32_t i = 0; i < GI_ROWS; i++) { gfx_text(6, PAGE_Y0 + i * LINE_H, r[i].label, DIM, BG); gfx_text(150, PAGE_Y0 + i * LINE_H, r[i].value, i == 5u && info.err ? BAD : FG, BG); }
-    page_foot("B BACK", 0, 0);
+    for (uint32_t i = 0; i < GI_ROWS; i++) { gfx_text(6, PAGE_Y0 + i * INFO_LINE_H, r[i].label, DIM, BG); gfx_text(150, PAGE_Y0 + i * INFO_LINE_H, r[i].value, i == 5u && info.err ? BAD : FG, BG); }
+    page_foot("B BACK   A TOGGLE ZOOM PIPELINE", 0, 0);
 }
 static void draw_settings(void)
 {
@@ -784,7 +789,7 @@ static void run_pages(void)
         else if (r == GP_OPEN_SETTINGS) { draw_settings(); while (!gsp_input(&gset.resume, next_edge(&prev))) draw_settings(); }
         else if (r == GP_OPEN_CONTROLS) { gc_t c; gc_open(&c); draw_controls(&c); while (!gc_input(&c, next_edge(&prev))) draw_controls(&c); }
         else if (r == GP_OPEN_HELP) { gh_t h; gh_open(&h); draw_help(&h); while (!gh_input(&h, next_edge(&prev))) draw_help(&h); }
-        else { draw_info(); while (!gi_input(next_edge(&prev))) draw_info(); }
+        else { draw_info(); for (;;) { const int k = gi_input(next_edge(&prev)); if (k == 1) break; if (k == 2) v1_pipe_off ^= 1u; draw_info(); } }
         draw_menu(&m);
     }
 }
