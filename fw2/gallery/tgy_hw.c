@@ -87,15 +87,22 @@ int tgy_hw_tables(const tgy_file_t *f, const tgy_level_t *l)
     return TH_OK;
 }
 
-int tgy_hw_tile(const tgy_file_t *f, const tgy_level_t *l, uint32_t tx, uint32_t ty, uint32_t dst, uint32_t pitch)
+int tgy_tile_loc(const tgy_level_t *l, uint32_t tx, uint32_t ty, uint32_t *off, uint32_t *len)
 {
     if (tx >= l->cols || ty >= l->rows || !l->idx) return TH_RANGE;
-    int r = tgy_hw_tables(f, l); if (r != TH_OK) return r;
     const uint8_t *ent = l->idx + (ty * l->cols + tx) * TH_IDX;
-    const uint32_t off = th32(ent), len = th32(ent + 4);
-    if (off > l->data_len || len > l->data_len - off || len >= (1u << 20)) return TH_RANGE;
+    const uint32_t o = th32(ent), n = th32(ent + 4);
+    if (o > l->data_len || n > l->data_len - o || n >= (1u << 20)) return TH_RANGE;
+    *off = l->data_off + o; *len = n;                                             /* a file offset: where the tile's stream starts in the file */
+    return TH_OK;
+}
+
+int tgy_hw_tile_from(const tgy_file_t *f, const tgy_level_t *l, uint32_t tx, uint32_t ty, uint32_t dst, uint32_t pitch, uint32_t src)
+{
+    uint32_t foff, len; int r = tgy_tile_loc(l, tx, ty, &foff, &len); if (r != TH_OK) return r;
+    r = tgy_hw_tables(f, l); if (r != TH_OK) return r;
     const uint32_t x0 = tx * TH_TILE, y0 = ty * TH_TILE, tw = (l->w - x0 < TH_TILE) ? l->w - x0 : TH_TILE, th = (l->h - y0 < TH_TILE) ? l->h - y0 : TH_TILE;
-    REG_WR(R_TGY_SRC, f->base + l->data_off + off); REG_WR(R_TGY_LEN, len); REG_WR(R_TGY_DST, dst); REG_WR(R_TGY_PITCH, pitch);
+    REG_WR(R_TGY_SRC, src); REG_WR(R_TGY_LEN, len); REG_WR(R_TGY_DST, dst); REG_WR(R_TGY_PITCH, pitch);
     REG_WR(R_TGY_GEOM, ((uint32_t)l->fmt << 16) | (tw << 8) | th); REG_WR(R_TGY_QY, f->base + f->tables_off + 2u + 128u * l->qy); REG_WR(R_TGY_QC, f->base + f->tables_off + 2u + 128u * l->qc);
     REG_WR(R_TGY_CTRL, 8u);                                                        /* CLEAR, then START in a separate store (the configuration crosses with the command) */
     REG_WR(R_TGY_CTRL, 1u);
@@ -105,6 +112,12 @@ int tgy_hw_tile(const tgy_file_t *f, const tgy_level_t *l, uint32_t tx, uint32_t
     if (g_status & 0x10u) return TH_BUSY;                                          /* the start was rejected: the decoder was busy */
     if (g_status & 4u) return TH_HWERR;
     return TH_OK;
+}
+
+int tgy_hw_tile(const tgy_file_t *f, const tgy_level_t *l, uint32_t tx, uint32_t ty, uint32_t dst, uint32_t pitch)
+{
+    uint32_t foff, len; int r = tgy_tile_loc(l, tx, ty, &foff, &len); if (r != TH_OK) return r;
+    return tgy_hw_tile_from(f, l, tx, ty, dst, pitch, f->base + foff);          /* the stream is where the file is resident: base + its file offset */
 }
 
 int tgy_hw_level(const tgy_file_t *f, const tgy_level_t *l, uint32_t dst0, uint32_t pitch, int (*tick)(void *ctx, uint32_t tx, uint32_t ty), void *ctx)

@@ -45,6 +45,8 @@ def suite(exe):
     mask = np.ones((720, 2400), bool); mask[ry:ry + e["h"], rx * 3:(rx + e["w"]) * 3] = False
     check("fit level: every byte outside its rectangle untouched (0x55)", bool((canvas[mask] == 0x55).all()))
     check("fit level: driver ran clean (order errors 0, one table load)", "run 0" in out and "order 0" in out and "loads 1" in out)
+    out, got2 = run(exe, "reloc", data)
+    check("tiles decoded from streams copied to odd addresses of their own (the zoom's staging) equal the in-place decode, original streams wiped", "run 0" in out and got2 == run(exe, "show", data)[1] and len(got2) == 2400 * 720)
     out, got = run(exe, "full", data); e = c.levels[full]; want = c.pixels(full); pitch = e["w"] * 3 + 5
     buf = np.frombuffer(got, np.uint8); rows = buf.reshape(e["h"] + 1, pitch)
     pic = rows[:e["h"], 1:1 + e["w"] * 3].reshape(e["h"], e["w"], 3)
@@ -100,7 +102,7 @@ def suite(exe):
 MUTANTS = [
     ("tile origin x off by one pixel", "tx * TH_TILE * 3u", "tx * TH_TILE * 2u"), ("pitch ignored in the row step", "ty * TH_TILE * pitch", "ty * TH_TILE * 2400u"),
     ("tile height not clipped", "(l->h - y0 < TH_TILE) ? l->h - y0 : TH_TILE", "TH_TILE"), ("tile width not clipped", "(l->w - x0 < TH_TILE) ? l->w - x0 : TH_TILE", "TH_TILE"),
-    ("stream offset not added", "f->base + l->data_off + off", "f->base + l->data_off"), ("table address of Cb/Cr wrong", "128u * l->qc;\n    if ((qy | qc) & 1u)", "128u * l->qy;\n    if ((qy | qc) & 1u)"),
+    ("stream offset not added", "*off = l->data_off + o;", "*off = l->data_off;"), ("table address of Cb/Cr wrong", "128u * l->qc;\n    if ((qy | qc) & 1u)", "128u * l->qy;\n    if ((qy | qc) & 1u)"),
     ("tables skipped when cached wrongly (always)", "if (qy == g_loaded_y && qc == g_loaded_c) return TH_OK;", "if (g_loaded_y != 0xFFFFFFFFu) return TH_OK;"),
     ("index CRC not compared", "if (gf_crc32(buf, l->idx_len) != l->idx_crc) return TH_CRC;", ""),
     ("header CRC not checked", "if (gf_crc32(img, 52u) != th32(img + 52)) return TH_CRC;", ""),
@@ -116,6 +118,9 @@ MUTANTS = [
     ("level larger than the canvas accepted on show", "if ((uint32_t)l->rx + l->w > GT_CANVAS_W || (uint32_t)l->ry + l->h > GT_CANVAS_H) return TH_RANGE;", ""),
     ("index read failure ignored", "if (!rd(ctx, l->idx_off, l->idx_len, buf)) return TH_SHORT;", ""),
     ("stream length halved", "REG_WR(R_TGY_LEN, len);", "REG_WR(R_TGY_LEN, len / 2u);"),
+    ("explicit stream address ignored (the file's own position is used)", "REG_WR(R_TGY_SRC, src);", "REG_WR(R_TGY_SRC, f->base + foff);"),
+    ("the wrapper passes the wrong stream address", "return tgy_hw_tile_from(f, l, tx, ty, dst, pitch, f->base + foff);", "return tgy_hw_tile_from(f, l, tx, ty, dst, pitch, f->base + l->data_off);"),
+    ("tile location ignores the level's data offset", "*off = l->data_off + o; *len = n;", "*off = o; *len = n;"),
 ]
 def main():
     global fails

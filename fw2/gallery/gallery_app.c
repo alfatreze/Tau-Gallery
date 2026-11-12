@@ -249,9 +249,26 @@ static uint32_t z_stride_hw, z_nch, z_lo, z_hi;                                 
 static uint32_t t_front, t_job, t_k, t_src_hw, t_src_stride, t_dst_hw, t_job_col, t_job_row, t_job_win, t_recentre, t_shown_win;      /* option B: window on screen, the tile copy under way, a re-centre being composed */
 static int32_t t_wx[2], t_wy[2]; static uint8_t t_res[2][GV_WIN_TX * GV_WIN_TY];             /* each window's origin (level pixels) and which of its tiles are whole */
 static void res_clear(uint32_t w) { for (uint32_t i = 0; i < GV_WIN_TX * GV_WIN_TY; i++) t_res[w][i] = 0u; }       /* no tile of window w is whole */
+/* ---- zoom of a version 1 picture (docs/TGY_HW_DMA.md, "Zoom"): its full-resolution level (kind 1) is a compressed tile level. The one stop after fit is that level at 1:1; a tile is a card read of its stream (a 4 KB aligned
+ * superset of it, landed at GAL_STREAM) and one decode by the hardware decoder straight into its place in the resident window (no staging copy, no Talos): the windows, the re-centre, the map and the keys are the version 0
+ * tile level's own. The level's tile index (12 bytes a tile) is read from the card when the first zoom opens. The quantisation tables come from the prefix of the file landed when the picture opened. ---- */
+#define GAL_STREAM (GAL_STAGE + 0x10000u)        /* one landed tile stream, 128 KB (halfword address): past the staging tile (0x6000) and the bar save area (GAL_STAGE + 0x8000, 0x3000 used) */
+#define V1Z_STREAM_MAX 122880u                   /* a stream longer than this (a tile of noise at the highest quality is about 60 KB) is not decoded */
+#define V1Z_IDX_MAX 32768u                       /* the full level's tile index: 12 bytes a tile, 2,730 tiles (a 44 megapixel picture) */
+static tgy_file_t v1fz; static tgy_level_t v1z; static uint8_t v1z_idx[V1Z_IDX_MAX]; static uint32_t v1z_idx_ok, v1z_cap = V1Z_IDX_MAX, v1z_smax = V1Z_STREAM_MAX;      /* v1z_cap: the index size accepted (a variable so the host test can lower it) */
+static void v1_zoom_list(void)                                                               /* a version 1 picture is open: its full level, if this core can decode it and it is upright */
+{
+    if (!v1_on || h4[18] != 1u) return;                                                      /* the header's EXIF orientation of the full level: only upright is shown (a rotated one needs a transposing decode) */
+    const uint32_t fsize = (uint32_t)h4[48] | (uint32_t)h4[49] << 8 | (uint32_t)h4[50] << 16 | (uint32_t)h4[51] << 24;
+    if (tgy_open(&v1fz, h4, fsize, GAL_LAND_BASE * 2u) != TH_OK || tgy_find_level(&v1fz, 1u, &v1z) != TH_OK) return;      /* with the whole file in view, to read the level table */
+    if (v1z.idx_len > v1z_cap) return;                                                       /* an index that does not fit the buffer (the converter writes the full level only for a picture larger than the canvas; a panorama shorter than the screen is centred by the window rules, as for version 0) */
+    gt_zoom_t z; z.layout = 2u; z.w = v1z.w; z.h = v1z.h; z.off = v1z.data_off; z.len = v1z.data_len; z.stride = 0u; z.ntx = v1z.cols; z.nty = v1z.rows; z.scale_q16 = 65536u; z.rx = z.ry = z.rw = z.rh = 0u;
+    zs[zn++] = z; v1z_idx_ok = 0u;
+}
 static void zoom_list(void)                                                                  /* after a picture opens: its zoom levels, in file order */
 {
     zn = 0u; zk = -1;
+    if (v1_on) { v1_zoom_list(); return; }
     for (uint32_t k = 0; k < 8u && zn < GV_MAX_STOPS; k++) { gt_zoom_t z; const int r = gt_zoom_level(h4, 4096u, k, &z); if (r == GF_NOLEVEL) break; if (r == GF_OK) zs[zn++] = z; }
 }
 static void zoom_off(int k, int32_t *ox, int32_t *oy)                                        /* where the picture starts in stop k's canvas (k = -1: the fit canvas) */
@@ -307,6 +324,10 @@ static void zoom_leave(void)
 /* Opens stop k with its screen corner at (nx, ny) of the stop's canvas (clamped here): the fit view shows while the level loads. */
 static void zoom_open(int k, int32_t nx, int32_t ny)
 {
+    if (zs[k].layout == 2u && !v1z_idx_ok) {                                                  /* the first zoom of a version 1 picture: its tile index (checksum checked) */
+        if (tgy_load_index(&v1fz, &v1z, v1_read_idx, 0, v1z_idx, V1Z_IDX_MAX) != TH_OK) { say("ZOOM INDEX READ FAILED", BAD); zk = -1; return; }
+        v1z_idx_ok = 1u;
+    }
     zl = zs[k]; zk = k; z_stop.w = zl.w; z_stop.h = zl.h; z_stop.scale_q16 = zl.scale_q16; gv_clamp(&z_stop, &nx, &ny);
     z_wx = nx; z_wy = ny; z_sx = -1; z_sy = -1; z_shown = 0u; z_t0 = cycles(); z_first = 1u;
     if (zl.layout == 0u) { z_stride_hw = zl.stride / 2u; z_nch = gv_nchunks((zl.len + 4095u) & ~4095u); z_lo = 0u; z_hi = 0u; }
@@ -372,11 +393,31 @@ static int tile_land(int32_t tx, int32_t ty)
     }
     return 0;
 }
+/* A version 1 tile: its stream (a 4 KB aligned superset) is landed at GAL_STREAM, once more on a failure, and decoded by the hardware straight into its place in window tw; the tile is whole when the decoder is done. 1 on a failure. */
+static int v1_tile_decode(uint32_t tw, int col, int row, int32_t tx, int32_t ty)
+{
+    uint32_t fo, len; if (tgy_tile_loc(&v1z, (uint32_t)tx, (uint32_t)ty, &fo, &len) != TH_OK || len == 0u || len > v1z_smax) return 1;
+    const uint32_t a = fo & ~4095u, e = (fo + len + 4095u) & ~4095u, n = e - a, tc = cycles(); int ok = 0;
+    for (int attempt = 0; attempt < 2 && !ok; attempt++) {
+        REG_WR(R_LAND_BASE, GAL_STREAM); REG_WR(R_LAND_CTRL, 1u);
+        if (!slot_read_blocking(SLOT_PIC, a, 0x40000000u, n, CLK_HZ)) continue;
+        const uint32_t t0 = cycles(); while (!(REG_RD(R_LAND_STATUS) & 1u) && (uint32_t)(cycles() - t0) < CLK_HZ / 10u) { }
+        ok = REG_RD(R_LAND_OVF) == 0u && REG_RD(R_LAND_WORDS) == n / 4u;
+    }
+    if (!ok) return 1;
+    info.land_ms = (cycles() - tc) / (CLK_HZ / 1000u);
+    const uint32_t td = cycles();
+    if (tgy_hw_tile_from(&v1fz, &v1z, (uint32_t)tx, (uint32_t)ty, (win_base(tw) + gv_tile_hw(col, row)) * 2u, GV_WIN_STRIDE_WORDS * 2u, GAL_STREAM * 2u + (fo - a)) != TH_OK) return 1;
+    info.copy_ms = (cycles() - td) / (CLK_HZ / 1000u);                                         /* the Info page's ZOOM COPY row is the decode of the tile for a version 1 picture */
+    t_res[tw][row * GV_WIN_TX + col] = 1u;
+    return 0;
+}
 /* Starts the copy of tile (tx, ty) into window tw at (col, row): from the front window when a re-centre is composing and the front has the tile whole (a Talos copy, no card), else from the card. 1 on a read failure. */
 static int tile_job_start(uint32_t tw, int col, int row, int32_t tx, int32_t ty)
 {
     int fc, fr;
     if (t_recentre && gv_win_tile(t_wx[t_front], t_wy[t_front], tx, ty, &fc, &fr) && t_res[t_front][fr * GV_WIN_TX + fc]) { t_src_hw = win_base(t_front) + gv_tile_hw(fc, fr); t_src_stride = GV_WIN_STRIDE_WORDS; }
+    else if (zl.layout == 2u) return v1_tile_decode(tw, col, row, tx, ty);                      /* version 1: decoded into the window, no copy job */
     else { if (!tile_land(tx, ty)) return 1; t_src_hw = GAL_STAGE; t_src_stride = GV_TILE_HW; }
     t_dst_hw = win_base(tw) + gv_tile_hw(col, row); t_job_win = tw; t_job_col = (uint32_t)col; t_job_row = (uint32_t)row; t_k = 0u; t_job = 1u; t_copy_cyc = 0u;
     return 0;

@@ -46,6 +46,8 @@ def make_v1_set(d):
         prep = tgy.prepare(imgs[i]); data, thumb, size = tgy_make.canvas_container(jp if i == 0 else None, prep)
         if i in (0, 1):
             c = C.Container(data); fit = [k for k, e in enumerate(c.levels) if e["kind"] == C.KIND_FIT][0]; (d / f"v{i:02d}.rgb").write_bytes(c.pixels(fit).tobytes())
+        if i == 0:
+            full = [k for k, e in enumerate(c.levels) if e["kind"] == C.KIND_FULL][0]; (d / "v00_full.rgb").write_bytes(c.pixels(full).tobytes())      # the reference of the 1:1 level (1000 x 900) for the zoom scenario
         if i == 3:
             c = C.Container(data); e = c.levels[0]; off = e["data_off"]; b = bytearray(data); b[off:off + 40] = b"\xff" * 40; data = bytes(b)      # the first tile's stream: the decoder reports an error
         if i == 4:
@@ -54,6 +56,11 @@ def make_v1_set(d):
             b = bytearray(data); b[9] ^= 0x40; data = bytes(b)
         add(i, data, thumb, size, f"V1 picture {i:02d}")
     canvas, rect, thumb, size = tgy.render(imgs[2]); add(2, tgy.pack_tgy(canvas, rect, thumb, size), thumb, size, "V0 picture 02")
+    import io as _io
+    from PIL import Image as _I
+    ex = _I.Exif(); ex[0x0112] = 3; bio = _io.BytesIO(); TJ.picture(1000, 900, seed=10).save(bio, "JPEG", quality=90, exif=ex)                 # a 1000 x 900 JPEG whose EXIF orientation is 180 degrees: its full level is stored unrotated, the viewer would have to rotate it: no zoom
+    (d / "src6.jpg").write_bytes(bio.getvalue()); prep6 = tgy.prepare(_I.open(d / "src6.jpg"))
+    data6, thumb6, size6 = tgy_make.canvas_container(d / "src6.jpg", prep6); add(6, data6, thumb6, size6, "V1 rotated 06")
     order = sorted(range(len(ents)), key=lambda k: ents[k]["path"]); (d / "tau-library.tdb").write_bytes(tgy.pack_index([ents[k] for k in order], [ths[k] for k in order]))
 
 def make_set(d, n=18):
@@ -101,7 +108,7 @@ def run(workdir, setdir):
     if r.returncode: rc = 1; out += "\nFAIL scenario zoom\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
     global V1SET
     if V1SET is None: V1SET = Path(tempfile.mkdtemp()); make_v1_set(V1SET)
-    for sc in ("v1", "v1nohw"):
+    for sc in ("v1", "v1nohw", "v1zoom"):
         r = subprocess.run([str(workdir / "t"), str(V1SET), sc], capture_output=True, text=True, timeout=900)
         if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
         else: out += "\n" + r.stdout
@@ -123,6 +130,24 @@ def mutants(setdir, tail=None):
             ("gallery_app.c", "if (a < off || a >= off + GX_THUMB_BYTES) continue;", "if (a < off) continue;"),
             ("gallery_app.c", "path[0] = '/';", "path[0] = 'x';"),
             ("gallery_app.c", "if (edge & KEY_B) { gal_view_off();", "if (edge & KEY_B) { "),
+            ("gallery_app.c", "if (!v1_on || h4[18] != 1u) return;", "if (!v1_on) return;"),                                                                          # a rotated picture would zoom
+            ("gallery_app.c", "v1z.idx_len > v1z_cap", "v1z.idx_len > v1z_cap * 99u"),                                                                                      # an index larger than the buffer is accepted
+            ("gallery_app.c", "if (zs[k].layout == 2u && !v1z_idx_ok) {", "if (zs[k].layout == 2u && 0) {"),                                                                 # the tile index is never loaded
+            ("gallery_app.c", "{ say(\"ZOOM INDEX READ FAILED\", BAD); zk = -1; return; }", "{ say(\"ZOOM INDEX READ FAILED\", BAD); zk = -1; }"),                              # a failed index read goes on to zoom
+            ("gallery_app.c", "        v1z_idx_ok = 1u;\n    }", "    }"),                                                                                                                   # the index is read again at every zoom
+            ("gallery_app.c", "zs[zn++] = z; v1z_idx_ok = 0u;", "zs[zn++] = z;"),                                                                                          # the index of the last picture is kept for the next one
+            ("gallery_app.c", "if (v1_on) { v1_zoom_list(); return; }", ""),                                                                                                # a version 1 picture has no zoom list
+            ("gallery_app.c", "z.scale_q16 = 65536u;", "z.scale_q16 = 32768u;"),                                                                                            # the 1:1 level at half scale: the view opens at the wrong place
+            ("gallery_app.c", "len == 0u || len > v1z_smax) return 1;", "len == 0u || len > v1z_smax * 9999u) return 1;"),                                                  # a stream longer than the limit is decoded
+            ("gallery_app.c", "const uint32_t a = fo & ~4095u, e = (fo + len + 4095u) & ~4095u,", "const uint32_t a = fo & ~3u, e = (fo + len + 4095u) & ~4095u,"),                 # the read starts unaligned
+            ("gallery_app.c", "const uint32_t a = fo & ~4095u, e = (fo + len + 4095u) & ~4095u,", "const uint32_t a = fo & ~4095u, e = (fo + len + 3u) & ~3u,"),                     # the read ends unaligned
+            ("gallery_app.c", "ok = REG_RD(R_LAND_OVF) == 0u && REG_RD(R_LAND_WORDS) == n / 4u;", "ok = REG_RD(R_LAND_WORDS) == n / 4u;"),                                         # a landing overflow is not noticed
+            ("gallery_app.c", "ok = REG_RD(R_LAND_OVF) == 0u && REG_RD(R_LAND_WORDS) == n / 4u;", "ok = REG_RD(R_LAND_OVF) == 0u;"),                                             # a short landing is not noticed
+            ("gallery_app.c", "(win_base(tw) + gv_tile_hw(col, row)) * 2u, GV_WIN_STRIDE_WORDS * 2u,", "win_base(tw) * 2u + gv_tile_hw(col, row), GV_WIN_STRIDE_WORDS * 2u,"),      # the tile lands in the wrong place of the window
+            ("gallery_app.c", "(win_base(tw) + gv_tile_hw(col, row)) * 2u, GV_WIN_STRIDE_WORDS * 2u,", "(win_base(tw) + gv_tile_hw(col, row)) * 2u, GV_WIN_STRIDE_WORDS,"),             # the decoder's row pitch is half the window's
+            ("gallery_app.c", "GAL_STREAM * 2u + (fo - a)) != TH_OK", "GAL_STREAM * 2u) != TH_OK"),                                                                         # the decoder reads the superset's start, not the stream's
+            ("gallery_app.c", "    t_res[tw][row * GV_WIN_TX + col] = 1u;\n    return 0;\n}\n/* Starts the copy", "    return 0;\n}\n/* Starts the copy"),                                      # a decoded tile is never marked whole
+            ("gallery_app.c", "else if (zl.layout == 2u) return v1_tile_decode(tw, col, row, tx, ty);", "else if (zl.layout == 2u) { return 1; }"),                                        # a version 1 tile is never decoded
             ("gallery_app.c", "else if (edge & KEY_SELECT) { run_details(); draw_page();", "else if (0) { run_details(); draw_page();"),                                  # details page: no key on the grid
             ("gallery_app.c", "else if (edge & KEY_SELECT) { run_details(); draw_page();", "else if (edge & KEY_SELECT) { run_details();"),                          # the grid is not redrawn after it
             ("gallery_app.c", "if ((edge & KEY_SELECT) && !(edge & (KEY_LEFT | KEY_RIGHT))) {", "if (0) {"),                                                          # details page: no key in the picture view

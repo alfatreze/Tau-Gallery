@@ -25,6 +25,10 @@ int tgy_hw_present(void);                                                    /* 
 int tgy_hw_tables(const tgy_file_t *f, const tgy_level_t *l);
 /* Decodes tile (tx, ty) of the level into the plane: dst = SDRAM byte address of the tile's first pixel, pitch = bytes per plane row. Waits (up to 0.5 s) and returns TH_OK, TH_HWERR (tgy_hw_status() has the error code) or TH_TIMEOUT. */
 int tgy_hw_tile(const tgy_file_t *f, const tgy_level_t *l, uint32_t tx, uint32_t ty, uint32_t dst, uint32_t pitch);
+/* Where tile (tx, ty)'s stream is in the FILE: its file offset and length (from the tile index in l->idx; TH_RANGE for a tile outside the level or an entry outside the level's data). */
+int tgy_tile_loc(const tgy_level_t *l, uint32_t tx, uint32_t ty, uint32_t *off, uint32_t *len);
+/* The same decode with the stream at an explicit SDRAM byte address `src` (the app lands one tile's stream wherever it likes, for the zoom: the file is not resident). The tables are still the file's (f->base). */
+int tgy_hw_tile_from(const tgy_file_t *f, const tgy_level_t *l, uint32_t tx, uint32_t ty, uint32_t dst, uint32_t pitch, uint32_t src);
 /* The whole level: the picture's first pixel goes to dst0, tick(ctx, tx, ty) after each tile (may be 0; return non-zero to stop: TH_ABORT). */
 int tgy_hw_level(const tgy_file_t *f, const tgy_level_t *l, uint32_t dst0, uint32_t pitch, int (*tick)(void *ctx, uint32_t tx, uint32_t ty), void *ctx);
 /* The level on the 800 x 720 viewer canvas at its own rectangle: plane = SDRAM byte address of canvas pixel (0, 0), pitch 2,400. */

@@ -92,6 +92,14 @@ int main(int argc, char **argv)
         if (r == TH_OK && tgy_find_level(&tf, 1u, &lf) == TH_OK && tgy_load_index(&tf, &lf, rd_card, 0, ibuf2, sizeof ibuf2) == TH_OK) { memset(mem + dst0, 0x55, (size_t)(lf.w * 3u + 5u) * (lf.h + 1u)); r = tgy_hw_level(&tf, &lf, dst0 + 1u, lf.w * 3u + 5u, tick, 0); l = lf; }
     }
     else if (!strcmp(mode, "showfull")) { r = tgy_hw_show(&tf, &l, plane, tick, 0); }                                        /* a level wider than the canvas must be refused */
+    else if (!strcmp(mode, "reloc")) {                                              /* every tile of the fit level decoded from a copy of its stream at an ODD address of its own (the zoom's staging), the original stream wiped */
+        memset(mem + plane, 0x55, 2400u * 720u); r = TH_OK;
+        for (uint32_t ty = 0; ty < l.rows && r == TH_OK; ty++) for (uint32_t tx = 0; tx < l.cols && r == TH_OK; tx++) {
+            uint32_t fo, len; if (tgy_tile_loc(&l, tx, ty, &fo, &len) != TH_OK) { r = TH_RANGE; break; }
+            const uint32_t src = 0x800000u + 1u + (ty * l.cols + tx) * 0x10000u; memcpy(mem + src, mem + base + fo, len); memset(mem + base + fo, 0xFF, len);
+            r = tgy_hw_tile_from(&tf, &l, tx, ty, plane + (uint32_t)l.ry * GT_STRIDE + (uint32_t)l.rx * 3u + ty * TH_TILE * GT_STRIDE + tx * TH_TILE * 3u, GT_STRIDE, src);
+        }
+    }
     else if (!strcmp(mode, "retry")) {                                              /* the first start is rejected (a race with a busy decoder), the caller retries the same tile */
         hw.reject_next = 1; memset(mem + plane, 0x55, 2400u * 720u); int r1 = tgy_hw_tile(&tf, &l, 0, 0, plane + (uint32_t)l.ry * GT_STRIDE + (uint32_t)l.rx * 3u, GT_STRIDE);
         printf("first %d\n", r1); r = tgy_hw_tile(&tf, &l, 0, 0, plane + (uint32_t)l.ry * GT_STRIDE + (uint32_t)l.rx * 3u, GT_STRIDE);
@@ -106,7 +114,7 @@ int main(int argc, char **argv)
     }
     printf("run %d status %08x ticks %d starts %d loads %d order %d\n", r, tgy_hw_status(), ticks, hw.starts, hw.loads, hw.bad_order);
     FILE *o = fopen(argv[4], "wb");
-    if (!strcmp(mode, "show") || !strcmp(mode, "two") || !strcmp(mode, "retry") || !strcmp(mode, "prefix")) fwrite(mem + plane, 1, 2400u * 720u, o); else if (!strcmp(mode, "full")) fwrite(mem + dst0, 1, (size_t)pitch_full * (l.h + 1u), o);
+    if (!strcmp(mode, "show") || !strcmp(mode, "two") || !strcmp(mode, "retry") || !strcmp(mode, "prefix") || !strcmp(mode, "reloc")) fwrite(mem + plane, 1, 2400u * 720u, o); else if (!strcmp(mode, "full")) fwrite(mem + dst0, 1, (size_t)pitch_full * (l.h + 1u), o);
     else if (!strcmp(mode, "both")) { fwrite(mem + plane, 1, 2400u * 720u, o); fwrite(mem + dst0, 1, (size_t)(l.w * 3u + 5u) * (l.h + 1u), o); }
     fclose(o); return 0;
 }

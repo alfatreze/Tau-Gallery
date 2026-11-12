@@ -17,7 +17,7 @@
 static uint16_t mem[HW_N];                         /* SDRAM, halfwords: the plane at 0x200000 */
 static uint16_t fb[512u * 1024u];                  /* the UI framebuffer, halfwords, stride 512 */
 static uint32_t clk, irq_pend, vid_req, vid_bus, vid_sw, vid_due, vbase, vstride, land_base, land_words, land_ovf, input_n;
-static int force_ovf, force_short, viewer_dead, fail_pic_reads, pass_pic_reads; static uint32_t v1_starts_before;
+static int force_ovf, force_short, viewer_dead, fail_pic_reads, pass_pic_reads; static uint32_t v1_starts_before, land_unaligned;
 static int zb_ok_phase = 0; static int32_t map_cx, map_cy, map_rx1, map_rw2, map_x0, map_y0, map_rx0, map_ry0, map_ex, map_ey, map_rw1;
 static uint32_t rc_lead_n, rc_lead_bad; static uint32_t rc_prev, rc_starts, rc_retarget; static int32_t rc_bx, rc_by;
 static void ldr_lead_probe(void);
@@ -91,6 +91,7 @@ int slot_read_blocking(uint32_t slot, uint32_t off, uint32_t dst, uint32_t len, 
     if (zoom_phase && slot == 2u && len == 49152u) { tile_reads++; tile_read_probe(off); }
     if (!zoom_phase && slot == 2u && len == 131072u && dst >= 0x40000000u) ldr_probe(dst);
     if (zoom_phase && slot == 2u) { if (len > zoom_max_len) zoom_max_len = len; if (++reads_since_input > zoom_max_rs) zoom_max_rs = reads_since_input; }
+    if (slot == 2u && (dst >> 28) == 4u && ((off & 4095u) || (len & 4095u))) land_unaligned++;      /* a landing read of a picture starts and ends on 4 KB (the APF reads fastest aligned; every landing in this firmware keeps to it) */
     if (slot == 2u) { if (pass_pic_reads > 0) pass_pic_reads--; else if (fail_pic_reads > 0) { fail_pic_reads--; return 0; } }      /* a transient card error: after `pass` good reads the next `fail` reads of a picture fail */
     const uint8_t *src = slot == 5u ? idx_data : slot == 2u ? pic_data : 0; const uint32_t n = slot == 5u ? idx_len : pic_len;
     if (!src || off + len > n || (len & 3u)) return 0;                                        /* a read past the end of the file fails, as on the Pocket */
@@ -249,6 +250,16 @@ static int plane_outline_is(const char *fname, int32_t rx, int32_t ry, int32_t r
     }
     free(d); return bad == 0u && framed > 100u;
 }
+static int v1_view_matches(const char *fname, uint32_t W, uint32_t H)                           /* what the scan-out shows (the window from the base and stride registers) equals the 720 x 800 piece of the 1:1 reference at the corner the firmware recorded */
+{
+    char f[600]; snprintf(f, sizeof f, "%s/%s", dir, fname); uint32_t n; uint8_t *d = slurp(f, &n); if (!d || n != W * H * 3u) return 0;
+    int ok = vstride == GV_WIN_STRIDE_WORDS && z_shown && z_sx >= 0 && z_sy >= 0 && (uint32_t)z_sx + 800u <= W && (uint32_t)z_sy + 720u <= H && (z_sx & 3) == 0;
+    for (uint32_t r = 0; r < 720u && ok; r++) for (uint32_t i = 0; i < 1200u && ok; i++) {
+        const uint32_t o = ((uint32_t)z_sy + r) * W * 3u + (uint32_t)z_sx * 3u + 2u * i; const uint16_t want = (uint16_t)(d[o] | d[o + 1u] << 8);
+        if (mem[vbase + r * vstride + i] != want) ok = 0;
+    }
+    free(d); return ok;
+}
 static uint32_t ph_stall, ph_stall_max, ph_jump_max, ph_axx, ph_axy; static int32_t ph_px = -1, ph_py = -1;
 static void ldr_probe(uint32_t dst)      /* a chunk of a picture landing: what the loader bar shows before it (a track at the start, a fill that only grows). An open that shows no progress (a picture change in the viewer) leaves the last bar full under the viewer: its chunks are not judged */
 {
@@ -378,6 +389,26 @@ static void checkpoint(int n)
     case 205: chk(205, said("NOT A TGY PICTURE")); clear_texts(); break;                                                                                                      /* a damaged header */
     case 207: force_ovf = 1; v1_starts_before = tg.starts; clear_texts(); break;                                                                                              /* the landing path counts an overflow: the next open must not show a damaged picture */
     case 208: chk(208, said("PICTURE DAMAGED IN TRANSFER") && vid_bus == 0u && tg.starts == v1_starts_before); force_ovf = 0; clear_texts(); break;                           /* a version 1 picture whose landing overflowed is refused before the decoder starts */
+    case 210: chk(210, plane_is_rgb("v00.rgb") && zn == 1u && zs[0].layout == 2u && zs[0].w == 1000u && zs[0].h == 900u && zk < 0); break;                                         /* the v1 zoom scenario: v00 is open (fit), its full level is the one stop */
+    case 211: chk(211, zk == 0 && z_shown && v1_view_matches("v00_full.rgb", 1000u, 900u) && info.copy_ms != GI_NONE && info.land_ms != GI_NONE && z_sx >= 96 && z_sx <= 104 && z_sy >= 86 && z_sy <= 94); break;                                                                          /* A: the 1:1 view, decoded tile by tile into the window, equals the reference decode of the full level */
+    case 212: chk(212, zk == 0 && z_shown && z_sx > 0 && z_sy > 0 && v1_view_matches("v00_full.rgb", 1000u, 900u)); break;                                                  /* panned right and down: still the reference pixels */
+    case 213: chk(213, zk < 0 && vbase == GAL_PLANE_BASE && plane_is_rgb("v00.rgb")); break;                                                                                /* A: back to fit, the fit plane untouched */
+    case 214: chk(214, zk == 0 && z_shown && v1_view_matches("v00_full.rgb", 1000u, 900u) && v1z_idx_ok); break;                                                            /* zoom again: the same, the index kept */
+    case 215: chk(215, zn == 0u && zk < 0 && vid_bus == 1u); break;                                                                                                         /* the rotated picture (EXIF 180 degrees): no zoom stop */
+    case 216: chk(216, zk < 0 && !z_shown && vbase == GAL_PLANE_BASE); break;                                                                                               /* A does nothing there */
+    case 217: force_ovf = 1; clear_texts(); break;                                                                                                                         /* the landing path counts an overflow: the first tile cannot be read */
+    case 218: chk(218, said("PICTURE READ FAILED") && vid_bus == 0u && zk < 0); force_ovf = 0; clear_texts(); break;                                                       /* the zoom is left, the grid is back with the message */
+    case 219: v1z_cap = 600u; break;                                                                                                                                         /* an index of 768 bytes (64 tiles) no longer fits the buffer */
+    case 220: chk(220, zn == 0u && zk < 0 && vid_bus == 1u); v1z_cap = V1Z_IDX_MAX; break;                                                                                  /* so that picture has no zoom stop */
+    case 221: chk(221, zn == 1u && !v1z_idx_ok && zk < 0); fail_pic_reads = 3; pass_pic_reads = 0; clear_texts(); break;                                                      /* opened again with the normal buffer; the next card reads fail: the zoom's index cannot be read */
+    case 222: chk(222, said("ZOOM INDEX READ FAILED") && zk < 0 && !v1z_idx_ok && vid_bus == 1u); fail_pic_reads = 0; clear_texts(); break;                                  /* the fit view stays, with the message */
+    case 223: chk(223, zk == 0 && z_shown && v1z_idx_ok && v1_view_matches("v00_full.rgb", 1000u, 900u)); break;                                                            /* the card reads work again: the zoom opens */
+    case 224: chk(224, zn == 0u && zk < 0 && vid_bus == 1u); break;                                                                                                         /* a 500 x 300 picture: its only level is no larger than the screen */
+    case 226: v1z_smax = 100u; break;                                                                                                                                         /* no tile stream is allowed to be longer than 100 bytes */
+    case 227: chk(227, said("PICTURE READ FAILED") && vid_bus == 0u && zk < 0); v1z_smax = V1Z_STREAM_MAX; clear_texts(); break;                                             /* the first tile is refused: the zoom is left with the message */
+    case 228: force_short = 1; clear_texts(); break;                                                                                                                         /* a landing of one word too few (counted by the landing path) */
+    case 229: chk(229, said("PICTURE READ FAILED") && vid_bus == 0u && zk < 0); force_short = 0; clear_texts(); break;                                                     /* is not accepted either */
+    case 225: chk(225, land_unaligned == 0u); break;                                                                                                                         /* no landing read of a picture was unaligned (the tile streams read as 4 KB aligned supersets) */
     case 206: chk(206, said("NEEDS THE HW DECODER") && tg.starts == 0u); clear_texts(); break;                                                                                /* a core without the decoder */
     case 300: chk(300, thumbs_on_screen(0, 16u) && !strcmp(last_text(), "1/18")); break;                                                                               /* the details scenario: the grid, picture 1 selected */
     case 309: chk(309, vid_bus == 1u && plane_is(3) && sel == 3u && !said("DETAILS")); break;                                                                  /* Select + Right together is the next picture, not the page */
@@ -575,6 +606,23 @@ int main(int argc, char **argv)
     if (argc > 2 && !strcmp(argv[2], "details")) {                                                       /* the picture details page: from the grid and from the picture view */
         const uint32_t SD[] = { CP(300), KEY_SELECT, 0, CP(301), KEY_B, 0, CP(302), KEY_RIGHT, 0, KEY_SELECT, 0, CP(303), KEY_SELECT, 0, CP(304), KEY_A, 0, CP(305), KEY_SELECT, 0, CP(306), KEY_B, 0, CP(307), KEY_RIGHT, 0, CP(308), KEY_SELECT | KEY_RIGHT, 0, CP(309), END };
         nscript = (int)(sizeof SD / sizeof SD[0]); memcpy(script, SD, sizeof SD);
+        if (!setjmp(done)) gallery_app_main();
+        printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
+    }
+    if (argc > 2 && !strcmp(argv[2], "v1zoom")) {                                                          /* zoom of a version 1 picture: its full level decoded by the hardware into the window */
+        uint32_t S6[2048]; int k = 0;
+#define H6(key, n) do { for (int _i = 0; _i < (n); _i++) S6[k++] = (key); } while (0)
+        S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(210); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 200); S6[k++] = CP(211);
+        H6(KEY_RIGHT, 40); H6(KEY_DOWN, 30); H6(0, 300); S6[k++] = CP(212);
+        S6[k++] = KEY_A; S6[k++] = 0; H6(0, 3); S6[k++] = CP(213); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 200); S6[k++] = CP(214);
+        S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); S6[k++] = CP(219);                                          /* back to fit, then to the grid; the index buffer too small */
+        S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(220); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 20);                                                    /* open v00: no zoom stop; A does nothing */
+        S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(221);                                                    /* open v00 again: a stop; then the index read fails */
+        S6[k++] = KEY_A; S6[k++] = 0; H6(0, 20); S6[k++] = CP(222); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 200); S6[k++] = CP(223);
+        S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); S6[k++] = KEY_RIGHT; S6[k++] = 0; S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(224);
+        S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); for (int i = 0; i < 5; i++) { S6[k++] = KEY_RIGHT; S6[k++] = 0; } S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(215); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 20); S6[k++] = CP(216);      /* the rotated picture is v06 */
+        S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); for (int i = 0; i < 6; i++) { S6[k++] = KEY_LEFT; S6[k++] = 0; } S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(217); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 60); S6[k++] = CP(218); S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(226); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 60); S6[k++] = CP(227); S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(228); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 60); S6[k++] = CP(229); S6[k++] = CP(225); S6[k++] = END;
+        nscript = k; memcpy(script, S6, (size_t)k * sizeof S6[0]);
         if (!setjmp(done)) gallery_app_main();
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
     }
