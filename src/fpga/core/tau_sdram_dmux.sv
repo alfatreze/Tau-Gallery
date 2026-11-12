@@ -102,6 +102,9 @@ module tau_sdram_dmux #(
     assign d_r_last  = s_r_last && ((BUG == 8) ? 1'b1 : sub_busy);
     assign c_done    = done_c;
     assign d_done    = done_d;
+`ifdef FORMAL
+`include "dmux_props.vh"          // proof-only properties, formal/dmux_props.vh (not synthesised)
+`endif
 endmodule
 
 `default_nettype wire

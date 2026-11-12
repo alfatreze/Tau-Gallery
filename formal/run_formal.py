@@ -6,7 +6,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-SUITES = {"wfifo": {"sby": "wfifo.sby", "pass": ["good", "r_equal", "r_quarter", "r_fast"], "fail": ["bug1", "bug2", "bug3"]}}
+SUITES = {"p2mux": {"sby": "p2mux.sby", "pass": ["good"], "fail": ["bug%d" % i for i in range(1, 8)]},
+          "dmux": {"sby": "dmux.sby", "pass": ["good"], "fail": ["bug%d" % i for i in range(1, 11)]},
+          "wfifo": {"sby": "wfifo.sby", "pass": ["good", "r_equal", "r_quarter", "r_fast"], "fail": ["bug1", "bug2", "bug3"]}}
 
 def run(sby, task, tmp):
     r = subprocess.run(["sby", "-f", "-d", str(tmp / f"o_{task}"), sby, task], cwd=HERE, capture_output=True, text=True)

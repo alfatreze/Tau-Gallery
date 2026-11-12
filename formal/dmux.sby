@@ -1,0 +1,40 @@
+[tasks]
+good
+bug1
+bug2
+bug3
+bug4
+bug5
+bug6
+bug7
+bug8
+bug9
+bug10
+
+[options]
+mode prove
+depth 12
+multiclock off
+
+[engines]
+smtbmc z3
+
+[script]
+read -formal -DFORMAL -I. tau_sdram_dmux.sv dmux_formal.sv
+good: chparam -set BUG 0 tau_sdram_dmux_formal
+bug1: chparam -set BUG 1 tau_sdram_dmux_formal
+bug2: chparam -set BUG 2 tau_sdram_dmux_formal
+bug3: chparam -set BUG 3 tau_sdram_dmux_formal
+bug4: chparam -set BUG 4 tau_sdram_dmux_formal
+bug5: chparam -set BUG 5 tau_sdram_dmux_formal
+bug6: chparam -set BUG 6 tau_sdram_dmux_formal
+bug7: chparam -set BUG 7 tau_sdram_dmux_formal
+bug8: chparam -set BUG 8 tau_sdram_dmux_formal
+bug9: chparam -set BUG 9 tau_sdram_dmux_formal
+bug10: chparam -set BUG 10 tau_sdram_dmux_formal
+prep -top tau_sdram_dmux_formal
+
+[files]
+dmux_props.vh
+../src/fpga/core/tau_sdram_dmux.sv
+dmux_formal.sv

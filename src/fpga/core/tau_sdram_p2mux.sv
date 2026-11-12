@@ -101,6 +101,9 @@ module tau_sdram_p2mux #(
     assign c_done    = done_c;
     assign l_done    = done_l || (BUG == 6 && done_c && c_we_q);                // BUG 6: a C write's done also reaches L
 
+`ifdef FORMAL
+`include "p2mux_props.vh"          // proof-only properties, formal/p2mux_props.vh (not synthesised)
+`endif
 endmodule
 
 `default_nettype wire

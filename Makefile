@@ -1123,3 +1123,9 @@ test-rtl-tgy-wfifo:
 .PHONY: test-formal-wfifo
 test-formal-wfifo:
 	python3 formal/run_formal.py wfifo
+
+# Tau Gallery: UNBOUNDED formal proofs (k-induction) of the two SDRAM port arbiters, mutants must FAIL (sby + yosys, brew install yosys sby; ~1 min).
+.PHONY: test-formal-mux
+test-formal-mux:
+	python3 formal/run_formal.py p2mux
+	python3 formal/run_formal.py dmux
