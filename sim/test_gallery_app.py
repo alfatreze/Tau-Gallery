@@ -151,8 +151,8 @@ def mutants(setdir, tail=None):
             ("gallery_app.c", "    t_res[tw][row * GV_WIN_TX + col] = 1u;\n    return 0;\n}\n/* Starts the copy", "    return 0;\n}\n/* Starts the copy"),                                      # a decoded tile is never marked whole
             ("gallery_app.c", "else if (zl.layout == 2u) return v1_tile_decode(tw, col, row, tx, ty);", "else if (zl.layout == 2u) { return 1; }"),                                        # a version 1 tile is never decoded
             ("gallery_app.c", "    info.zt_n = info.zt_land_sum = info.zt_land_max = info.zt_dec_n = info.zt_dec_sum = info.zt_dec_max = info.zt_pass_max = info.zt_catch = info.zt_moved = info.zt_stall_run_max = info.zt_sp = info.zt_sc = info.zt_sn = info.zt_sj = info.zt_ss = 0u;", ""),            # the tile statistics are not reset by a new zoom
-            ("gallery_app.c", "        info.zt_catch++;", ""),                                                                                                                  # frames behind the wanted corner are not counted
-            ("gallery_app.c", "{ tile_show(nx, ny); info.zt_moved++; }", "{ tile_show(nx, ny); }"),                                                                         # moved frames are not counted
+            ("gallery_app.c", "        info.zt_catch += (uint32_t)tick;", ""),                                                                                                                  # frames behind the wanted corner are not counted
+            ("gallery_app.c", "{ tile_show(nx, ny); info.zt_moved += (uint32_t)tick; }", "{ tile_show(nx, ny); }"),                                                                         # moved frames are not counted
             ("gallery_app.c", "info.zt_n++; info.zt_land_sum += us;", "info.zt_land_sum += us;"),                                                         # the tiles are not counted
             ("gallery_app.c", "info.zt_n++; info.zt_land_sum += us;", "info.zt_n++;"),                                                      # the card read time is not summed
             ("gallery_app.c", "info.zt_dec_n++; info.zt_dec_sum += dec_us;", "info.zt_dec_n++;"),                                                                                     # the decode time is not summed
@@ -167,7 +167,7 @@ def mutants(setdir, tail=None):
             ("gallery_app.c", "const uint32_t dec_us = tgy_hw_cycles() / (SDRAM_HZ / 1000000u);", "const uint32_t dec_us = tgy_hw_cycles() / (SDRAM_HZ / 1000u);"),                  # the decoder's cycles in the wrong unit
             ("gallery_app.c", "    if (v1_pre.valid && v1_pre.buf == buf) v1_pre.valid = 0u;", ""),                                                                    # a read into the prefetch buffer leaves the prefetch offered
             ("gallery_app.c", "return p->valid && p->tx == tx && p->ty == ty; }", "return p->valid && p->tx == tx; }"),                                                # a stream of another tile of the column is taken
-            ("gallery_app.c", "else { z_stall_run++; if (z_stall_run > info.zt_stall_run_max) info.zt_stall_run_max = z_stall_run; }", "else { if (z_stall_run > info.zt_stall_run_max) info.zt_stall_run_max = z_stall_run; }"),   # the run of stalled frames is never counted
+            ("gallery_app.c", "else { z_stall_run += (uint32_t)tick; if (z_stall_run > info.zt_stall_run_max) info.zt_stall_run_max = z_stall_run; }", "else { if (z_stall_run > info.zt_stall_run_max) info.zt_stall_run_max = z_stall_run; }"),   # the run of stalled frames is never counted
             ("gallery_app.c", "if (z_stall_run > info.zt_stall_run_max) info.zt_stall_run_max = z_stall_run;", ""),                                                                    # the longest run is never kept
             ("gallery_app.c", "if (k == 2) v1_pipe_off ^= 1u;", ""),                                                                                                                   # A on the Info page does nothing
             ("gallery_app.c", "if (zl.layout == 2u && !v1_pipe_off) for", "if (zl.layout == 2u) for"),                                                                                  # the pipeline cannot be switched off
@@ -203,7 +203,7 @@ def mutants(setdir, tail=None):
             ("gallery_app.c", "const int r = open_timed(sel, 1);", "const int r = open_picture(sel, 1);"),
             ("gallery_app.c", "gset.last_idx = i; gset.last_crc = path_crc(i); }", "gset.last_idx = i; }"),
             ("gallery_app.c", "gs_resume_index(&gset, head.count, path_crc(gset.last_idx));", "gset.last_idx;"),
-            ("gallery_app.c", "        settings_tick();\n        if (edge & KEY_LEFT) { if (sel > 0u)", "        if (edge & KEY_LEFT) { if (sel > 0u)"),
+            ("gallery_app.c", "        settings_tick();\n        const uint32_t dkeys", "        const uint32_t dkeys"),
             ("gallery_app.c", "if (r == GP_OPEN_SETTINGS) { draw_settings(); while (!gsp_input(&gset.resume, next_edge(&prev))) draw_settings(); }", "if (r == GP_OPEN_SETTINGS) { draw_settings(); while (!gsp_input(&gset.resume, next_edge(&prev))) draw_settings(); gset.resume = 1u; }"),
             ("gallery_settings.c", "if (gs_publish_due(cycles(), last_activity, CLK_HZ, 1)) publish(v);", "publish(v);"),
             ("gallery_settings.c", "if (m & (1u << k)) set_wr(k, w[k]); }", "set_wr(k, w[k]); }"),
@@ -218,7 +218,6 @@ def mutants(setdir, tail=None):
             ("gallery_app.c", "const uint32_t np = n / PER_PAGE;\n    if (np != page) { sel = n;", "const uint32_t np = n / (PER_PAGE + 1u);\n    if (np != page) { sel = n;"),
             ("gallery_app.c", "n_on_page = head.count - first < PER_PAGE ? head.count - first : PER_PAGE;", "n_on_page = PER_PAGE;"),
             ("gallery_app.c", "else if (edge & KEY_L1) { select_to(sel >= PER_PAGE ? sel - PER_PAGE : 0u); }", "else if (edge & KEY_L1) { select_to(sel >= PER_PAGE ? sel - PER_PAGE : sel); }"),
-            ("gallery_app.c", "else if (edge & KEY_DOWN) { if (sel + COLS < head.count) select_to(sel + COLS); else if (sel + 1u < head.count) select_to(head.count - 1u); }", "else if (edge & KEY_DOWN) { if (sel + COLS < head.count) select_to(sel + COLS); }"),
             ("gallery_app.c", "if (land_canvas(&pic, total, show_progress) && land_canvas(&pic, total, show_progress)) return 5;", "if (land_canvas(&pic, total, show_progress)) return 5;"),
             ("gallery_app.c", "if (land_canvas(&pic, total, show_progress) && land_canvas(&pic, total, show_progress)) return 5;", "if (land_canvas(&pic, total, show_progress) && land_canvas(&pic, total, show_progress) && land_canvas(&pic, total, show_progress)) return 5;"),
             ("gallery_app.c", "if (!read_bytes(SLOT_PIC, 0u, 4096u, h4) && !read_bytes(SLOT_PIC, 0u, 4096u, h4)) return 2;", "if (!read_bytes(SLOT_PIC, 0u, 4096u, h4)) return 2;"),
@@ -296,6 +295,23 @@ def mutants(setdir, tail=None):
             ("gallery_app.c", "const int32_t row = e < 2 ? ry + e : ry + rh - 4 + e;", "const int32_t row = e < 2 ? ry + e : ry + rh - 3 + e;"),
             ("gallery_app.c", "info.flip_ms = (cycles() - t_rc_t0) / (CLK_HZ / 1000u);", "info.flip_ms = 0u;"),
             ("gallery_fmt.c", "return h->entries_off + i * GX_ENTRY_BYTES;" if False else "uint32_t gx_thumb_off(const gx_head_t *h, uint32_t thumb) { return h->atlas_off + thumb * GX_THUMB_BYTES; }", "uint32_t gx_thumb_off(const gx_head_t *h, uint32_t thumb) { return h->atlas_off + thumb * (GX_THUMB_BYTES - 2u); }")]
+    muts += [                                                                                                      # pan frames follow the time (version 1) and the grid's held keys
+        ("gallery_app.c", "while (late >= ZOOM_FRAME && tick < ZOOM_CATCHUP) {", "while (0) {"),
+        ("gallery_app.c", "#define ZOOM_CATCHUP 4 ", "#define ZOOM_CATCHUP 1 "),
+        ("gallery_app.c", "uint32_t late = now - next_tick; tick = 1; next_tick += ZOOM_FRAME;", "uint32_t late = now - next_tick; tick = 1; next_tick = now + ZOOM_FRAME;"),
+        ("gallery_app.c", "if ((int32_t)(now - next_tick) >= 0) next_tick = now + ZOOM_FRAME;                       /* far behind", "if (0) next_tick = now + ZOOM_FRAME;                       /* far behind"),
+        ("gallery_app.c", "const int32_t fs = FOLLOW_STEP * tick,", "const int32_t fs = FOLLOW_STEP,"),
+        ("gallery_app.c", "if (moving) for (int f = 0; f < tick; f++) gv_move(&z_stop, &z_wx, &z_wy, dx, dy, held);", "if (moving) gv_move(&z_stop, &z_wx, &z_wy, dx, dy, held);"),
+        ("gallery_app.c", "held = (dx || dy) ? held + (uint32_t)tick : 0u; zt_frames", "held = (dx || dy) ? held + 1u : 0u; zt_frames"),
+        ("gallery_app.c", "info.zt_moved += (uint32_t)tick; }\n        else if (nx != z_sx", "info.zt_moved++; }\n        else if (nx != z_sx"),
+        ("gallery_app.c", "if (!edge && rep_key && (keys & rep_key)", "if (rep_key && (keys & rep_key)"),
+        ("gallery_app.c", "{ dk = rep_key; fresh = 0u; }", "{ dk = rep_key; fresh = 1u; }"),
+        ("gallery_app.c", "if (fresh) rep_key = dk;", ""),
+        ("gallery_app.c", "#define REP_DELAY (CLK_HZ * 2u / 5u)", "#define REP_DELAY 0u"),
+        ("gallery_app.c", "#define REP_RATE (CLK_HZ / 12u)", "#define REP_RATE (CLK_HZ * 4u)"),
+        ("gallery_app.c", "dk == KEY_UP ? 2u : 3u", "dk == KEY_UP ? 3u : 2u"),
+        ("gallery_app.c", "rep_next = cycles() + (fresh ? REP_DELAY : REP_RATE);", "rep_next = now + (fresh ? REP_DELAY : REP_RATE);"),
+    ]
     muts += [                                                                                                      # the version 1 path (open_v1, the hardware decoder)
         ("gallery_app.c", "REG_WR(R_LAND_BASE, GAL_LAND_BASE); REG_WR(R_LAND_CTRL, 1u);", "REG_WR(R_LAND_BASE, GAL_LAND_BASE + 2u); REG_WR(R_LAND_CTRL, 1u);"),
         ("gallery_app.c", "if (!tgy_hw_present()) return 7;", ""),
@@ -318,7 +334,7 @@ def mutants(setdir, tail=None):
 if __name__ == "__main__":
     setdir = Path(tempfile.mkdtemp()); make_set(setdir)
     if "--mutants" in sys.argv: sys.exit(1 if mutants(setdir) else 0)
-    if "--v1-mutants" in sys.argv: sys.exit(1 if mutants(setdir, 7) else 0)
+    if "--v1-mutants" in sys.argv: sys.exit(1 if mutants(setdir, int(sys.argv[sys.argv.index("--v1-mutants") + 1]) if len(sys.argv) > sys.argv.index("--v1-mutants") + 1 else 7) else 0)
     w = Path(tempfile.mkdtemp())
     if not build(w): sys.exit(1)
     rc, out = run(w, setdir); print("\n".join(l for l in out.splitlines() if "FAIL" in l or "PASSED" in l)); sys.exit(rc)

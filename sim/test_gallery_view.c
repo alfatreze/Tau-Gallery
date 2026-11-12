@@ -359,6 +359,24 @@ int main(void)
       for (int i = 0; i < 3000; i++) { const int32_t ox = (int32_t)(rnd() % 60) * 2, oy = (int32_t)(rnd() % 120); const int32_t x = 400 + (int32_t)(rnd() % 1500), y = 360 + (int32_t)(rnd() % 1200); int32_t bx, by;
           gv_map_corner(65536u, 0, 0, 32768u, ox, oy, x, y, &mx, &my); gv_map_corner(32768u, ox, oy, 65536u, 0, 0, mx, my, &bx, &by); if (abs(bx - x) > 4 || abs(by - y) > 4) okm = 0; }
       chk("map corner: 1:1 to a padded half and back stays within 4 pixels (3,000 cases)", okm); }
+    {   /* grid navigation: written from the rule, by rows and columns, for every count, picture, key and press kind */
+        int okn = 1; uint32_t cases = 0u;
+        for (uint32_t count = 1u; count <= 40u; count++) for (uint32_t sel = 0u; sel < count; sel++) for (uint32_t dir = 0u; dir < 4u; dir++) for (uint32_t fresh = 0u; fresh < 2u; fresh++) {
+            const uint32_t cols = 4u, last = count - 1u, row = sel / cols, lastrow = last / cols; uint32_t want = sel;
+            if (dir == 0u) want = sel > 0u ? sel - 1u : (fresh ? last : sel);
+            if (dir == 1u) want = sel < last ? sel + 1u : (fresh ? 0u : sel);
+            if (dir == 2u) want = row > 0u ? sel - cols : (sel == 0u && fresh ? last : sel);
+            if (dir == 3u) want = row < lastrow ? (sel + cols <= last ? sel + cols : last) : (sel < last ? last : (fresh ? 0u : sel));
+            if (gv_grid_step(sel, count, cols, dir, fresh) != want) { okn = 0; if (cases < 3u) printf("  count %u sel %u dir %u fresh %u: got %u want %u\n", count, sel, dir, fresh, gv_grid_step(sel, count, cols, dir, fresh), want); }
+            cases++;
+        }
+        chk("grid step: every count 1..40, picture, key and press kind equals the rule (wrap only on a new press at the first or last picture)", okn);
+        uint32_t s2 = 0u; for (int i = 0; i < 100; i++) s2 = gv_grid_step(s2, 10u, 4u, 3u, 0u);
+        chk("grid step: a held Down stops at the last picture and does not loop", s2 == 9u);
+        s2 = gv_grid_step(s2, 10u, 4u, 3u, 1u); chk("grid step: a new Down on the last picture goes to the first", s2 == 0u);
+        s2 = gv_grid_step(s2, 10u, 4u, 2u, 1u); chk("grid step: a new Up on the first picture goes to the last", s2 == 9u);
+        chk("grid step: a held Up from the last picture stops at the first row and does not loop", ({ uint32_t q = 9u; for (int i = 0; i < 100; i++) q = gv_grid_step(q, 10u, 4u, 2u, 0u); q == 1u; }));
+    }
     printf(fails ? "FAILED %d\n" : "PASSED\n", fails);
     return fails != 0;
 }

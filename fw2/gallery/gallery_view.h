@@ -121,6 +121,42 @@ static inline void gv_move(const gv_stop_t *s, int32_t *x, int32_t *y, int dirx,
     gv_clamp(s, x, y);
 }
 
+/* ---- grid navigation ---- */
+/* One direction key in the grid: the picture selected next. dir 0 left, 1 right, 2 up, 3 down; fresh = 1 for a new press, 0 for a key repeat. A held key walks to the end of the library and stops there; only a NEW press
+ * on the first picture (left or up) goes to the last, and on the last picture (right or down) to the first. Down from the last row goes to the last picture (the row may be short), as before. */
+static inline uint32_t gv_grid_step(uint32_t sel, uint32_t count, uint32_t cols, uint32_t dir, uint32_t fresh)
+{
+    if (count == 0u) return 0u;
+    const uint32_t last = count - 1u;
+    switch (dir) {
+    case 0u: if (sel > 0u) return sel - 1u;
+#if BUG == 24
+        return last;                                                                         /* wraps on a repeat as well */
+#else
+        return fresh ? last : sel;
+#endif
+    case 1u: if (sel < last) return sel + 1u;
+#if BUG == 25
+        return sel;                                                                          /* no wrap from the last picture */
+#else
+        return fresh ? 0u : sel;
+#endif
+    case 2u: if (sel >= cols) return sel - cols;
+#if BUG == 26
+        return (fresh && sel < cols) ? last : sel;                                           /* wraps from anywhere in the first row */
+#else
+        return (fresh && sel == 0u) ? last : sel;
+#endif
+    default: if (sel + cols <= last) return sel + cols;
+#if BUG == 27
+        if (sel < last) return sel;                                                          /* no jump to the last picture from a short last row */
+#else
+        if (sel < last) return last;
+#endif
+        return fresh ? 0u : sel;
+    }
+}
+
 /* ---- the tiles a viewport needs ---- */
 typedef struct { int16_t tx, ty; uint8_t ring; } gv_tile_t;      /* ring = 0 for a tile the screen touches, 1 for one of the one-tile ring */
 static inline int32_t gv_floordiv(int32_t a, int32_t b) { int32_t q = a / b; if ((a % b != 0) && ((a < 0) != (b < 0))) q--; return q; }

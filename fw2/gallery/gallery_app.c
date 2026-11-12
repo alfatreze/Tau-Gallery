@@ -28,7 +28,10 @@
 #define SLOT_PIC 2u
 #define SLOT_IDX 5u
 #define GAL_ZOOM_BASE 0x400000u                  /* the zoom plane (a raster zoom level at its own stride), SDRAM halfword address 8 MiB */
+#define REP_DELAY (CLK_HZ * 2u / 5u)             /* a held direction key in the grid: first repeat after 400 ms */
+#define REP_RATE (CLK_HZ / 12u)                  /* then about 12 pictures a second */
 #define ZOOM_FRAME (CLK_HZ / 60u)                /* one pan step a frame */
+#define ZOOM_CATCHUP 4                           /* most frames paid back in one pass */
 #define LAND_CHUNK 131072u                       /* the largest single command measured in M0 (1.5 to 1.6 MB/s) */
 
 
@@ -371,7 +374,7 @@ static int zoom_land(uint32_t c)
 static int raster_pass(int dirx, int diry, uint32_t held, int moving, int tick)
 {
     (void)tick;
-    if (moving) gv_move(&z_stop, &z_wx, &z_wy, dirx, diry, held);
+    if (moving) gv_move(&z_stop, &z_wx, &z_wy, dirx, diry, held);                              /* a frame a pass at most: the raster loader sets the pace of a version 0 pan */
     uint32_t c;
     if (gv_next_chunk(zl.stride, zl.len, z_nch, z_lo, z_hi, (uint32_t)z_wy, diry, &c)) {
         if (!zoom_land(c)) return 1;
@@ -471,7 +474,7 @@ static void tile_show(int32_t x, int32_t y)                                     
 static int tile_pass_inner(int dx, int dy, uint32_t held, int moving, int tick)
 {
     pcopy = 0u;
-    if (moving) gv_move(&z_stop, &z_wx, &z_wy, dx, dy, held);
+    if (moving) for (int f = 0; f < tick; f++) gv_move(&z_stop, &z_wx, &z_wy, dx, dy, held);        /* tick = the frames that went by since the last pass (1 to ZOOM_CATCHUP): the pan's speed is in pixels a second, whatever the pass took */
     int32_t px = z_wx, py = z_wy;
     if (z_shown) { px = z_sx + clampi(z_wx - z_sx, -SLACK, SLACK); py = z_sy + clampi(z_wy - z_sy, -SLACK, SLACK); gv_clamp(&z_stop, &px, &py); }
     const int lx = dx ? dx : (z_wx > px ? 1 : z_wx < px ? -1 : 0), ly = dy ? dy : (z_wy > py ? 1 : z_wy < py ? -1 : 0);      /* the direction of the pan: the keys, else where the wanted corner lies */
@@ -513,14 +516,14 @@ static int tile_pass_inner(int dx, int dy, uint32_t held, int moving, int tick)
     if (!z_shown) { if (gv_screen_ready(&z_stop, z_wx, z_wy, t_wx[t_front], t_wy[t_front], t_res[t_front])) tile_show(z_wx, z_wy); return 0; }
     if (t_front != t_shown_win) { tile_show(z_sx, z_sy); return 0; }                         /* the window flipped: the same view, from the new window */
     if (tick && (z_sx != z_wx || z_sy != z_wy)) {                                            /* follow the wanted corner: diagonal if its tiles are whole, else along one axis */
-        const int32_t nx = z_sx + clampi(z_wx - z_sx, -FOLLOW_STEP, FOLLOW_STEP), ny = z_sy + clampi(z_wy - z_sy, -FOLLOW_STEP, FOLLOW_STEP);
-        info.zt_catch++;                                                                     /* a frame the shown view is behind the wanted corner; zt_moved of them it could step (the rest are the stalls) */
+        const int32_t fs = FOLLOW_STEP * tick, nx = z_sx + clampi(z_wx - z_sx, -fs, fs), ny = z_sy + clampi(z_wy - z_sy, -fs, fs);
+        info.zt_catch += (uint32_t)tick;                                                                     /* a frame the shown view is behind the wanted corner; zt_moved of them it could step (the rest are the stalls) */
         int stepped = 1;
-        if (gv_screen_ready(&z_stop, nx, ny, t_wx[t_front], t_wy[t_front], t_res[t_front])) { tile_show(nx, ny); info.zt_moved++; }
-        else if (nx != z_sx && gv_screen_ready(&z_stop, nx, z_sy, t_wx[t_front], t_wy[t_front], t_res[t_front])) { tile_show(nx, z_sy); info.zt_moved++; }
-        else if (ny != z_sy && gv_screen_ready(&z_stop, z_sx, ny, t_wx[t_front], t_wy[t_front], t_res[t_front])) { tile_show(z_sx, ny); info.zt_moved++; }
+        if (gv_screen_ready(&z_stop, nx, ny, t_wx[t_front], t_wy[t_front], t_res[t_front])) { tile_show(nx, ny); info.zt_moved += (uint32_t)tick; }
+        else if (nx != z_sx && gv_screen_ready(&z_stop, nx, z_sy, t_wx[t_front], t_wy[t_front], t_res[t_front])) { tile_show(nx, z_sy); info.zt_moved += (uint32_t)tick; }
+        else if (ny != z_sy && gv_screen_ready(&z_stop, z_sx, ny, t_wx[t_front], t_wy[t_front], t_res[t_front])) { tile_show(z_sx, ny); info.zt_moved += (uint32_t)tick; }
         else stepped = 0;
-        if (stepped) z_stall_run = 0u; else { z_stall_run++; if (z_stall_run > info.zt_stall_run_max) info.zt_stall_run_max = z_stall_run; }      /* frames in a row the view stood still while the keys were ahead of it: how long a freeze feels */
+        if (stepped) z_stall_run = 0u; else { z_stall_run += (uint32_t)tick; if (z_stall_run > info.zt_stall_run_max) info.zt_stall_run_max = z_stall_run; }      /* frames in a row the view stood still while the keys were ahead of it: how long a freeze feels */
     } else if (tick) z_stall_run = 0u;
     return 0;
 }
@@ -534,6 +537,7 @@ static int tile_pass(int dx, int dy, uint32_t held, int moving, int tick)       
     }
     return r;
 }
+static uint32_t zt_frames;                                                                    /* the pan frames counted in version 1 zooms (for the host test: they must follow the time, not the passes) */
 static int zoom_pass(int dx, int dy, uint32_t held, int moving, int tick) { return zl.layout == 0u ? raster_pass(dx, dy, held, moving, tick) : tile_pass(dx, dy, held, moving, tick); }
 
 /* ---- the map (docs/M2_DESIGN.md, the navigator): START while zoomed shows the fit view with the rectangle of the screen drawn on it ---- */
@@ -638,7 +642,14 @@ static void viewer(void)
             if (edge & KEY_L1) { zoom_goto(zk > 0 ? zk - 1 : -1); held = 0u; next_tick = cycles(); continue; }
             if (!((keys & KEY_SELECT) && (edge & (KEY_LEFT | KEY_RIGHT)))) {                          /* Select + Left/Right leave the zoom and go to the next picture below; anything else pans */
                 const int dx = (keys & KEY_RIGHT) ? 1 : (keys & KEY_LEFT) ? -1 : 0, dy = (keys & KEY_DOWN) ? 1 : (keys & KEY_UP) ? -1 : 0;
-                int tick = 0; if ((int32_t)(cycles() - next_tick) >= 0) { next_tick = cycles() + ZOOM_FRAME; tick = 1; held = (dx || dy) ? held + 1u : 0u; }
+                int tick = 0; const uint32_t now = cycles();                                           /* the frame clock keeps its phase: a pass longer than a frame is paid back with the frames that went by, so the pan's speed does not follow the pass lengths */
+                if ((int32_t)(now - next_tick) >= 0 && zl.layout != 2u) { next_tick = now + ZOOM_FRAME; tick = 1; held = (dx || dy) ? held + 1u : 0u; }      /* version 0 pictures (a raster level or tiles read at 38 ms): one step a pass, as before; only version 1 pictures, whose passes are 9 to 25 ms, pay back the frames a pass took */
+                else if ((int32_t)(now - next_tick) >= 0) {
+                    uint32_t late = now - next_tick; tick = 1; next_tick += ZOOM_FRAME;
+                    while (late >= ZOOM_FRAME && tick < ZOOM_CATCHUP) { late -= ZOOM_FRAME; tick++; next_tick += ZOOM_FRAME; }
+                    if ((int32_t)(now - next_tick) >= 0) next_tick = now + ZOOM_FRAME;                       /* far behind (a re-centre, a slow card): drop the rest, no burst afterwards */
+                    held = (dx || dy) ? held + (uint32_t)tick : 0u; zt_frames += (uint32_t)tick;
+                }
                 if (zoom_pass(dx, dy, held, tick && (dx || dy), tick)) { zoom_goto(-1); gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); say("PICTURE READ FAILED", BAD); return; }
                 continue;
             }
@@ -822,19 +833,25 @@ int main(void)
         else page = 0u;
     }
     draw_page();
-    uint32_t prev = 0;
+    uint32_t prev = 0, rep_key = 0u, rep_next = 0u;                                            /* a held direction key repeats: after REP_DELAY, then every REP_RATE */
     for (;;) {
         const uint32_t keys = REG_RD(R_INPUT) & 0xFFFFu, edge = keys & ~prev; prev = keys;
         if (edge) last_act = cycles();
         settings_tick();
-        if (edge & KEY_LEFT) { if (sel > 0u) select_to(sel - 1u); }
-        else if (edge & KEY_RIGHT) { if (sel + 1u < head.count) select_to(sel + 1u); }
-        else if (edge & KEY_UP) { if (sel >= COLS) select_to(sel - COLS); }
-        else if (edge & KEY_DOWN) { if (sel + COLS < head.count) select_to(sel + COLS); else if (sel + 1u < head.count) select_to(head.count - 1u); }
+        const uint32_t dkeys = KEY_LEFT | KEY_RIGHT | KEY_UP | KEY_DOWN, now = cycles();
+        uint32_t dk = edge & dkeys, fresh = 1u;
+        if (!edge && rep_key && (keys & rep_key) && (int32_t)(now - rep_next) >= 0) { dk = rep_key; fresh = 0u; }      /* the repeat: only the key that was pressed last */
+        if (dk) {
+            if (dk & KEY_LEFT) dk = KEY_LEFT; else if (dk & KEY_RIGHT) dk = KEY_RIGHT; else if (dk & KEY_UP) dk = KEY_UP; else dk = KEY_DOWN;
+            if (fresh) rep_key = dk;
+            const uint32_t n = gv_grid_step(sel, head.count, COLS, dk == KEY_LEFT ? 0u : dk == KEY_RIGHT ? 1u : dk == KEY_UP ? 2u : 3u, fresh);
+            if (n != sel) select_to(n);
+            rep_next = cycles() + (fresh ? REP_DELAY : REP_RATE);                              /* from the end of the move: a page change takes its time, the repeat waits for it */
+        }
         else if (edge & KEY_L1) { select_to(sel >= PER_PAGE ? sel - PER_PAGE : 0u); }
         else if (edge & KEY_R1) { select_to(sel + PER_PAGE < head.count ? sel + PER_PAGE : head.count - 1u); }
-        else if (edge & KEY_A) open_from_grid();
-        else if (edge & KEY_START) { run_pages(); draw_page(); prev = REG_RD(R_INPUT) & 0xFFFFu; }
-        else if (edge & KEY_SELECT) { run_details(); draw_page(); prev = REG_RD(R_INPUT) & 0xFFFFu; }
+        else if (edge & KEY_A) { open_from_grid(); rep_key = 0u; }
+        else if (edge & KEY_START) { run_pages(); draw_page(); prev = REG_RD(R_INPUT) & 0xFFFFu; rep_key = 0u; }
+        else if (edge & KEY_SELECT) { run_details(); draw_page(); prev = REG_RD(R_INPUT) & 0xFFFFu; rep_key = 0u; }
     }
 }

@@ -27,7 +27,7 @@ static void ldr_probe(uint32_t dst);
 static void tile_read_probe(uint32_t off);
 static void zb_probe(void);
 static void pass_hook(void);                                                                  /* called once per pass of the firmware's loop (a read of the keys): defined after the firmware, which it looks into */
-static uint32_t blits_since_input, blit_max_pass; static uint32_t blit_cmds, blit_visible, blit_bad, blit_from_win, tile_reads, win_flips, last_win = 9u; static uint32_t clk_step = 50u, zoom_max_len, zoom_max_rs, reads_since_input; static int zoom_phase;      /* the zoom scenario: a frame a clock read, the longest card command and the most commands between two key polls */ static uint32_t text_mode;
+static uint32_t blits_since_input, blit_max_pass; static uint32_t blit_cmds, blit_visible, blit_bad, blit_from_win, tile_reads, win_flips, last_win = 9u; static uint32_t blit_cost, rs_f0, rs_c0, rs_catch0, rs_moved0, rs_sel0; static int32_t rs_wx0; static uint32_t poll_alt, poll_adv, clk_step = 50u, zoom_max_len, zoom_max_rs, reads_since_input; static int zoom_phase;      /* the zoom scenario: a frame a clock read, the longest card command and the most commands between two key polls */ static uint32_t text_mode;
 static uint32_t setw[16], setidx; static int set_writes;                  /* the settings register file (R_SET_IDX / R_SET_DAT) and how many words were written */
 static void tick(void) { if (!viewer_dead && vid_req != vid_bus && vid_due && clk >= vid_due) { vid_bus = vid_req; vid_sw++; vid_due = 0; } }
 static uint32_t next_input(void);
@@ -47,7 +47,7 @@ static uint32_t rd(uint32_t a)
     case 0x800001F8u: return 0x80000003u;
     case 0x80000070u: return setw[setidx & 15u];
     case 0x80000114u: return 0x80000000u | text_mode;
-    case 0x8000003Cu: reads_since_input = 0; blits_since_input = 0; pass_hook(); return next_input();
+    case 0x8000003Cu: reads_since_input = 0; blits_since_input = 0; pass_hook(); { const uint32_t k = next_input(); clk += (poll_alt && (input_n & 1u)) ? poll_alt : poll_adv; return k; }       /* in the zoom scenarios a key poll is a frame (the checkpoints that set poll_adv are handled first) */
     default: return 0;
     }
 }
@@ -118,7 +118,7 @@ void gfx_fence(void) { }
 void gfx_blit_raw(uint32_t sb, uint32_t db, uint32_t so, uint32_t dof, uint32_t w)
 {
     if (!w || w > 127u || so >= (1u << 19) || dof >= (1u << 19) || sb >= (1u << 25) || db >= (1u << 25)) { blit_bad++; return; }
-    const uint32_t s = sb + so, d = db + dof; blit_cmds++; if (++blits_since_input > blit_max_pass) blit_max_pass = blits_since_input;
+    const uint32_t s = sb + so, d = db + dof; blit_cmds++; clk += blit_cost; if (++blits_since_input > blit_max_pass) blit_max_pass = blits_since_input;
     if (s >= T_WIN0 && s < T_STAGE) blit_from_win++;
     if (vstride == 2112u && vbase >= T_WIN0 && vbase < T_STAGE && d >= vbase) {                  /* the visible rows of the window being displayed: 720 lines of 1,200 halfwords */
         const uint32_t rel = d - vbase, row = rel / vstride, col = rel % vstride;
@@ -415,8 +415,8 @@ static void checkpoint(int n)
     case 222: chk(222, said("ZOOM INDEX READ FAILED") && zk < 0 && !v1z_idx_ok && vid_bus == 1u); fail_pic_reads = 0; clear_texts(); break;                                  /* the fit view stays, with the message */
     case 223: chk(223, zk == 0 && z_shown && v1z_idx_ok && v1_view_matches("v00_full.rgb", 1000u, 900u)); break;                                                            /* the card reads work again: the zoom opens */
     case 224: chk(224, zn == 0u && zk < 0 && vid_bus == 1u); break;                                                                                                         /* a 500 x 300 picture: its only level is no larger than the screen */
-    case 230: clk_step = 1000000u; break;                                                                                                                                    /* from here a clock read is a frame: the pan's frame ticks happen */
-    case 231: clk_step = 50u; break;
+    case 230: clk_step = 1000000u; poll_adv = 0u; break;                                                                                                                                    /* from here a clock read is a frame: the pan's frame ticks happen */
+    case 231: clk_step = 50u; poll_adv = 0u; break;
     case 232: { v1_pre_t p = { 1u, 0u, 0u, 3, 4 }; uint32_t o;                                                                                                              /* the prefetch bookkeeping, directly */
         chk(232, v1_pre_matches(&p, 3, 4) && !v1_pre_matches(&p, 3, 5) && !v1_pre_matches(&p, 4, 4) && (p.valid = 0u, !v1_pre_matches(&p, 3, 4)));                       /* only the tile it was read for, and only while valid */
         v1_pre.valid = 1u; v1_pre.buf = 0u; v1_pre.tx = 1; v1_pre.ty = 1; chk(233, !v1_land_stream(0, 0, 1u, &o) && v1_pre.valid == 1u);                                      /* a read into the other buffer leaves it */
@@ -424,6 +424,12 @@ static void checkpoint(int n)
         v1_pre.valid = 1u; v1_pre.buf = 1u; chk(235, v1_land_stream(0, 0, 1u, &o) == 0 && v1_pre.valid == 0u); v1_pre.valid = 0u; force_ovf = 1; v1_pre.valid = 1u; v1_pre.buf = 0u;
         chk(236, v1_land_stream(0, 0, 0u, &o) == 1 && v1_pre.valid == 0u); force_ovf = 0; v1_pre.valid = 0u; } break;                                                         /* even a failed read takes it away */
     case 250: chk(250, zn == 1u && zs[0].w == 2000u && zs[0].h == 1700u && zk < 0); break;                                                                                      /* a picture larger than the window: its zoom stop */
+    case 270: poll_adv = 300000u; poll_alt = 3000000u; rs_f0 = zt_frames; rs_c0 = clk; rs_wx0 = z_wx; rs_catch0 = info.zt_catch; rs_moved0 = info.zt_moved; break;                                                                    /* from here the passes alternate 9 ms and 25 ms (about one frame on average) */
+    case 272: { const uint32_t got = zt_frames - rs_f0; const int32_t d = rs_wx0 - z_wx;                                                       /* 10 polls of a held Left (a 128 pixel ring is resident, so nothing waits), the passes alternating 5 ms and 45 ms: the wanted corner moved 8 pixels for each frame that went by (4 for the first 8) and the shown view is on it; every frame behind was a frame moved (nothing to wait for) */
+        chk(272, got >= 12u && d >= 8 * (int32_t)got - 40 && d <= 8 * (int32_t)got && z_sx == z_wx && info.zt_catch - rs_catch0 == info.zt_moved - rs_moved0 && info.zt_catch - rs_catch0 >= 12u); } break;
+    case 273: poll_adv = CLK_HZ / 60u; poll_alt = 0u; rs_f0 = zt_frames; clk += 10u * (CLK_HZ / 60u); break;                                                    /* one pass of 10 frames, then passes of one frame */
+    case 274: { const uint32_t got = zt_frames - rs_f0; chk(274, got >= 12u && got <= 15u); poll_adv = 0u; } break;                                                    /* the long pass is paid back by at most 4 frames; the rest is dropped (no burst afterwards): about 4 + 10 */
+    case 271: { const uint32_t fr = (clk - rs_c0) / (CLK_HZ / 60u), got = zt_frames - rs_f0; chk(271, fr >= 250u && got + 4u >= fr && got <= fr + 3u); poll_adv = 0u; poll_alt = 0u; } break;      /* the pan frames follow the elapsed time (about 300 here), not the 200 passes */
     case 251: chk(251, info.zt_catch > 0u && info.zt_catch > info.zt_moved && info.zt_stall_run_max >= 1u && info.zt_stall_run_max <= info.zt_catch - info.zt_moved && info.zt_n >= info.zt_dec_n
                && info.zt_sj > 0u && info.zt_sn + info.zt_sc > 0u && info.zt_sp + info.zt_sc + info.zt_sn + info.zt_sj + info.zt_ss <= info.zt_pass_max && info.zt_pass_max - (info.zt_sp + info.zt_sc + info.zt_sn + info.zt_sj + info.zt_ss) <= 3u * (1000000u / 66u + 1u)); break;       /* the pass split adds up to the longest pass (the two clock reads that bound it are a frame apart in this model) */      /* a long pan outruns the tile reads: frames stalled, and the longest run of them is at least one and at most all of them */
     case 240: chk(240, said("ZOOM PIPELINE") && said("ON") && !said("OFF") && v1_pipe_off == 0u && said("A TOGGLE ZOOM PIPELINE")); clear_texts(); break;                                                      /* the Info page shows the switch, on */
@@ -482,6 +488,18 @@ static void checkpoint(int n)
     case 35: { const uint32_t x = 399u; chk(48, thumbs_on_screen(0, count < 16u ? count : 16u) && fb[100u * 512u + x] == th_role[TR_BG_BOTTOM] && fb[100u * 512u + x] != 0u); } break;   /* back in the grid: the background is the theme's, the frame its accent */
     case 36: chk(49, setw[1] == (0x40000000u | 2u | (1u << 5) | (1u << 11)) && setw[0] == (1u << 27)); break;                                                             /* the look is saved after a quiet second, as word 1 only */
     case 60: chk(60, big_grid_ok()); break;
+    case 260: chk(260, sel == 0u && big_grid_ok()); break;
+    case 261: chk(261, sel == count - 1u && big_grid_ok()); break;
+    case 262: chk(262, sel == 0u && big_grid_ok()); break;
+    case 263: chk(263, sel == count - 1u && big_grid_ok()); break;
+    case 280: rs_sel0 = sel; break;
+    case 281: chk(281, sel >= rs_sel0 + 7u * 16u || sel == count - 1u); break;
+    case 269: chk(269, sel == 0u && big_grid_ok()); break;
+    case 264: poll_adv = CLK_HZ / 20u; break;                                                                                             /* a key poll is 50 ms from here */
+    case 265: chk(265, sel >= 12u && sel <= 60u && big_grid_ok()); break;                                                                /* about 30 repeats after the wrap: forward from 0, far from the end */
+    case 266: poll_adv = 0u; break;
+    case 267: poll_adv = CLK_HZ / 20u; break;
+    case 268: chk(268, sel == count - 1u && big_grid_ok()); poll_adv = 0u; break;                                                         /* at the end, still held: it stayed on the last picture */
     case 61: chk(61, plane_is_f("b299.tgy") && sel == count - 1u); break;                                                                                                 /* A on the last picture of 300: the file of index 299 */
     case 62: chk(62, plane_is_f("b298.tgy") && sel == count - 2u && page == (count - 2u) / 16u); break;                                                                 /* Left in the viewer */
     case 63: chk(63, plane_is_f("b000.tgy") && sel == 0u && page == 0u); break;                                                                                         /* Right, Right: past the end to the first picture, across 18 pages */
@@ -496,7 +514,7 @@ static void checkpoint(int n)
     case 77: fail_pic_reads = 2; pass_pic_reads = 1; clear_texts(); break;                                                                                               /* the landing fails twice in a row */
     case 74: chk(73, said("PICTURE READ FAILED") && vid_bus == 0u && fail_pic_reads == 0); clear_texts(); break;                                                                /* two failed reads: reported, the viewer stays off */
     case 81: chk(81, vid_bus == 1u && vbase == GAL_PLANE_BASE && plane_is_f("z00.tgy")); break;                                                                          /* A on picture 1: the fit canvas, as before */
-    case 82: clk_step = 1000000u; zoom_max_len = 0u; zoom_max_rs = 0u; zoom_phase = 1; break;                                                                                 /* from here a clock read is a frame */
+    case 82: clk_step = 50u; poll_adv = 1111111u; blit_cost = 20000u; zoom_max_len = 0u; zoom_max_rs = 0u; zoom_phase = 1; break;                                                                                 /* from here a clock read is a frame */
     case 83: { int32_t x = -1, y = -1; chk(83, view_matches("z00.tgy", &x, &y) && x == 600 && y == 390); chk(121, info.land_ms >= 50u && info.land_ms <= 100u && info.zoom_ms > 100u && info.copy_ms == GI_NONE); } break;      /* the raster path measured too: a 48 KB chunk, the first view, and no tile copy yet */                                                           /* A: the raster level of 2000 x 1500 lands; the screen opens on its middle, pixel exact */
     case 84: { int32_t x = -1, y = -1; chk(84, view_matches("z00.tgy", &x, &y) && x >= 724 && x <= 744 && (x & 3) == 0 && y == 390); } break;                                                /* about 20 frames held: 8 at 4 pixels, the rest at 8 (a held-count that never resets would give 900 or more) */                                 /* Right held: the view moved, aligned, exact */
     case 85: { int32_t x = -1, y = -1; chk(85, view_matches("z00.tgy", &x, &y) && x == 1200 && y == 390); } break;                                                           /* held on: it stops at the right edge */
@@ -514,9 +532,9 @@ static void checkpoint(int n)
     case 99: { int32_t x = -1, y = -1; chk(99, view_matches("z03.tgy", &x, &y) && x == 0 && y == 390); } break;                                                              /* Right held: nothing to pan */
     case 100: { int32_t x = -1, y = -1; chk(100, view_matches("z04.tgy", &x, &y) && x == 400 && y == 240); } break;                                                           /* the half level of a 3200 x 2400 picture (it also has a tile level, which A does not use) */
     case 108: { uint32_t rlo, rhi; gv_rows_loaded(zl.stride, zl.len, z_lo, z_hi, &rlo, &rhi); chk(103, rhi >= (uint32_t)z_wy + 720u + 24u); } break;                                         /* a pan down while the key is held: rows ahead of the screen are already loaded (35 here; a loader that only completed the screen would be within 8) */
-    case 109: clk_step = 50u; break;                                                                                                                                         /* almost no time passes between key polls */
+    case 109: clk_step = 50u; poll_adv = 0u; blit_cost = 0u; break;                                                                                                                                         /* almost no time passes between key polls */
     case 110: { int32_t x = -1, y = -1; chk(104, view_matches("z00.tgy", &x, &y) && x == 0 && y == 0); } break;                                                              /* 20 polls with Right held and no frame elapsed: the view has not moved (a step is a frame, not a pass) */
-    case 111: clk_step = 1000000u; break;
+    case 111: clk_step = 50u; poll_adv = 1111111u; blit_cost = 20000u; break;
     case 112: chk(105, fit_or_exact("z04.tgy")); break;                                                                                                                      /* Down held from the first instant, loading under way: fit plane or an exact zoom view, never unloaded rows */
     case 103: { int32_t x = -1, y = -1; chk(102, sel == 5u && tile_view_matches("z05.tgy", &x, &y) && x == 748 && y == 390); chk(106, blit_visible == 0u && blit_bad == 0u && tile_reads >= 40u && zoom_max_len <= 49152u && zoom_max_rs <= 1u && blit_max_pass > 0u && blit_max_pass <= 68u);      /* and at most 64 Talos commands between two key polls */
      } break;      /* a picture whose only zoom level is tiles: A enters it; 48 tiles landed, copied by Talos into the window, never into the displayed area, no command over 48 KB */
@@ -560,7 +578,7 @@ static void checkpoint(int n)
     case 152: { const double sf = (double)pic.rw / pic.width; map_ex = (int32_t)((m_rx - (int32_t)pic.rx) / sf); map_ey = (int32_t)((m_ry - (int32_t)pic.ry) / sf); chk(148, m_rw < 0.6 * map_rw2 && m_rw > 0.4 * map_rw2 && plane_outline_is("z06.tgy", m_rx, m_ry, m_rw, m_rh)); } break;      /* R1 from the half stop: the 1:1 screen is half the size */
     case 153: { int32_t x = -1, y = -1; chk(149, zk == 1 && tile_view_matches("z06.tgy", &x, &y) && abs(x - map_ex) <= 12 && abs(y - map_ey) <= 12 && plane_is_f("z06.tgy")); } break;
     case 118: chk(112, fit_or_exact_tile("z05.tgy") && blit_visible == 0u); break;                                                                                           /* while loading under a held pan: the fit plane or an exact view, never an unloaded tile */
-    case 119: { int32_t x = -1, y = -1; chk(113, tile_view_matches("z05.tgy", &x, &y) && y == 780 && blit_visible == 0u && ph_jump_max <= 16u && ph_stall_max <= 300u); } break;                                          /* down to the bottom edge */
+    case 119: { int32_t x = -1, y = -1; chk(113, tile_view_matches("z05.tgy", &x, &y) && y == 780 && info.zt_pass_max == 0u && blit_visible == 0u && ph_jump_max <= 16u && ph_stall_max <= 300u); } break;                                          /* down to the bottom edge */
     case 120: { int32_t x = -1, y = -1; chk(114, tile_view_matches("z05.tgy", &x, &y) && x == 0 && y == 0 && blit_visible == 0u && blit_bad == 0u); rc_retarget = 0u; } break;                   /* back to the top-left corner */
     case 101: fail_pic_reads = 2; pass_pic_reads = 0; clear_texts(); break;
     case 102: chk(101, said("PICTURE READ FAILED") && vid_bus == 0u && fail_pic_reads == 0); break;                                                                          /* the level cannot be read: back to the grid with the message */
@@ -653,7 +671,7 @@ int main(int argc, char **argv)
         S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); S6[k++] = KEY_RIGHT; S6[k++] = 0; S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(224);
         S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); for (int i = 0; i < 5; i++) { S6[k++] = KEY_RIGHT; S6[k++] = 0; } S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(215); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 20); S6[k++] = CP(216);      /* the rotated picture is v06 */
         S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); for (int i = 0; i < 6; i++) { S6[k++] = KEY_LEFT; S6[k++] = 0; } S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(217); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 60); S6[k++] = CP(218); S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(226); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 60); S6[k++] = CP(227); S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(228); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 60); S6[k++] = CP(229); S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); for (int i = 0; i < 7; i++) { S6[k++] = KEY_RIGHT; S6[k++] = 0; } S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(250);
-        S6[k++] = KEY_A; S6[k++] = 0; H6(0, 400); S6[k++] = CP(230); H6(KEY_RIGHT, 120); H6(0, 100); S6[k++] = CP(251); S6[k++] = CP(231); S6[k++] = CP(225); S6[k++] = END;
+        S6[k++] = KEY_A; S6[k++] = 0; H6(0, 400); S6[k++] = CP(230); H6(KEY_RIGHT, 120); H6(0, 100); S6[k++] = CP(251); S6[k++] = CP(231); H6(0, 400); S6[k++] = CP(270); H6(KEY_LEFT, 10); S6[k++] = CP(272); H6(KEY_LEFT, 190); S6[k++] = CP(271); S6[k++] = CP(273); H6(0, 10); S6[k++] = CP(274); S6[k++] = CP(225); S6[k++] = END;
         nscript = k; memcpy(script, S6, (size_t)k * sizeof S6[0]);
         if (!setjmp(done)) gallery_app_main();
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
@@ -674,7 +692,16 @@ int main(int argc, char **argv)
             const uint32_t pages = (count + 15u) / 16u;
             S3[k++] = CP(60); S3[k++] = KEY_RIGHT; S3[k++] = 0; S3[k++] = KEY_RIGHT; S3[k++] = 0; S3[k++] = KEY_RIGHT; S3[k++] = 0; S3[k++] = CP(60); S3[k++] = KEY_L1; S3[k++] = 0; S3[k++] = CP(69);      /* L1 on the first page goes to the first picture */
             for (uint32_t p = 0; p < pages; p++) { S3[k++] = KEY_R1; S3[k++] = 0; S3[k++] = CP(60); }                      /* R1 up to the last picture, one page at a time */
-            S3[k++] = KEY_R1; S3[k++] = 0; S3[k++] = CP(60); S3[k++] = KEY_DOWN; S3[k++] = 0; S3[k++] = CP(60); S3[k++] = KEY_RIGHT; S3[k++] = 0; S3[k++] = CP(60);      /* the end: nothing moves */
+            S3[k++] = KEY_R1; S3[k++] = 0; S3[k++] = CP(60);                                                                         /* the last picture */
+            S3[k++] = KEY_DOWN; S3[k++] = 0; S3[k++] = CP(260); S3[k++] = KEY_UP; S3[k++] = 0; S3[k++] = CP(261);                                 /* a new Down on the last picture: the first; a new Up on the first: the last */
+            S3[k++] = KEY_RIGHT; S3[k++] = 0; S3[k++] = CP(262); S3[k++] = KEY_LEFT; S3[k++] = 0; S3[k++] = CP(263);                              /* the same for Right and Left */
+            S3[k++] = CP(264); for (int i = 0; i < 6; i++) S3[k++] = KEY_RIGHT; S3[k++] = 0; S3[k++] = CP(269);                              /* Right held for 0.3 s: only the first press (to 0), no repeat yet */
+            S3[k++] = KEY_RIGHT; for (int i = 0; i < 59; i++) S3[k++] = KEY_RIGHT; S3[k++] = 0; S3[k++] = CP(265);                                   /* Right held for 3 s (a poll is 50 ms): the first press wraps to 0, then it repeats forward */
+            S3[k++] = CP(280); for (int i = 0; i < 8; i++) { S3[k++] = KEY_RIGHT | KEY_R1; S3[k++] = KEY_RIGHT; } S3[k++] = KEY_RIGHT; S3[k++] = 0; S3[k++] = CP(281);   /* R1 pressed while Right is held and a repeat is due: the R1 is not lost (the first pair presses Right as well: its R1 is dropped, as always; 7 pages) */
+            S3[k++] = CP(266); for (int i = 0; i < 30; i++) { S3[k++] = KEY_R1; S3[k++] = 0; }                                                     /* back to the last picture by pages (the clock stands still again) */
+            for (int i = 0; i < 4; i++) { S3[k++] = KEY_LEFT; S3[k++] = 0; }                                                                       /* 299 - 4 = 295 */
+            S3[k++] = CP(267); for (int i = 0; i < 100; i++) S3[k++] = KEY_DOWN; S3[k++] = 0; S3[k++] = CP(268);                                  /* Down held for 5 s: 295 -> 299, then it stops: a held key does not loop */
+            S3[k++] = CP(266);
             S3[k++] = KEY_A; S3[k++] = 0; S3[k++] = CP(61); S3[k++] = KEY_LEFT; S3[k++] = 0; S3[k++] = CP(62);
             S3[k++] = KEY_RIGHT; S3[k++] = 0; S3[k++] = KEY_RIGHT; S3[k++] = 0; S3[k++] = CP(63); S3[k++] = KEY_B; S3[k++] = 0; S3[k++] = CP(60);
             for (uint32_t p = 0; p < 10u; p++) { S3[k++] = KEY_R1; S3[k++] = 0; }                                         /* 0 -> 160 by pages */
