@@ -442,5 +442,21 @@ with tempfile.TemporaryDirectory() as t:
     raises(lambda: tc.build(**dict(kw, previous=prev[:1], rbf=None, bitstream_version="4D50331A")), "missing previous zip for a core", "--previous")
     check(tc.build(**dict(kw, previous=None, rbf=None, bitstream_version="4D50331A"))["requires_omega"]["persist_ids_changed"] == [], "--no-previous gives an empty list")
 
+# a gallery core's tau-library.tdb is the TGIX picture index, not the audio library (the install of a gallery build that ships no pictures refused the card's own index as "not a Tau library index")
+def gallery_pkg(ext):
+    core, plat = "alfatreze.Tau Gallery DEV 099", "tau_gallery_dev"
+    return {"zip": "x.zip", "core_id": core, "platform": plat, "platforms": [plat, "tau_gallery"],
+            "data": {"data": {"data_slots": [{"id": 1, "name": "Firmware", "filename": "tau.rom", "parameters": "0x10A"}, {"id": 2, "name": "Picture", "extensions": ext, "parameters": "0x0"}, {"id": 5, "name": "Library", "filename": "tau-library.tdb", "parameters": "0x0"}]}},
+            "files": {f"Assets/{plat}/{core}/tau.rom": "a" * 64, f"Cores/{core}/core.json": "b" * 64, f"Platforms/{plat}.json": "c" * 64}}
+def lib_format(pkg): return [e["format"]["name"] for e in tc.layout(pkg) if e["path"].endswith("tau-library.tdb") and "format" in e]
+check(lib_format(gallery_pkg(["tgy"])) == ["tgix"], "a gallery package (picture slot of .tgy files) expects the TGIX picture index")
+check(lib_format(gallery_pkg(["flac", "mp3"])) == ["tau-library"], "an audio package still expects the audio library index")
+with tempfile.TemporaryDirectory() as _t:
+    _t = Path(_t); fm = {"name": "tgix", "version": 0}
+    good = _t / "g.tdb"; good.write_bytes(b"TGIX" + b"\0\0" + b"\x20\0" + b"\0" * 40); check(tc._format_ok(good, fm) is None, "a TGIX index passes")
+    aud = _t / "a.tdb"; aud.write_bytes((0x42494C54).to_bytes(4, "little") + b"\0" * 40); check("TGIX" in (tc._format_ok(aud, fm) or ""), "an audio library index is refused as a gallery index")
+    sh = _t / "s.tdb"; sh.write_bytes(b"TGIX\0\0"); check(tc._format_ok(sh, fm) is not None, "a truncated TGIX header is refused")
+    new = _t / "n.tdb"; new.write_bytes(b"TGIX" + b"\x05\0" + b"\x20\0" + b"\0" * 40); check("version" in (tc._format_ok(new, fm) or ""), "a newer TGIX version is refused")
+
 print(f"tau-compat: {fails} failure(s)")
 sys.exit(1 if fails else 0)

@@ -305,6 +305,8 @@ def firmware_formats(root=ROOT):
         raise CompatError("cannot read the TAUA version check (fw/assets_core.h) or the cover file name (fw/timg.inc)")
     t = tree_facts(root)
     return {"tau-library.tdb": {"name": "tau-library", "version": t["library_index_version"]},
+            "tgix": {"name": "tgix", "version": 0},                                      # the gallery's picture index (tools/gallery/tgy.py IDX_VERSION): the same file name, another format
+
             "tau-assets.bin": {"name": "TAUA", "version": int(taua.group(1)), "sections": t["assets_sections"],
                                "max_bytes": t["assets_read_limit_bytes"], "preserve_unknown_sections": True},
             "cover": {"name": "TIM1", "version": 1, "tail": tail.group(1)}}
@@ -367,7 +369,8 @@ def layout(pkg, root=ROOT, obsolete=()):
                 continue
             if fn not in NOT_SHIPPED:
                 raise CompatError(f"{pkg['zip']}: data slot {sl['id']} names {fn}, which is neither shipped nor in tau_compat.NOT_SHIPPED")
-            fmt = dict(fmts[fn])
+            gallery = any(sorted(x.get("extensions", [])) == ["tgy"] for x in slots)      # a gallery core (its picture slot opens .tgy files): its tau-library.tdb is the TGIX picture index, not the audio library's
+            fmt = dict(fmts["tgix"] if (gallery and fn == "tau-library.tdb") else fmts[fn])
             if fmt["name"] == "tau-library":
                 fmt["root"] = "/" + where[sl["id"]]               # review M8: the absolute root the index must embed (B-136)
             out.append({"path": where[sl["id"]] + fn, "role": NOT_SHIPPED[fn], "slot": sl["id"], "required": bool(sl.get("required")),
@@ -453,6 +456,11 @@ def _format_ok(path, fmt):
                 return f"index does not parse ({e})"
             if root != fmt["root"]:
                 return f"index root is {root}, this core's media is under {fmt['root']} (B-136: tracks would not open)"
+    elif n == "tgix":
+        if len(b) < 32 or b[:4] != b"TGIX":
+            return "not a gallery picture index (magic TGIX)"
+        if int.from_bytes(b[4:6], "little") > fmt["version"]:
+            return f"gallery index version {int.from_bytes(b[4:6], 'little')}, this release reads <= {fmt['version']}"
     elif n == "TAUA":
         if len(b) < 12 or b[:4] != b"TAUA":
             return "not a TAUA container (magic)"
