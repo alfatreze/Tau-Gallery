@@ -47,6 +47,7 @@ test-host-fast:
 test-host:
 	$(PYTHON) tools/triad/test_director.py
 	$(PYTHON) tools/check_splash_asset.py
+	$(PYTHON) sim/test_check_frames.py
 	$(PYTHON) tools/check_tau_package.py
 	$(PYTHON) tools/check_claude_md.py
 	$(PYTHON) sim/test_check_claude_md.py
@@ -1139,3 +1140,11 @@ test-formal-tile:
 .PHONY: test-fullcore
 test-fullcore:
 	python3 sim/fullcore/run.py --dir work/fullcore_data --maxus 1500 --script 0
+
+# Tau Gallery: the whole-core simulation's GOLDEN FRAME: 20 ms after the host's reset exit the screen must be bit for bit sim/fullcore/golden/boot_20ms.ppm.gz (the title and the first rows of thumbnails; the simulation is
+# deterministic). ~15 min, not in gate; needs work/quartus_sim_lib/altera_mf.v. A different frame is a change in RTL, firmware or host model: look at it (tools/ppm2png.py), then `make update-golden-fullcore`.
+.PHONY: test-fullcore-frame update-golden-fullcore
+test-fullcore-frame:
+	python3 sim/fullcore/run.py --dir work/fullcore_data --golden compare
+update-golden-fullcore:
+	python3 sim/fullcore/run.py --dir work/fullcore_data --golden update

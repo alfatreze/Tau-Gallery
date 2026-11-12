@@ -49,6 +49,7 @@ module tb_fullcore;
         if (f != 0) begin n = $fread(fbuf, f); fsize = n; $fclose(f); end
     end endtask
     // ---- the target command server ----
+    integer writepace = 40; initial if (!$value$plusargs("WRITEPACE=%d", writepace)) writepace = 40;      // clocks between the words of a target read; 3 is the mutant (the loader drops words)
     reg [7:0] pb [0:255];
     integer i, k, len_off, srv_on = 0; reg [31:0] t0, p20, p24, p28, p2c, w; reg [7:0] ch; integer fidx, nchar, found; reg [8*64-1:0] want;
     integer target_cmds = 0, reads_done = 0, opens_done = 0; reg [8*300-1:0] cur_file;
@@ -102,7 +103,10 @@ module tb_fullcore;
         if (slotfile[slot] == 0 || off + len > slotsize[slot]) begin $display("host: read of slot %0d outside the file (off %0d len %0d size %0d)", slot, off, len, slotsize[slot]); bw(32'hF8001000, 32'h6F6B0002); end
         else begin
             load_file(slotfile[slot]); nw = len / 4;
-            for (n = 0; n < nw; n = n + 1) begin d = {fbuf[off + 4*n], fbuf[off + 4*n + 1], fbuf[off + 4*n + 2], fbuf[off + 4*n + 3]}; bw(baddr + 4 * n, d); repeat (3) @(posedge clk74a); end
+            for (n = 0; n < nw; n = n + 1) begin d = {fbuf[off + 4*n], fbuf[off + 4*n + 1], fbuf[off + 4*n + 2], fbuf[off + 4*n + 3]}; bw(baddr + 4 * n, d); repeat (writepace) @(posedge clk74a); end     // 40 clocks a word like the firmware load: the loader's FIFO is 4 words deep and drains bytes at the system clock (3 clocks a word dropped words: issue found by the golden frame work)
+            repeat (200) @(posedge clk74a);
+            $display("host: read slot %0d off %0d len %0d -> bridge address %h; first word %h, RAM there now %h (word index %0d)", slot, off, len, baddr, {fbuf[off], fbuf[off+1], fbuf[off+2], fbuf[off+3]},
+                {dut.u_soc.u_main_ram.a3[baddr[17:2]], dut.u_soc.u_main_ram.a2[baddr[17:2]], dut.u_soc.u_main_ram.a1[baddr[17:2]], dut.u_soc.u_main_ram.a0[baddr[17:2]]}, baddr[17:2]); $fflush();
             bw(32'hF8001000, 32'h6F6B0000); reads_done = reads_done + 1;
         end
     end endtask
@@ -154,6 +158,24 @@ module tb_fullcore;
         if (dut.u_soc.cpu.CsrPlugin_exception === 1'b1) exc_n = exc_n + 1;
         if (dut.u_soc.cpu.IBusCachedPlugin_fetchPc_pcReg > pc_max && dut.u_soc.cpu.IBusCachedPlugin_fetchPc_pcReg < 32'h00100000) pc_max = dut.u_soc.cpu.IBusCachedPlugin_fetchPc_pcReg;
     end
+    // ---- +PCHIST: where the CPU spends its time after reset exit (the fetch address, one sample every 16 clocks, the 16 busiest words at the end)
+    reg pchist_on = 0; initial pchist_on = $test$plusargs("PCHIST"); integer pch [0:16383]; integer pcn = 0, pci, pcj, pcbest, pcbi; initial for (pci = 0; pci < 16384; pci = pci + 1) pch[pci] = 0;
+    always @(posedge dut.u_soc.clk) if (pchist_on && srv_on) begin pcn = pcn + 1; if (pcn % 16 == 0 && dut.u_soc.cpu.IBusCachedPlugin_fetchPc_pcReg[31:2] < 16384) pch[dut.u_soc.cpu.IBusCachedPlugin_fetchPc_pcReg[31:2]] = pch[dut.u_soc.cpu.IBusCachedPlugin_fetchPc_pcReg[31:2]] + 1; end
+    task pchist_dump; begin
+        for (pcj = 0; pcj < 16; pcj = pcj + 1) begin pcbest = 0; pcbi = 0;
+            for (pci = 0; pci < 16384; pci = pci + 1) if (pch[pci] > pcbest) begin pcbest = pch[pci]; pcbi = pci; end
+            if (pcbest > 0) $display("pchist: %h  %0d samples", pcbi * 4, pcbest); pch[pcbi] = 0; end
+    end endtask
+    // ---- +CALLERS: who calls a function: the return address (x1) at its entry, the first 40 calls (+CALLEE=hex address)
+    reg [31:0] callee = 0; integer ncall = 0; initial if (!$value$plusargs("CALLEE=%h", callee)) callee = 0;
+    always @(posedge dut.u_soc.clk) if (callee != 0 && srv_on && ncall < 40 && dut.u_soc.cpu.decode_arbitration_isValid && dut.u_soc.cpu.decode_PC == callee && !dut.u_soc.cpu.decode_arbitration_isStuck) begin ncall = ncall + 1; $display("call of %h from ra=%h at %0t us", callee, dut.u_soc.cpu.RegFilePlugin_regFile[1], $time / 1000000); end
+    // ---- +DIVTRACE: the divide loop of gi_u (issue: gi_u never ends): at its loop branch print x11 (the quotient), x13 (the dividend) and x12 (the divisor), first 30 times
+    integer ndiv = 0; reg divtrace = 0; initial divtrace = $test$plusargs("DIVTRACE");
+    always @(posedge dut.u_soc.clk) if (divtrace && srv_on && ndiv < 30 && dut.u_soc.cpu.decode_arbitration_isValid && dut.u_soc.cpu.decode_PC == 32'h3158 && !dut.u_soc.cpu.decode_arbitration_isStuck) begin ndiv = ndiv + 1;
+        $display("gi_u loop: a1(quotient)=%0d a3(dividend)=%0d a2(divisor)=%0d a5(count)=%0d", dut.u_soc.cpu.RegFilePlugin_regFile[11], dut.u_soc.cpu.RegFilePlugin_regFile[13], dut.u_soc.cpu.RegFilePlugin_regFile[12], dut.u_soc.cpu.RegFilePlugin_regFile[15]); end
+    // ---- +DBUS: the CPU's data bus once a millisecond after reset exit (a store that is never acknowledged shows as dCYC high with a fixed address)
+    reg dbus_on = 0; initial dbus_on = $test$plusargs("DBUS");
+    initial forever begin #(64'd1000000000); if (srv_on && dbus_on) $display("dbus: dCYC=%b dSTB=%b dWE=%b dADR=%h dACK=%b dDAT_MOSI=%h pc=%h (t = %0d us)", dut.u_soc.dCYC, dut.u_soc.dSTB, dut.u_soc.dWE, {dut.u_soc.dADR, 2'b00}, dut.u_soc.dACK, dut.u_soc.dDAT_MOSI, dut.u_soc.cpu.IBusCachedPlugin_fetchPc_pcReg, $time / 1000000); end
     // ---- the boot and the scenario ----
     task wait_us(input integer us); reg [63:0] t; begin t = us; t = t * 64'd1000000; #(t); end endtask   // 64 bit: 36 ms in ps overflows an integer
     initial begin #(WDPS); $display("host: WATCHDOG at 60 ms of simulated time, stuck before the scenario (status %0d, target %h)", hres, rdv); $fflush(); $finish; end
@@ -191,6 +213,7 @@ module tb_fullcore;
         else if (scenario == 2) begin wait_us(maxus); grab; end                       // one frame after maxus
         else if (scenario == 1) begin repeat (12) begin wait_us(maxus / 12); $fflush(); grab; $fflush(); end end
         $display("host: done at %0t: %0d target commands, %0d reads, %0d opens, %0d frames", $time, target_cmds, reads_done, opens_done, frames);
+        if (pchist_on) pchist_dump;
         $display("cpu check: %0d exceptions after reset exit, highest fetch address %h", exc_n, pc_max);
         if (exc_n == 0 && pc_max > 32'h100) $display("FULLCORE CPU PASSED"); else $display("FULLCORE CPU FAILED");
         $finish;

@@ -51,6 +51,12 @@ def zero_init(text):
         else: out.append(line)
     return "\n".join(out)
 
+LOGIC_ARR = re.compile(r'(\(\*\s*ramstyle\s*=\s*"logic"\s*\*\)\s*reg\s*(?:\[[^\]]+\])?\s*(\w+)\s*\[0:(\d+)\]\s*;)')
+def zero_logic_arrays(text):
+    """An array marked ramstyle "logic" is built from registers, which Quartus powers at 0 (the settings register file `set_reg` is one: the firmware reads it at boot, X made it compute a table address from X
+    and wait on a bus read that never ends). Arrays in block RAM are left alone: their contents are not promised."""
+    return LOGIC_ARR.sub(lambda m: m.group(1) + f" integer _zi_{m.group(2)}; initial for (_zi_{m.group(2)} = 0; _zi_{m.group(2)} <= {m.group(3)}; _zi_{m.group(2)} = _zi_{m.group(2)} + 1) {m.group(2)}[_zi_{m.group(2)}] = 0;", text)
+
 def build(out):
     out = Path(out); shutil.rmtree(out, ignore_errors=True); (out / "core").mkdir(parents=True); (out / "apf").mkdir(); (out / "mf").mkdir()
     for f in list((SRC / "core").glob("*.v")) + list((SRC / "core").glob("*.sv")) + list((SRC / "core").glob("*.vh")) + list((SRC / "core").glob("*.svh")): shutil.copy(f, out / "core" / f.name)
@@ -63,7 +69,7 @@ def build(out):
     # initialises to 0 may then never see the event that would update it: the instruction cache's tag write enable stayed 0 through the whole flush, the tags stayed X, every fetch "hit" on X and the CPU took an
     # illegal instruction at 0 for ever (and the outcome moved with unrelated edits: a race). `always_comb` runs once at time 0, so every combinational block is evaluated before the first clock.
     vp = out / "core/VexRiscv_Full.v"; vp.write_text(vp.read_text() if os.environ.get("TAU_FULLCORE_MUTANT_NO_COMB") else vp.read_text().replace("always @(*)", "always_comb"))   # the env var is the mutant: the check must then FAIL
-    for f in list((out / "core").glob("*.v")) + list((out / "core").glob("*.sv")) + list((out / "core").glob("*.vh")) + list((out / "apf").glob("*.v")): f.write_text(zero_init(f.read_text()))
+    for f in list((out / "core").glob("*.v")) + list((out / "core").glob("*.sv")) + list((out / "core").glob("*.vh")) + list((out / "apf").glob("*.v")): f.write_text(zero_logic_arrays(zero_init(f.read_text())))
     p = out / "core/sound_i2s.v"; t = p.read_text()
     t = t.replace("{(15 - CHANNEL_WIDTH){1'b0}}", "{(CHANNEL_WIDTH >= 15 ? 1 : 15 - CHANNEL_WIDTH){1'b0}}"); p.write_text(t)
     files = sorted(str(f) for f in (out / "core").glob("*.v")) + sorted(str(f) for f in (out / "core").glob("*.sv")) + sorted(str(f) for f in (out / "apf").glob("*.v")) + [os.path.relpath(e, ROOT) for e in EXTRA]
