@@ -16597,3 +16597,7 @@ Package `work/diagnostics/tau-dev-017` (0.1.0-dev.17+e04023b, ROM 1e251e6e..., s
 ## B-1092: DEV 017 install dry run against the TauV card (2026-11-12)
 
 `python3 tools/install_dev_core.py work/diagnostics/tau-dev-017/pocket --card /Volumes/TauV` (no `--yes`): clean (package check, firmware and bitstream pairing, compat manifest), install DEV 017, remove nothing, only the shared platform json and image would be overwritten, library untouched. NOTHING WAS WRITTEN; the install waits for the owner's yes (the owner's "Mounted" answered the request to mount the card for the dry run).
+
+## B-1093: DEV 017 installed on the TauV card (owner: "Yes, install", 2026-11-12)
+
+`python3 tools/install_dev_core.py work/diagnostics/tau-dev-017/pocket --card /Volumes/TauV --yes` after the clean dry run of B-1092: `alfatreze.Tau Gallery DEV 017` (0.1.0-dev.17+e04023b, the m1d seed 1 bitstream 4879a187..., ROM 1e251e6e..., the v1 zoom with the pipeline switch on the Info page), no media. Files identical by SHA-256, card checked against the compat manifest (0 errors, 0 warnings), 5 catalog caches deleted, 16 junk files removed, ejected. DEV 013 to 017 are on the card; the library is unchanged. Not run on a Pocket yet: the A/B pan of B-1091 (zoom `unsplash-1470071459604`, the same pan twice, pipeline OFF then ON via A on the Info page, START, Info, a screenshot each time, and which felt better).
