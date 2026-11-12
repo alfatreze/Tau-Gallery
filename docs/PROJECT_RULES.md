@@ -1,6 +1,6 @@
 # Project rules (shared by Claude Code and Codex)
 
-The eight rules every session follows. `CLAUDE.md` imports this file; `AGENTS.md` points here. Longer reasoning lives in the linked documents.
+The nine rules every session follows. `CLAUDE.md` imports this file; `AGENTS.md` points here. Longer reasoning lives in the linked documents.
 
 1. **Concurrent sessions: use worktrees, and check the branch before committing.** A plain `git checkout <branch>` moves `HEAD` for the whole directory and every other session with it (2026-10-01: a commit landed on the wrong branch). For a second task use `git worktree add ../tau-alpha-<name> <branch>` (or the Agent tool's `isolation: "worktree"`). Run `git branch --show-current` immediately before every commit in a shared tree. Commit only your own files; never stage another session's uncommitted work. Commit verified work promptly.
 2. **Never `git reset` or `git stash` on the shared tree** (not even for a "clean baseline" measurement): it destroyed other sessions' work twice (2026-09-27/28). Build to a separate output directory and diff, or use a worktree. Never modify this repository's upstream tracking references.
@@ -10,5 +10,6 @@ The eight rules every session follows. `CLAUDE.md` imports this file; `AGENTS.md
 6. **Measure against the shipped 192 KB link** (`RAM_192K=1 CLK66=1 SDRAM_BUSY=1`); a 256 KB build is not what ships. `tools/check_heap_gap.py` does it.
 7. **Never copy copyleft code into this MIT project.** Read it for ideas only and record the inspiration in `docs/PROVENANCE.md` (decision D-P01).
 8. **After publishing a release, compare the release's assets with `release/SHA256SUMS.txt`.** A stray workflow zip once slipped into a published release (B-687). Pass `--repo alfatreze/Tau-Alpha` to `gh release create` (the default target is the upstream fork parent).
+9. **Record test outcomes, and run the ladder as one verdict.** `make verdict` runs the ladder in `ladder.json` and prints one line that cannot claim more than was run (manual rungs always say NOT RUN); every test method you run gets a record in `docs/outcomes/outcomes.jsonl` (`tools/outcomes.py add ...`, or `make verdict RECORD=1` for the automatic rungs): method, technique, cost in minutes, outcome, and each finding classified as a real bug, a test gap, or the test setup's fault, with how late it would otherwise have been found. Add `confirm` when the device or a fit later agrees or disagrees. After a fit, run `make gate-report` (the Quartus report gate against `tools/report_baselines/`) before reading the slack by hand. Details: `docs/outcomes/README.md`; the same tools are pocket-testkit's `methods/effectiveness` and `starter`.
 
 Record every finished change as an entry in `docs/AUDIT_TRAIL.md` (B-NNN, with the evidence label and what was and was not run on a Pocket).

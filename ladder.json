@@ -1,0 +1,118 @@
+[
+ {
+  "name": "files",
+  "label": "host",
+  "method": "file-checks",
+  "target": "build-flow",
+  "technique": "package, splash, audit-trail and CLAUDE.md checks",
+  "cmd": "python3 tools/check_tau_package.py && python3 tools/check_splash_asset.py && python3 tools/check_audit_trail.py && python3 tools/check_claude_md.py"
+ },
+ {
+  "name": "host",
+  "label": "host",
+  "method": "host-tests",
+  "target": "cpu-firmware",
+  "technique": "reference models, golden vectors and mutation sweeps (make test-host-fast)",
+  "cmd": "make test-host-fast",
+  "timeout": 1800
+ },
+ {
+  "name": "fuzz",
+  "label": "host",
+  "method": "fuzzing",
+  "target": "parser",
+  "technique": "structure-aware mutation with checksum repair under ASan and UBSan",
+  "cmd": "make test-fuzz-c",
+  "timeout": 1800
+ },
+ {
+  "name": "gallery-app",
+  "label": "host",
+  "method": "host-tests",
+  "target": "cpu-firmware",
+  "technique": "the gallery firmware against a model of the hardware, scripted keys, with source mutants",
+  "cmd": "make test-gallery-pages test-gallery-app",
+  "timeout": 1800
+ },
+ {
+  "name": "formal",
+  "label": "formal-unbounded",
+  "method": "formal",
+  "target": "arbiter",
+  "technique": "k-induction with properties included under ifdef FORMAL (arbiters, tile FSM)",
+  "cmd": "make test-formal-mux test-formal-tile",
+  "timeout": 1800
+ },
+ {
+  "name": "rtl",
+  "label": "simulation",
+  "method": "simulation",
+  "target": "rtl-block",
+  "technique": "block testbenches with mutants (tile, ent, dec, dma, unit, wfifo, dmux, real CPU)",
+  "cmd": "make test-rtl-tgy-tile test-rtl-tgy-ent test-rtl-tgy-dec test-rtl-tgy-dma test-rtl-tgy-unit test-rtl-tgy-wfifo test-rtl-dmux test-rtl-tgy-soc",
+  "timeout": 3600
+ },
+ {
+  "name": "fullcore",
+  "label": "simulation",
+  "method": "simulation",
+  "target": "whole-core",
+  "technique": "the real CPU, SDRAM chip model and a scripted Pocket host, 1.5 ms after reset exit (about 3 minutes)",
+  "cmd": "make test-fullcore",
+  "timeout": 1800
+ },
+ {
+  "name": "golden",
+  "label": "simulation",
+  "method": "simulation",
+  "target": "whole-core",
+  "technique": "golden frame 20 ms after reset exit (about 16 minutes)",
+  "cmd": "make test-fullcore-frame",
+  "manual": true
+ },
+ {
+  "name": "formal-wfifo",
+  "label": "formal-bounded",
+  "method": "formal",
+  "target": "fifo",
+  "technique": "bounded check of the two clock FIFO at four clock ratios (about 10 to 30 minutes)",
+  "cmd": "make test-formal-wfifo",
+  "manual": true
+ },
+ {
+  "name": "report-gate",
+  "label": "quartus",
+  "method": "timing-fit",
+  "target": "timing",
+  "technique": "report gate against the baseline: slack, resources, inferred RAM, warnings (needs the reports of a fit: make gate-report REPORTS=DIR)",
+  "cmd": "make gate-report",
+  "manual": true
+ },
+ {
+  "name": "fit",
+  "label": "quartus",
+  "method": "timing-fit",
+  "target": "timing",
+  "technique": "full fit on the build VM (tools/vm_fit.py), about 1h45",
+  "cmd": "python3 tools/vm_fit.py status NAME",
+  "manual": true
+ },
+ {
+  "name": "package",
+  "label": "quartus",
+  "method": "file-checks",
+  "target": "installer",
+  "technique": "dry run of the card install and the files it would overwrite",
+  "cmd": "python3 tools/install_dev_core.py PACKAGE --card /Volumes/CARD",
+  "manual": true
+ },
+ {
+  "name": "pocket",
+  "label": "pocket",
+  "method": "device-run",
+  "target": "whole-core",
+  "technique": "the owner runs the core on a Pocket and reports",
+  "cmd": "(a person runs the core and records the result)",
+  "manual": true
+ }
+]

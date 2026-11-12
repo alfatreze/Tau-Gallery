@@ -49,6 +49,7 @@ test-host:
 	$(PYTHON) tools/check_splash_asset.py
 	$(PYTHON) sim/test_check_frames.py
 	$(PYTHON) sim/test_merge_index.py
+	$(PYTHON) sim/test_report_gate.py
 	$(PYTHON) tools/check_tau_package.py
 	$(PYTHON) tools/check_claude_md.py
 	$(PYTHON) sim/test_check_claude_md.py
@@ -1149,3 +1150,19 @@ test-fullcore-frame:
 	python3 sim/fullcore/run.py --dir work/fullcore_data --golden compare
 update-golden-fullcore:
 	python3 sim/fullcore/run.py --dir work/fullcore_data --golden update
+
+# The test ladder as data (ladder.json) with ONE verdict line that cannot claim more than was run (tools/verdict.py, from pocket-testkit's starter). `make verdict` runs every automatic rung (about 25 minutes);
+# `make verdict ONLY=files,host` runs some; `make verdict RECORD=1` also appends an outcome record per rung to docs/outcomes/outcomes.jsonl.
+.PHONY: verdict gate-report outcomes-report outcomes-validate
+verdict:
+	$(PYTHON) tools/verdict.py $(if $(ONLY),--only $(ONLY),) $(if $(RECORD),--record docs/outcomes/outcomes.jsonl --project $(OUTCOMES_PROJECT),)
+# The Quartus report gate against the stored baseline (tools/report_gate.py): REPORTS is the output_files directory of a finished compile, copied from the build VM (the reports are not in the repository).
+REPORTS ?= work/reports/gallery-m1d-s1
+BASELINE ?= tools/report_baselines/gallery-m1d.json
+gate-report:
+	$(PYTHON) tools/report_gate.py $(REPORTS) --log $(REPORTS)/quartus-fit.log --baseline $(BASELINE)
+OUTCOMES_PROJECT ?= $(shell $(PYTHON) -c "import json;print(json.loads(open('docs/outcomes/outcomes.jsonl').readline())['project'])")
+outcomes-validate:
+	$(PYTHON) tools/outcomes.py validate docs/outcomes/outcomes.jsonl
+outcomes-report:
+	$(PYTHON) tools/outcomes.py report docs/outcomes/outcomes.jsonl --md

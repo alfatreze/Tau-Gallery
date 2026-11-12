@@ -1,0 +1,155 @@
+{
+ "inferred": {
+  "altdpram": [
+   "core_top:ic|tau_gfx:u_fb|tau_talos:u_talos|glyphbuf_a_rtl_0",
+   "core_top:ic|tau_gfx:u_fb|tau_talos:u_talos|glyphbuf_b_rtl_0"
+  ],
+  "altsyncram": [
+   "core_top:ic|tau_gfx:u_fb|tau_scanout:u_scanout|linebuf_rtl_0",
+   "core_top:ic|tau_gfx:u_fb|tau_scanout_v:g_view.u_scanout_v|bank_e_rtl_0",
+   "core_top:ic|tau_gfx:u_fb|tau_scanout_v:g_view.u_scanout_v|bank_o_rtl_0",
+   "core_top:ic|tau_gfx:u_fb|tau_talos:u_talos|clut_rtl_0",
+   "core_top:ic|tau_gfx:u_fb|tau_talos:u_talos|cmd_mem_rtl_0",
+   "core_top:ic|tau_gfx:u_fb|tau_talos:u_talos|font_ram:g_font_ram.u_font|mem_rtl_0",
+   "core_top:ic|tau_land:u_land|mem_rtl_0",
+   "core_top:ic|tau_land:u_land|stg_rtl_0",
+   "core_top:ic|tau_land:u_land|stg_rtl_1",
+   "core_top:ic|tau_sdram_sched_a:u_sdram_sched_a|tau_sdram_sched_v:u_sched|rq_n_rtl_0",
+   "core_top:ic|tau_sdram_sched_a:u_sdram_sched_a|tau_sdram_sched_v:u_sched|wf_d_rtl_0",
+   "core_top:ic|tau_soc:u_soc|VexRiscv:cpu|DataCache:dataCache_1|ways_0_data_symbol0_rtl_0",
+   "core_top:ic|tau_soc:u_soc|VexRiscv:cpu|DataCache:dataCache_1|ways_0_data_symbol1_rtl_0",
+   "core_top:ic|tau_soc:u_soc|VexRiscv:cpu|DataCache:dataCache_1|ways_0_data_symbol2_rtl_0",
+   "core_top:ic|tau_soc:u_soc|VexRiscv:cpu|DataCache:dataCache_1|ways_0_data_symbol3_rtl_0",
+   "core_top:ic|tau_soc:u_soc|VexRiscv:cpu|DataCache:dataCache_1|ways_0_tags_rtl_0",
+   "core_top:ic|tau_soc:u_soc|VexRiscv:cpu|InstructionCache:IBusCachedPlugin_cache|banks_0_rtl_0",
+   "core_top:ic|tau_soc:u_soc|VexRiscv:cpu|InstructionCache:IBusCachedPlugin_cache|ways_0_tags_rtl_0",
+   "core_top:ic|tau_soc:u_soc|VexRiscv:cpu|RegFilePlugin_regFile_rtl_0",
+   "core_top:ic|tau_soc:u_soc|VexRiscv:cpu|RegFilePlugin_regFile_rtl_1",
+   "core_top:ic|tau_soc:u_soc|pcm_fifo:u_pcm|mem_rtl_0",
+   "core_top:ic|tau_soc:u_soc|tau_main_ram:u_main_ram|a0_rtl_0",
+   "core_top:ic|tau_soc:u_soc|tau_main_ram:u_main_ram|a1_rtl_0",
+   "core_top:ic|tau_soc:u_soc|tau_main_ram:u_main_ram|a2_rtl_0",
+   "core_top:ic|tau_soc:u_soc|tau_main_ram:u_main_ram|a3_rtl_0",
+   "core_top:ic|tau_tgy_unit:u_tgy|tau_tgy_dma:dma|sf_rtl_0",
+   "core_top:ic|tau_tgy_unit:u_tgy|tau_tgy_dma:dma|tau_tgy_dcore:dcore|m0_rtl_0",
+   "core_top:ic|tau_tgy_unit:u_tgy|tau_tgy_dma:dma|tau_tgy_dcore:dcore|m1_rtl_0",
+   "core_top:ic|tau_tgy_unit:u_tgy|tau_tgy_dma:dma|tau_tgy_dcore:dcore|m2_rtl_0",
+   "core_top:ic|tau_tgy_unit:u_tgy|tau_tgy_dma:dma|tau_tgy_dcore:dcore|m3_rtl_0",
+   "core_top:ic|tau_tgy_unit:u_tgy|tau_tgy_dma:dma|tau_tgy_dcore:dcore|rec_addr_rtl_0",
+   "core_top:ic|tau_tgy_unit:u_tgy|tau_tgy_dma:dma|tau_tgy_dcore:dcore|rec_nhw_rtl_0",
+   "core_top:ic|tau_tgy_unit:u_tgy|tau_tgy_dma:dma|tau_tgy_dcore:dcore|tau_tgy_dec:dec|tau_tgy_ent:ent|cmem_rtl_0",
+   "core_top:ic|tau_tgy_unit:u_tgy|tau_tgy_dma:dma|tau_tgy_dcore:dcore|tau_tgy_dec:dec|tau_tgy_tile:tile|qmem_rtl_0",
+   "core_top:ic|tau_tgy_unit:u_tgy|tau_tgy_dma:dma|tau_tgy_dcore:dcore|tau_tgy_dec:dec|tau_tgy_tile:tile|tau_tgy_recon:recon|altsyncram:sCb[0][9]__1",
+   "core_top:ic|tau_tgy_unit:u_tgy|tau_tgy_dma:dma|tau_tgy_dcore:dcore|tau_tgy_dec:dec|tau_tgy_tile:tile|tau_tgy_recon:recon|cbmem_rtl_0",
+   "core_top:ic|tau_tgy_unit:u_tgy|tau_tgy_dma:dma|tau_tgy_dcore:dcore|tau_tgy_dec:dec|tau_tgy_tile:tile|tau_tgy_recon:recon|cbmem_rtl_1",
+   "core_top:ic|tau_tgy_unit:u_tgy|tau_tgy_dma:dma|tau_tgy_dcore:dcore|tau_tgy_dec:dec|tau_tgy_tile:tile|tau_tgy_recon:recon|crmem_rtl_0",
+   "core_top:ic|tau_tgy_unit:u_tgy|tau_tgy_dma:dma|tau_tgy_dcore:dcore|tau_tgy_dec:dec|tau_tgy_tile:tile|tau_tgy_recon:recon|crmem_rtl_1",
+   "core_top:ic|tau_tgy_unit:u_tgy|tau_tgy_dma:dma|tau_tgy_dcore:dcore|tau_tgy_dec:dec|tau_tgy_tile:tile|tau_tgy_recon:recon|ymem_rtl_0",
+   "core_top:ic|tau_tgy_unit:u_tgy|tau_tgy_dma:dma|tau_tgy_wfifo:wfifo|mem_rtl_0"
+  ],
+  "divider": [
+   "lpm_divide"
+  ],
+  "dual_clock_ram": [
+   "core_top:ic|tau_gfx:u_fb|tau_scanout:u_scanout|linebuf_rtl_0",
+   "core_top:ic|tau_gfx:u_fb|tau_scanout_v:g_view.u_scanout_v|bank_e_rtl_0",
+   "core_top:ic|tau_gfx:u_fb|tau_scanout_v:g_view.u_scanout_v|bank_o_rtl_0",
+   "core_top:ic|tau_gfx:u_fb|tau_talos:u_talos|clut_rtl_0",
+   "core_top:ic|tau_gfx:u_fb|tau_talos:u_talos|cmd_mem_rtl_0",
+   "core_top:ic|tau_tgy_unit:u_tgy|tau_tgy_dma:dma|tau_tgy_dcore:dcore|m0_rtl_0",
+   "core_top:ic|tau_tgy_unit:u_tgy|tau_tgy_dma:dma|tau_tgy_dcore:dcore|m1_rtl_0",
+   "core_top:ic|tau_tgy_unit:u_tgy|tau_tgy_dma:dma|tau_tgy_dcore:dcore|m2_rtl_0",
+   "core_top:ic|tau_tgy_unit:u_tgy|tau_tgy_dma:dma|tau_tgy_dcore:dcore|m3_rtl_0",
+   "core_top:ic|tau_tgy_unit:u_tgy|tau_tgy_dma:dma|tau_tgy_dcore:dcore|rec_addr_rtl_0",
+   "core_top:ic|tau_tgy_unit:u_tgy|tau_tgy_dma:dma|tau_tgy_dcore:dcore|rec_nhw_rtl_0",
+   "core_top:ic|tau_tgy_unit:u_tgy|tau_tgy_dma:dma|tau_tgy_dcore:dcore|tau_tgy_dec:dec|tau_tgy_tile:tile|qmem_rtl_0",
+   "core_top:ic|tau_tgy_unit:u_tgy|tau_tgy_dma:dma|tau_tgy_wfifo:wfifo|mem_rtl_0"
+  ]
+ },
+ "resources": {
+  "alms": 89.0,
+  "dsp": 71.2,
+  "pll": 50.0,
+  "ram_blocks": 78.6
+ },
+ "uninferred": [
+  [
+   "276004",
+   "core_top:ic|tau_sdram_sched_a:u_sdram_sched_a|tau_sdram_sched_v:u_sched|rq_last"
+  ],
+  [
+   "276004",
+   "core_top:ic|tau_sdram_sched_a:u_sdram_sched_a|tau_sdram_sched_v:u_sched|rq_port"
+  ],
+  [
+   "276004",
+   "core_top:ic|tau_sdram_sched_a:u_sdram_sched_a|tau_sdram_sched_v:u_sched|wf_b"
+  ],
+  [
+   "276004",
+   "core_top:ic|tau_tgy_unit:u_tgy|tau_tgy_dma:dma|tau_tgy_dcore:dcore|rec_b0"
+  ],
+  [
+   "276004",
+   "core_top:ic|tau_tgy_unit:u_tgy|tau_tgy_dma:dma|tau_tgy_dcore:dcore|rec_lodd"
+  ],
+  [
+   "276004",
+   "core_top:ic|tau_tgy_unit:u_tgy|tau_tgy_dma:dma|tau_tgy_dcore:dcore|tau_tgy_dec:dec|tau_tgy_ent:ent|Ram0"
+  ],
+  [
+   "276004",
+   "core_top:ic|tau_tgy_unit:u_tgy|tau_tgy_dma:dma|tau_tgy_dcore:dcore|tau_tgy_dec:dec|tau_tgy_ent:ent|Ram1"
+  ],
+  [
+   "276004",
+   "core_top:ic|tau_tgy_unit:u_tgy|tau_tgy_dma:dma|tau_tgy_dcore:dcore|tau_tgy_dec:dec|tau_tgy_ent:ent|Ram2"
+  ],
+  [
+   "276004",
+   "core_top:ic|tau_tgy_unit:u_tgy|tau_tgy_dma:dma|tau_tgy_dcore:dcore|tau_tgy_dec:dec|tau_tgy_tile:tile|Ram0"
+  ],
+  [
+   "276006",
+   "core_top:ic|set_reg"
+  ],
+  [
+   "276007",
+   "core_top:ic|tau_tgy_unit:u_tgy|tau_tgy_dma:dma|tau_tgy_dcore:dcore|tau_tgy_dec:dec|tau_tgy_ent:ent|dc_row"
+  ]
+ ],
+ "warning_counts": {
+  "10027": 1,
+  "10030": 2,
+  "10034": 2,
+  "10036": 234,
+  "10230": 53,
+  "10240": 2,
+  "10335": 22,
+  "10762": 3,
+  "10776": 2,
+  "10858": 2,
+  "10890": 5,
+  "113028": 1,
+  "12125": 15,
+  "12241": 1,
+  "13009": 1,
+  "13024": 1,
+  "13032": 1,
+  "13039": 1,
+  "14284": 1,
+  "15714": 1,
+  "16406": 1,
+  "169064": 1,
+  "171167": 1,
+  "176250": 1,
+  "177007": 2,
+  "18236": 4,
+  "21074": 1,
+  "276020": 5,
+  "276027": 13,
+  "292013": 1,
+  "332043": 2,
+  "332054": 212
+ }
+}
