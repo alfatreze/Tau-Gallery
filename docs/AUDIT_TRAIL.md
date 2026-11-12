@@ -16667,3 +16667,10 @@ Installer change (commit 69e4a7c): every dev install (`... DEV NN`) now also rem
 ## B-1103: DEV 013..019 removed from the TauV card (follows B-1102)
 
 After the owner's "Mounted" (answer to the offer to remove DEV 013 to 019): `install_dev_core.py --remove` of the seven cores, dry run first, backup `work/card-backups/20261112-235117` (each core backed up and verified), shared TAU Dev platform and TAU's media kept, card ejected. DEV 020 stays. DEV 005..012 are still on the card (not named in the offer); the next dev install removes them by the new default rule. Host/card operation only; nothing run on a Pocket.
+
+## B-1104: DEV 020 on a Pocket: grid keys fine, the pan is much smoother (follows B-1103)
+
+Evidence: HARDWARE (owner's report and Info screenshot `work/pocket-shots/dev020/20261113_005208.png`), same 6000x3575 picture, pipeline ON, one short session.
+Owner: "grid is ok, pan is much much smoother, just the tiniest jitter here and there, but minimal." So the held-key repeat, the wrap at the ends and the stop at the end work as specified, and the frame-clock change (B-1101) removed the speed variation that was felt as wobble. The cause named in B-1101 (steps tied to pass ends) is now supported by the device, still from one report.
+Info: PAN STALLS 2 of 143 frames, LONGEST STALL 2 frames in a row (frames are now counted per frame), LONGEST PASS 26.7 ms, PASS SPLIT P0 C0 N1 J26 S0, ZOOM OPEN 538 ms (481 in DEV 019; a different run, the average tile read was 10.9 ms against 9.2: card timing varies from run to run), ZOOM LAND 11, COPY 7, FLIP 100 ms, TILES READ 267 (avg 10.9, max 20.5 ms), 259 decoded, 8 unused, TILE DECODE avg 6.2 max 7.4 ms. The remaining jitter is probably the 2 stalled frames and passes of 26 ms (the card read after a prefetch miss, J); not measured further.
+Open (not started): fewer card bytes per tile (512 B alignment), batching contiguous tiles, the prefetch-miss passes.
