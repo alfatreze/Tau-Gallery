@@ -25,12 +25,17 @@ if __name__ == "__main__":
     if rc: sys.exit(1)
     if "--mutants" in sys.argv:
         bad = 0
-        for n in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13):
+        for n in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15):
             w = build([f"-DBUG={n}"]); rc, _ = run(w) if w else (1, ""); print("killed  " if rc else "SURVIVED", f"BUG={n}"); bad += rc == 0
         src = (ROOT / "fw2/gallery/gallery_pages.h").read_text()
         for a, b in (("if (sel >= top + GC_VIS) top = sel + 1u - GC_VIS;", ""), ("if (sel < top) top = sel;", ""), ("else if (g->sel == GT_MODE) l->pol = hl_wrap(l->pol, 2u, dec);", "else if (g->sel == GT_MODE) l->pol = 0u;"), ("l->pal = hl_wrap(l->pal, TC_PALETTE_N, dec);", "l->pal = hl_wrap(l->pal, TC_PALETTE_N - 1u, dec);"), ("g->sel = (uint8_t)hl_wrap(g->sel, GT_ROWS, (edge & GP_KEY_UP) != 0); return GT_STAY;", "g->sel = (uint8_t)hl_wrap(g->sel, GT_ROWS - 1u, (edge & GP_KEY_UP) != 0); return GT_STAY;"), ("*resume = (*resume & 1u) ^ 1u;", "*resume = 1u;"), ("gi_cap(d->set_loads, 9999u)", "gi_cap(d->set_loads, 99999999u)"), ("m->sel == GM_SETTINGS ? GP_OPEN_SETTINGS : GP_OPEN_THEME;\n#endif", "m->sel == GM_SETTINGS ? GP_OPEN_SETTINGS : GP_OPEN_SETTINGS;\n#endif"), ("return (edge & (GP_KEY_B | GP_KEY_START)) ? GP_CLOSE : GP_STAY;", "return (edge & GP_KEY_B) ? GP_CLOSE : GP_STAY;"),
                      ("return (edge & (GP_KEY_LEFT | GP_KEY_B)) != 0;\n}\n\n/* ---- Help", "return (edge & GP_KEY_LEFT) != 0;\n}\n\n/* ---- Help"),
                      ("(edge & (GP_KEY_B | GP_KEY_SELECT)) != 0; }\n#endif", "(edge & (GP_KEY_B | GP_KEY_START)) != 0; }\n#endif"),
+                     ("q = gi_us(q, d->zt_land_sum / d->zt_n); q = gi_s(q, \" MAX \");", "q = gi_us(q, d->zt_land_sum); q = gi_s(q, \" MAX \");"),
+                     ("q = gi_s(r[12].value, \"AVG \"); q = gi_us(q, d->zt_dec_sum / d->zt_n);", "q = gi_s(r[12].value, \"AVG \"); q = gi_us(q, d->zt_dec_sum);"),
+                     ("if (us > 999900u) us = 999900u;", ""),
+                     ("gi_cap(d->zt_catch > d->zt_moved ? d->zt_catch - d->zt_moved : 0u, 99999u)", "gi_cap(d->zt_catch - d->zt_moved, 99999u)"),
+                     ("gi_cap(d->zt_n, 9999u)", "gi_cap(d->zt_n, 99999u)"),
                      ("for (n = 0; d->name[n] && n < 26u; n++)", "for (n = 0; d->name[n] && n < 40u; n++)"),
                      ("{ \"UP / DOWN\",      \"MOVE / SCROLL / PAGE\"},", "{ \"UP / DOWN\",      \"MOVE / SCROLL / PAGE / MORE TEXT HERE\"},")):
             assert a in src, a; w = build([], src.replace(a, b, 1)); rc, _ = run(w) if w else (1, ""); print("killed  " if rc else "SURVIVED", a[:56]); bad += rc == 0

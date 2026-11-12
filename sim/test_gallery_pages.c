@@ -71,6 +71,19 @@ int main(void)
         d.zoom_ms = 0u; d.land_ms = 0u; d.copy_ms = 0u; gi_format(&d, r);
         chk("info: 0 ms is a time, not 'none yet'", !strcmp(r[7].value, "0 MS") && !strcmp(r[8].value, "0 MS") && !strcmp(r[9].value, "0 MS"));
         d.zoom_ms = 4000000000u; gi_format(&d, r); chk("info: a huge time still fits", strlen(r[7].value) <= 27u);
+        { gi_t z = { 0x4D50331Du, 52u, 0x80000003u, 257u, 29696u, 0u, 0 };                                                                          /* the version 1 zoom statistics */
+          gi_format(&z, r); chk("info: tile rows say NONE YET before any tile", !strcmp(r[11].label, "TILES READ") && !strcmp(r[11].value, "NONE YET") && !strcmp(r[12].label, "TILE DECODE") && !strcmp(r[12].value, "NONE YET") && !strcmp(r[13].label, "LONGEST PASS") && !strcmp(r[13].value, "NONE YET") && !strcmp(r[14].label, "PAN STALLS") && !strcmp(r[14].value, "NONE YET"));
+          z.zt_n = 3u; z.zt_land_sum = 12000u; z.zt_land_max = 9500u; z.zt_dec_sum = 6000u; z.zt_dec_max = 3100u; z.zt_pass_max = 21400u; z.zt_catch = 340u; z.zt_moved = 328u; gi_format(&z, r);
+          chk("info: TILES READ shows the count, the average and the maximum of the card read", !strcmp(r[11].value, "3 AVG 4.0 MAX 9.5 MS"));
+          chk("info: TILE DECODE shows the average and the maximum", !strcmp(r[12].value, "AVG 2.0 MAX 3.1 MS"));
+          chk("info: LONGEST PASS in milliseconds with a decimal", !strcmp(r[13].value, "21.4 MS"));
+          chk("info: PAN STALLS is the frames behind minus the frames that moved", !strcmp(r[14].value, "12 OF 340 FRAMES"));
+          z.zt_land_sum = 14999u; z.zt_n = 3u; gi_format(&z, r); chk("info: the average is cut, not rounded (4.9 for 4,999 microseconds)", !strcmp(r[11].value, "3 AVG 4.9 MAX 9.5 MS"));
+          z.zt_moved = 400u; gi_format(&z, r); chk("info: more frames moved than were behind (cannot be) gives 0 stalls, not a huge number", !strcmp(r[14].value, "0 OF 340 FRAMES"));
+          z.zt_n = 100000u; z.zt_land_sum = 400000000u; z.zt_land_max = 4000000000u; gi_format(&z, r); chk("info: the tile count is capped at 9999 so the row fits", !strcmp(r[11].value, "9999 AVG 4.0 MAX 999.9 MS"));
+          z.zt_n = 4000000000u; z.zt_land_sum = 4000000000u; z.zt_land_max = 4000000000u; z.zt_dec_sum = 4000000000u; z.zt_dec_max = 4000000000u; z.zt_pass_max = 4000000000u; z.zt_catch = 4000000000u; z.zt_moved = 0u; gi_format(&z, r);
+          int fits = 1; for (uint32_t i = 0; i < GI_ROWS; i++) if (strlen(r[i].label) > 14u || strlen(r[i].value) > 27u) fits = 0;
+          chk("info: the largest values still fit the screen (label 14, value 27)", fits && !strcmp(r[13].value, "999.9 MS") && !strcmp(r[14].value, "99999 OF 99999 FRAMES")); }
         chk("info: B and Left close, others do not", gi_input(GP_KEY_B) && gi_input(GP_KEY_LEFT) && !gi_input(GP_KEY_UP) && !gi_input(GP_KEY_A));
     }
     {

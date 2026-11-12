@@ -17,7 +17,7 @@
 static uint16_t mem[HW_N];                         /* SDRAM, halfwords: the plane at 0x200000 */
 static uint16_t fb[512u * 1024u];                  /* the UI framebuffer, halfwords, stride 512 */
 static uint32_t clk, irq_pend, vid_req, vid_bus, vid_sw, vid_due, vbase, vstride, land_base, land_words, land_ovf, input_n;
-static int force_ovf, force_short, viewer_dead, fail_pic_reads, pass_pic_reads; static uint32_t v1_starts_before, land_unaligned;
+static int force_ovf, force_short, viewer_dead, fail_pic_reads, pass_pic_reads; static uint32_t v1_starts_before, land_unaligned, zt_n_212;
 static int zb_ok_phase = 0; static int32_t map_cx, map_cy, map_rx1, map_rw2, map_x0, map_y0, map_rx0, map_ry0, map_ex, map_ey, map_rw1;
 static uint32_t rc_lead_n, rc_lead_bad; static uint32_t rc_prev, rc_starts, rc_retarget; static int32_t rc_bx, rc_by;
 static void ldr_lead_probe(void);
@@ -390,10 +390,10 @@ static void checkpoint(int n)
     case 207: force_ovf = 1; v1_starts_before = tg.starts; clear_texts(); break;                                                                                              /* the landing path counts an overflow: the next open must not show a damaged picture */
     case 208: chk(208, said("PICTURE DAMAGED IN TRANSFER") && vid_bus == 0u && tg.starts == v1_starts_before); force_ovf = 0; clear_texts(); break;                           /* a version 1 picture whose landing overflowed is refused before the decoder starts */
     case 210: chk(210, plane_is_rgb("v00.rgb") && zn == 1u && zs[0].layout == 2u && zs[0].w == 1000u && zs[0].h == 900u && zk < 0); break;                                         /* the v1 zoom scenario: v00 is open (fit), its full level is the one stop */
-    case 211: chk(211, zk == 0 && z_shown && v1_view_matches("v00_full.rgb", 1000u, 900u) && info.copy_ms != GI_NONE && info.land_ms != GI_NONE && z_sx >= 96 && z_sx <= 104 && z_sy >= 86 && z_sy <= 94); break;                                                                          /* A: the 1:1 view, decoded tile by tile into the window, equals the reference decode of the full level */
-    case 212: chk(212, zk == 0 && z_shown && z_sx > 0 && z_sy > 0 && v1_view_matches("v00_full.rgb", 1000u, 900u)); break;                                                  /* panned right and down: still the reference pixels */
+    case 211: chk(211, zk == 0 && z_shown && v1_view_matches("v00_full.rgb", 1000u, 900u) && info.copy_ms != GI_NONE && info.land_ms != GI_NONE && z_sx >= 96 && z_sx <= 104 && z_sy >= 86 && z_sy <= 94 && info.zt_n >= 40u && info.zt_land_sum > 0u && info.zt_dec_sum > 0u && info.zt_land_max >= info.zt_land_sum / info.zt_n && info.zt_dec_max >= info.zt_dec_sum / info.zt_n && info.zt_pass_max > 0u); break;                                                                          /* A: the 1:1 view, decoded tile by tile into the window, equals the reference decode of the full level */
+    case 212: chk(212, zk == 0 && z_shown && z_sx > 0 && z_sy > 0 && v1_view_matches("v00_full.rgb", 1000u, 900u) && info.zt_catch > 0u && info.zt_moved > 0u && info.zt_moved <= info.zt_catch && info.zt_n > 40u); zt_n_212 = info.zt_n; break;                                                  /* panned right and down: still the reference pixels */
     case 213: chk(213, zk < 0 && vbase == GAL_PLANE_BASE && plane_is_rgb("v00.rgb")); break;                                                                                /* A: back to fit, the fit plane untouched */
-    case 214: chk(214, zk == 0 && z_shown && v1_view_matches("v00_full.rgb", 1000u, 900u) && v1z_idx_ok); break;                                                            /* zoom again: the same, the index kept */
+    case 214: chk(214, zk == 0 && z_shown && v1_view_matches("v00_full.rgb", 1000u, 900u) && v1z_idx_ok && info.zt_n == zt_n_212 && info.zt_catch == 0u); break;                                                            /* zoom again: the same, the index kept */
     case 215: chk(215, zn == 0u && zk < 0 && vid_bus == 1u); break;                                                                                                         /* the rotated picture (EXIF 180 degrees): no zoom stop */
     case 216: chk(216, zk < 0 && !z_shown && vbase == GAL_PLANE_BASE); break;                                                                                               /* A does nothing there */
     case 217: force_ovf = 1; clear_texts(); break;                                                                                                                         /* the landing path counts an overflow: the first tile cannot be read */
@@ -404,6 +404,8 @@ static void checkpoint(int n)
     case 222: chk(222, said("ZOOM INDEX READ FAILED") && zk < 0 && !v1z_idx_ok && vid_bus == 1u); fail_pic_reads = 0; clear_texts(); break;                                  /* the fit view stays, with the message */
     case 223: chk(223, zk == 0 && z_shown && v1z_idx_ok && v1_view_matches("v00_full.rgb", 1000u, 900u)); break;                                                            /* the card reads work again: the zoom opens */
     case 224: chk(224, zn == 0u && zk < 0 && vid_bus == 1u); break;                                                                                                         /* a 500 x 300 picture: its only level is no larger than the screen */
+    case 230: clk_step = 1000000u; break;                                                                                                                                    /* from here a clock read is a frame: the pan's frame ticks happen */
+    case 231: clk_step = 50u; break;
     case 226: v1z_smax = 100u; break;                                                                                                                                         /* no tile stream is allowed to be longer than 100 bytes */
     case 227: chk(227, said("PICTURE READ FAILED") && vid_bus == 0u && zk < 0); v1z_smax = V1Z_STREAM_MAX; clear_texts(); break;                                             /* the first tile is refused: the zoom is left with the message */
     case 228: force_short = 1; clear_texts(); break;                                                                                                                         /* a landing of one word too few (counted by the landing path) */
@@ -441,7 +443,7 @@ static void checkpoint(int n)
     case 19: chk(27, said("ADD PHOTOS") && said("1/3") && !said("MENU")); clear_texts(); break;                                                                  /* Down, A: Help page 1 of 3 */
     case 20: chk(28, said("WHERE THINGS ARE") && said("2/3") && !said("ADD PHOTOS")); clear_texts(); break;                                                      /* Down turns the page */
     case 22: chk(30, said("INFO") && said("4D50331B") && said("800 X 720") && said("NONE YET") && said("LAST ERROR") && said("L1 LOADED 1 SAVED 0")); snprintf(want, sizeof want, "%u", count); chk(31, said(want)); clear_texts(); break;    /* Info before any picture was opened */
-    case 23: chk(32, said("4D50331B") && count_text("NONE YET") == 4 && said(" MS") && said("432128 WORDS, 0 LOST")); chk(33, said("NONE") && !said("FAILED")); chk(44, said("L1 LOADED 1 SAVED 1")); chk(125, ldr_opens > 0u && ldr_chunks > 0u && ldr_first_ok && ldr_mono && ldr_max >= 100u && ldr_max < 160u); clear_texts(); break;   /* Info after viewing pictures: the last landing */
+    case 23: chk(32, said("4D50331B") && count_text("NONE YET") == 8 && said(" MS") && said("432128 WORDS, 0 LOST")); chk(33, said("NONE") && !said("FAILED")); chk(44, said("L1 LOADED 1 SAVED 1")); chk(125, ldr_opens > 0u && ldr_chunks > 0u && ldr_first_ok && ldr_mono && ldr_max >= 100u && ldr_max < 160u); clear_texts(); break;   /* Info after viewing pictures: the last landing */
     case 24: chk(34, said("OPEN FAILED") && said("0 WORDS, 0 LOST")); clear_texts(); break;                                                                          /* Info after a failed open: the error, and no landing counts carried over */
     case 25: chk(35, said("RESUME LAST PICTURE") && said("ON") && !said("OFF")); clear_texts(); break;                                                                    /* Settings page, resume on (the default) */
     case 26: chk(36, said("OFF") && (setw[2] & 1u) == 0u && set_writes == 0); clear_texts(); break;                                                                   /* toggled off: shown, but not yet written */
@@ -613,7 +615,7 @@ int main(int argc, char **argv)
         uint32_t S6[2048]; int k = 0;
 #define H6(key, n) do { for (int _i = 0; _i < (n); _i++) S6[k++] = (key); } while (0)
         S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(210); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 200); S6[k++] = CP(211);
-        H6(KEY_RIGHT, 40); H6(KEY_DOWN, 30); H6(0, 300); S6[k++] = CP(212);
+        S6[k++] = CP(230); H6(KEY_RIGHT, 40); H6(KEY_DOWN, 30); H6(0, 300); S6[k++] = CP(212); S6[k++] = CP(231);
         S6[k++] = KEY_A; S6[k++] = 0; H6(0, 3); S6[k++] = CP(213); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 200); S6[k++] = CP(214);
         S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); S6[k++] = CP(219);                                          /* back to fit, then to the grid; the index buffer too small */
         S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(220); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 20);                                                    /* open v00: no zoom stop; A does nothing */

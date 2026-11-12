@@ -216,7 +216,7 @@ static const char *const open_msg[] = { "", "OPEN FAILED", "HEADER READ FAILED",
 
 /* open_picture with the Info page's numbers: how long it took (ms), the landing's word counts (only when a landing ran), the status line text. */
 static void zoom_list(void);
-static gi_t info = { 0u, 0u, 0u, GI_NONE, 0u, 0u, 0, 0u, 0u, 0u, GI_NONE, GI_NONE, GI_NONE, GI_NONE };
+static gi_t info = { 0u, 0u, 0u, GI_NONE, 0u, 0u, 0, 0u, 0u, 0u, GI_NONE, GI_NONE, GI_NONE, GI_NONE, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u };
 static gs_vals_t gset; static uint32_t last_act;                                              /* the persisted settings; the clock of the last key or card read (a save waits for a quiet second after it) */
 static uint32_t path_crc(uint32_t i) { const char *s = ent[i - page * PER_PAGE].path; uint32_t n = 0; while (s[n]) n++; return gf_crc32((const uint8_t *)s, n) & GS_M31; }
 static void remember(uint32_t i) { gset.last_idx = i; gset.last_crc = path_crc(i); }       /* the picture the next start resumes on: only one the viewer has shown */
@@ -328,6 +328,7 @@ static void zoom_open(int k, int32_t nx, int32_t ny)
         if (tgy_load_index(&v1fz, &v1z, v1_read_idx, 0, v1z_idx, V1Z_IDX_MAX) != TH_OK) { say("ZOOM INDEX READ FAILED", BAD); zk = -1; return; }
         v1z_idx_ok = 1u;
     }
+    info.zt_n = info.zt_land_sum = info.zt_land_max = info.zt_dec_sum = info.zt_dec_max = info.zt_pass_max = info.zt_catch = info.zt_moved = 0u;      /* the tile statistics are those of this zoom */
     zl = zs[k]; zk = k; z_stop.w = zl.w; z_stop.h = zl.h; z_stop.scale_q16 = zl.scale_q16; gv_clamp(&z_stop, &nx, &ny);
     z_wx = nx; z_wy = ny; z_sx = -1; z_sy = -1; z_shown = 0u; z_t0 = cycles(); z_first = 1u;
     if (zl.layout == 0u) { z_stride_hw = zl.stride / 2u; z_nch = gv_nchunks((zl.len + 4095u) & ~4095u); z_lo = 0u; z_hi = 0u; }
@@ -406,9 +407,11 @@ static int v1_tile_decode(uint32_t tw, int col, int row, int32_t tx, int32_t ty)
     }
     if (!ok) return 1;
     info.land_ms = (cycles() - tc) / (CLK_HZ / 1000u);
-    const uint32_t td = cycles();
+    const uint32_t land_us = (cycles() - tc) / (CLK_HZ / 1000000u), td = cycles();
     if (tgy_hw_tile_from(&v1fz, &v1z, (uint32_t)tx, (uint32_t)ty, (win_base(tw) + gv_tile_hw(col, row)) * 2u, GV_WIN_STRIDE_WORDS * 2u, GAL_STREAM * 2u + (fo - a)) != TH_OK) return 1;
     info.copy_ms = (cycles() - td) / (CLK_HZ / 1000u);                                         /* the Info page's ZOOM COPY row is the decode of the tile for a version 1 picture */
+    const uint32_t dec_us = (cycles() - td) / (CLK_HZ / 1000000u);
+    info.zt_n++; info.zt_land_sum += land_us; info.zt_dec_sum += dec_us; if (land_us > info.zt_land_max) info.zt_land_max = land_us; if (dec_us > info.zt_dec_max) info.zt_dec_max = dec_us;
     t_res[tw][row * GV_WIN_TX + col] = 1u;
     return 0;
 }
@@ -439,7 +442,7 @@ static void tile_show(int32_t x, int32_t y)                                     
 /* One pass of the tile zoom loop. The keys move the WANTED corner (z_wx, z_wy) at once; the SHOWN view (z_sx, z_sy) follows it a step a frame, only where every tile of the step is whole, so a pan that outruns the card
  * slows to the card's pace instead of freezing and jumping. The windows are built around the shown view pulled toward the wanted corner by at most SLACK, and the tiles are fetched in the order of that view.
  * Returns 1 when a tile could not be read. */
-static int tile_pass(int dx, int dy, uint32_t held, int moving, int tick)
+static int tile_pass_inner(int dx, int dy, uint32_t held, int moving, int tick)
 {
     if (moving) gv_move(&z_stop, &z_wx, &z_wy, dx, dy, held);
     int32_t px = z_wx, py = z_wy;
@@ -476,11 +479,19 @@ static int tile_pass(int dx, int dy, uint32_t held, int moving, int tick)
     if (t_front != t_shown_win) { tile_show(z_sx, z_sy); return 0; }                         /* the window flipped: the same view, from the new window */
     if (tick && (z_sx != z_wx || z_sy != z_wy)) {                                            /* follow the wanted corner: diagonal if its tiles are whole, else along one axis */
         const int32_t nx = z_sx + clampi(z_wx - z_sx, -FOLLOW_STEP, FOLLOW_STEP), ny = z_sy + clampi(z_wy - z_sy, -FOLLOW_STEP, FOLLOW_STEP);
-        if (gv_screen_ready(&z_stop, nx, ny, t_wx[t_front], t_wy[t_front], t_res[t_front])) tile_show(nx, ny);
-        else if (nx != z_sx && gv_screen_ready(&z_stop, nx, z_sy, t_wx[t_front], t_wy[t_front], t_res[t_front])) tile_show(nx, z_sy);
-        else if (ny != z_sy && gv_screen_ready(&z_stop, z_sx, ny, t_wx[t_front], t_wy[t_front], t_res[t_front])) tile_show(z_sx, ny);
+        info.zt_catch++;                                                                     /* a frame the shown view is behind the wanted corner; zt_moved of them it could step (the rest are the stalls) */
+        if (gv_screen_ready(&z_stop, nx, ny, t_wx[t_front], t_wy[t_front], t_res[t_front])) { tile_show(nx, ny); info.zt_moved++; }
+        else if (nx != z_sx && gv_screen_ready(&z_stop, nx, z_sy, t_wx[t_front], t_wy[t_front], t_res[t_front])) { tile_show(nx, z_sy); info.zt_moved++; }
+        else if (ny != z_sy && gv_screen_ready(&z_stop, z_sx, ny, t_wx[t_front], t_wy[t_front], t_res[t_front])) { tile_show(z_sx, ny); info.zt_moved++; }
     }
     return 0;
+}
+static int tile_pass(int dx, int dy, uint32_t held, int moving, int tick)                    /* the pass with its duration: the longest one is the Info page's LONGEST PASS (a slowdown in a pan is a long pass or a stalled frame) */
+{
+    if (zl.layout != 2u) return tile_pass_inner(dx, dy, held, moving, tick);                  /* the statistics are for version 1 pictures (the version 0 zoom has its own rows) */
+    const uint32_t t0 = cycles(); const int r = tile_pass_inner(dx, dy, held, moving, tick);
+    const uint32_t us = (cycles() - t0) / (CLK_HZ / 1000000u); if (us > info.zt_pass_max) info.zt_pass_max = us;
+    return r;
 }
 static int zoom_pass(int dx, int dy, uint32_t held, int moving, int tick) { return zl.layout == 0u ? raster_pass(dx, dy, held, moving, tick) : tile_pass(dx, dy, held, moving, tick); }
 

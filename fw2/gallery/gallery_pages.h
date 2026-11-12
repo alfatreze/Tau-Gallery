@@ -179,13 +179,19 @@ static inline int gt_input(gt_t *g, gt_look_t *l, uint32_t theme_n, uint32_t edg
 
 /* ---- Info: what the firmware knows about itself and the last picture it opened (M1.6 slice 2) ---- */
 #define GI_NONE 0xFFFFFFFFu                                          /* open_ms before any picture was opened */
-#define GI_ROWS 11u
-typedef struct { uint32_t core_version, count, view_caps, open_ms, words, lost; const char *err; uint32_t set_layout, set_loads, set_stores, zoom_ms, land_ms, copy_ms, flip_ms; } gi_t;      /* view_caps: R_VIEW_CAPS (bit 1 = the 800 x 720 viewer); err: the last status line, 0 = none */
+#define GI_ROWS 15u
+typedef struct { uint32_t core_version, count, view_caps, open_ms, words, lost; const char *err; uint32_t set_layout, set_loads, set_stores, zoom_ms, land_ms, copy_ms, flip_ms;
+    uint32_t zt_n, zt_land_sum, zt_land_max, zt_dec_sum, zt_dec_max, zt_pass_max, zt_catch, zt_moved; } gi_t;      /* the version 1 zoom's tile statistics of the last zoom (microseconds; zt_catch frames the shown view was behind the wanted corner, zt_moved of them it moved) */      /* view_caps: R_VIEW_CAPS (bit 1 = the 800 x 720 viewer); err: the last status line, 0 = none */
 typedef struct { const char *label; char value[28]; } gi_row_t;
 static inline char *gi_s(char *q, const char *p) { while (*p) *q++ = *p++; return q; }
 static inline char *gi_u(char *q, uint32_t v) { char t[10]; uint32_t n = 0; do { t[n++] = (char)('0' + v % 10u); v /= 10u; } while (v); while (n) *q++ = t[--n]; return q; }
 static inline uint32_t gi_cap(uint32_t v, uint32_t m) { return v > m ? m : v; }
 static inline char *gi_hex8(char *q, uint32_t v) { for (int i = 28; i >= 0; i -= 4) *q++ = "0123456789ABCDEF"[(v >> i) & 15u]; return q; }
+static inline char *gi_us(char *q, uint32_t us)          /* microseconds as milliseconds with one decimal, capped at 999.9 */
+{
+    if (us > 999900u) us = 999900u;
+    q = gi_u(q, us / 1000u); *q++ = '.'; *q++ = (char)('0' + (us % 1000u) / 100u); return q;
+}
 static inline void gi_format(const gi_t *d, gi_row_t r[GI_ROWS])
 {
     char *q;
@@ -218,6 +224,31 @@ static inline void gi_format(const gi_t *d, gi_row_t r[GI_ROWS])
 #endif
     r[9].label = "ZOOM COPY";    if (d->copy_ms == GI_NONE) q = gi_s(r[9].value, "NONE YET"); else { q = gi_u(r[9].value, d->copy_ms); q = gi_s(q, " MS"); } *q = 0;       /* the last tile through Talos, its 256 commands and the fence */
     r[10].label = "ZOOM FLIP";   if (d->flip_ms == GI_NONE) q = gi_s(r[10].value, "NONE YET"); else { q = gi_u(r[10].value, d->flip_ms); q = gi_s(q, " MS"); } *q = 0;       /* the last window re-centre, from its start to the flip */
+    r[11].label = "TILES READ";
+    if (d->zt_n == 0u) { q = gi_s(r[11].value, "NONE YET"); *q = 0; }
+    else {
+        q = gi_u(r[11].value, gi_cap(d->zt_n, 9999u)); q = gi_s(q, " AVG ");
+#if BUG == 14
+        q = gi_us(q, d->zt_land_max); q = gi_s(q, " MAX "); q = gi_us(q, d->zt_land_max); q = gi_s(q, " MS"); *q = 0;                    /* the maximum twice */
+#else
+        q = gi_us(q, d->zt_land_sum / d->zt_n); q = gi_s(q, " MAX "); q = gi_us(q, d->zt_land_max); q = gi_s(q, " MS"); *q = 0;
+#endif
+    }
+    r[12].label = "TILE DECODE";
+    if (d->zt_n == 0u) { q = gi_s(r[12].value, "NONE YET"); *q = 0; }
+    else { q = gi_s(r[12].value, "AVG "); q = gi_us(q, d->zt_dec_sum / d->zt_n); q = gi_s(q, " MAX "); q = gi_us(q, d->zt_dec_max); q = gi_s(q, " MS"); *q = 0; }
+    r[13].label = "LONGEST PASS";
+    if (d->zt_pass_max == 0u) { q = gi_s(r[13].value, "NONE YET"); *q = 0; } else { q = gi_us(r[13].value, d->zt_pass_max); q = gi_s(q, " MS"); *q = 0; }
+    r[14].label = "PAN STALLS";
+    if (d->zt_catch == 0u) { q = gi_s(r[14].value, "NONE YET"); *q = 0; }
+    else {
+#if BUG == 15
+        q = gi_u(r[14].value, gi_cap(d->zt_moved, 99999u));                                                                              /* the frames that moved, not the stalls */
+#else
+        q = gi_u(r[14].value, gi_cap(d->zt_catch > d->zt_moved ? d->zt_catch - d->zt_moved : 0u, 99999u));
+#endif
+        q = gi_s(q, " OF "); q = gi_u(q, gi_cap(d->zt_catch, 99999u)); q = gi_s(q, " FRAMES"); *q = 0;
+    }
 }
 /* One key edge: returns 1 when the page should close (back to the menu). */
 static inline int gi_input(uint32_t edge) { return (edge & (GP_KEY_LEFT | GP_KEY_B)) != 0; }
