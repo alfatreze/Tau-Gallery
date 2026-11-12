@@ -97,7 +97,7 @@ int tgy_tile_loc(const tgy_level_t *l, uint32_t tx, uint32_t ty, uint32_t *off, 
     return TH_OK;
 }
 
-int tgy_hw_tile_from(const tgy_file_t *f, const tgy_level_t *l, uint32_t tx, uint32_t ty, uint32_t dst, uint32_t pitch, uint32_t src)
+int tgy_hw_start_from(const tgy_file_t *f, const tgy_level_t *l, uint32_t tx, uint32_t ty, uint32_t dst, uint32_t pitch, uint32_t src)
 {
     uint32_t foff, len; int r = tgy_tile_loc(l, tx, ty, &foff, &len); if (r != TH_OK) return r;
     r = tgy_hw_tables(f, l); if (r != TH_OK) return r;
@@ -106,12 +106,25 @@ int tgy_hw_tile_from(const tgy_file_t *f, const tgy_level_t *l, uint32_t tx, uin
     REG_WR(R_TGY_GEOM, ((uint32_t)l->fmt << 16) | (tw << 8) | th); REG_WR(R_TGY_QY, f->base + f->tables_off + 2u + 128u * l->qy); REG_WR(R_TGY_QC, f->base + f->tables_off + 2u + 128u * l->qc);
     REG_WR(R_TGY_CTRL, 8u);                                                        /* CLEAR, then START in a separate store (the configuration crosses with the command) */
     REG_WR(R_TGY_CTRL, 1u);
-    r = wait_idle();
+    return TH_OK;                                                                  /* the decoder runs by itself from here: the stream at `src` must stay as it is until tgy_hw_finish says done */
+}
+
+int tgy_hw_finish(void)
+{
+    int r = wait_idle();
     REG_WR(R_IRQ_PEND, 0x10u);                                                     /* the done interrupt is not used by this driver: drop its pending bit */
     if (r != TH_OK) { REG_WR(R_TGY_CTRL, 4u); return r; }
     if (g_status & 0x10u) return TH_BUSY;                                          /* the start was rejected: the decoder was busy */
     if (g_status & 4u) return TH_HWERR;
     return TH_OK;
+}
+
+uint32_t tgy_hw_cycles(void) { return REG_RD(R_TGY_CYCLES); }                       /* SDRAM-clock cycles the last tile took (valid after done) */
+
+int tgy_hw_tile_from(const tgy_file_t *f, const tgy_level_t *l, uint32_t tx, uint32_t ty, uint32_t dst, uint32_t pitch, uint32_t src)
+{
+    int r = tgy_hw_start_from(f, l, tx, ty, dst, pitch, src); if (r != TH_OK) return r;
+    return tgy_hw_finish();
 }
 
 int tgy_hw_tile(const tgy_file_t *f, const tgy_level_t *l, uint32_t tx, uint32_t ty, uint32_t dst, uint32_t pitch)

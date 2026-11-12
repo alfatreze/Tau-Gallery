@@ -181,7 +181,7 @@ static inline int gt_input(gt_t *g, gt_look_t *l, uint32_t theme_n, uint32_t edg
 #define GI_NONE 0xFFFFFFFFu                                          /* open_ms before any picture was opened */
 #define GI_ROWS 15u
 typedef struct { uint32_t core_version, count, view_caps, open_ms, words, lost; const char *err; uint32_t set_layout, set_loads, set_stores, zoom_ms, land_ms, copy_ms, flip_ms;
-    uint32_t zt_n, zt_land_sum, zt_land_max, zt_dec_sum, zt_dec_max, zt_pass_max, zt_catch, zt_moved; } gi_t;      /* the version 1 zoom's tile statistics of the last zoom (microseconds; zt_catch frames the shown view was behind the wanted corner, zt_moved of them it moved) */      /* view_caps: R_VIEW_CAPS (bit 1 = the 800 x 720 viewer); err: the last status line, 0 = none */
+    uint32_t zt_n, zt_land_sum, zt_land_max, zt_dec_n, zt_dec_sum, zt_dec_max, zt_pass_max, zt_catch, zt_moved; } gi_t;      /* the version 1 zoom's tile statistics of the last zoom (microseconds; zt_catch frames the shown view was behind the wanted corner, zt_moved of them it moved) */      /* view_caps: R_VIEW_CAPS (bit 1 = the 800 x 720 viewer); err: the last status line, 0 = none */
 typedef struct { const char *label; char value[28]; } gi_row_t;
 static inline char *gi_s(char *q, const char *p) { while (*p) *q++ = *p++; return q; }
 static inline char *gi_u(char *q, uint32_t v) { char t[10]; uint32_t n = 0; do { t[n++] = (char)('0' + v % 10u); v /= 10u; } while (v); while (n) *q++ = t[--n]; return q; }
@@ -235,8 +235,8 @@ static inline void gi_format(const gi_t *d, gi_row_t r[GI_ROWS])
 #endif
     }
     r[12].label = "TILE DECODE";
-    if (d->zt_n == 0u) { q = gi_s(r[12].value, "NONE YET"); *q = 0; }
-    else { q = gi_s(r[12].value, "AVG "); q = gi_us(q, d->zt_dec_sum / d->zt_n); q = gi_s(q, " MAX "); q = gi_us(q, d->zt_dec_max); q = gi_s(q, " MS"); *q = 0; }
+    if (d->zt_dec_n == 0u) { q = gi_s(r[12].value, "NONE YET"); *q = 0; }
+    else { q = gi_s(r[12].value, "AVG "); q = gi_us(q, d->zt_dec_sum / d->zt_dec_n); q = gi_s(q, " MAX "); q = gi_us(q, d->zt_dec_max); q = gi_s(q, " MS"); *q = 0; }
     r[13].label = "LONGEST PASS";
     if (d->zt_pass_max == 0u) { q = gi_s(r[13].value, "NONE YET"); *q = 0; } else { q = gi_us(r[13].value, d->zt_pass_max); q = gi_s(q, " MS"); *q = 0; }
     r[14].label = "PAN STALLS";

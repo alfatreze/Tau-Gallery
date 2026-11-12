@@ -216,7 +216,7 @@ static const char *const open_msg[] = { "", "OPEN FAILED", "HEADER READ FAILED",
 
 /* open_picture with the Info page's numbers: how long it took (ms), the landing's word counts (only when a landing ran), the status line text. */
 static void zoom_list(void);
-static gi_t info = { 0u, 0u, 0u, GI_NONE, 0u, 0u, 0, 0u, 0u, 0u, GI_NONE, GI_NONE, GI_NONE, GI_NONE, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u };
+static gi_t info = { 0u, 0u, 0u, GI_NONE, 0u, 0u, 0, 0u, 0u, 0u, GI_NONE, GI_NONE, GI_NONE, GI_NONE, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u };
 static gs_vals_t gset; static uint32_t last_act;                                              /* the persisted settings; the clock of the last key or card read (a save waits for a quiet second after it) */
 static uint32_t path_crc(uint32_t i) { const char *s = ent[i - page * PER_PAGE].path; uint32_t n = 0; while (s[n]) n++; return gf_crc32((const uint8_t *)s, n) & GS_M31; }
 static void remember(uint32_t i) { gset.last_idx = i; gset.last_crc = path_crc(i); }       /* the picture the next start resumes on: only one the viewer has shown */
@@ -253,9 +253,14 @@ static void res_clear(uint32_t w) { for (uint32_t i = 0; i < GV_WIN_TX * GV_WIN_
  * superset of it, landed at GAL_STREAM) and one decode by the hardware decoder straight into its place in the resident window (no staging copy, no Talos): the windows, the re-centre, the map and the keys are the version 0
  * tile level's own. The level's tile index (12 bytes a tile) is read from the card when the first zoom opens. The quantisation tables come from the prefix of the file landed when the picture opened. ---- */
 #define GAL_STREAM (GAL_STAGE + 0x10000u)        /* one landed tile stream, 128 KB (halfword address): past the staging tile (0x6000) and the bar save area (GAL_STAGE + 0x8000, 0x3000 used) */
+#define SDRAM_HZ 100000000u                      /* the decoder's cycle counter runs on the SDRAM clock */
 #define V1Z_STREAM_MAX 122880u                   /* a stream longer than this (a tile of noise at the highest quality is about 60 KB) is not decoded */
 #define V1Z_IDX_MAX 32768u                       /* the full level's tile index: 12 bytes a tile, 2,730 tiles (a 44 megapixel picture) */
 static tgy_file_t v1fz; static tgy_level_t v1z; static uint8_t v1z_idx[V1Z_IDX_MAX]; static uint32_t v1z_idx_ok, v1z_cap = V1Z_IDX_MAX, v1z_smax = V1Z_STREAM_MAX;      /* v1z_cap: the index size accepted (a variable so the host test can lower it) */
+typedef struct { uint32_t valid, buf, off_in_buf; int32_t tx, ty; } v1_pre_t;
+static v1_pre_t v1_pre;
+typedef struct { uint32_t valid, tw; int col, row; int32_t tx, ty; } v1_next_t;
+static v1_next_t v1_next;                                                                    /* set by tile_pass: the tile after the one being started, when it also needs the card */
 static void v1_zoom_list(void)                                                               /* a version 1 picture is open: its full level, if this core can decode it and it is upright */
 {
     if (!v1_on || h4[18] != 1u) return;                                                      /* the header's EXIF orientation of the full level: only upright is shown (a rotated one needs a transposing decode) */
@@ -319,7 +324,7 @@ static void zoom_leave(void)
     if (t_job) gfx_fence();                                                                  /* Talos commands of an abandoned copy retire before anything reuses their memory */
     zb_end();                                                                                /* the fit plane's own pixels back under the loader bar */
     REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16); REG_WR(R_VIEW_BASE, GAL_PLANE_BASE);              /* the fit plane is still in SDRAM: back in one write */
-    z_shown = 0u; t_job = 0u; t_recentre = 0u; zk = -1;
+    z_shown = 0u; t_job = 0u; t_recentre = 0u; zk = -1; v1_pre.valid = 0u;
 }
 /* Opens stop k with its screen corner at (nx, ny) of the stop's canvas (clamped here): the fit view shows while the level loads. */
 static void zoom_open(int k, int32_t nx, int32_t ny)
@@ -328,7 +333,7 @@ static void zoom_open(int k, int32_t nx, int32_t ny)
         if (tgy_load_index(&v1fz, &v1z, v1_read_idx, 0, v1z_idx, V1Z_IDX_MAX) != TH_OK) { say("ZOOM INDEX READ FAILED", BAD); zk = -1; return; }
         v1z_idx_ok = 1u;
     }
-    info.zt_n = info.zt_land_sum = info.zt_land_max = info.zt_dec_sum = info.zt_dec_max = info.zt_pass_max = info.zt_catch = info.zt_moved = 0u;      /* the tile statistics are those of this zoom */
+    info.zt_n = info.zt_land_sum = info.zt_land_max = info.zt_dec_n = info.zt_dec_sum = info.zt_dec_max = info.zt_pass_max = info.zt_catch = info.zt_moved = 0u; v1_pre.valid = 0u;      /* the tile statistics are those of this zoom */
     zl = zs[k]; zk = k; z_stop.w = zl.w; z_stop.h = zl.h; z_stop.scale_q16 = zl.scale_q16; gv_clamp(&z_stop, &nx, &ny);
     z_wx = nx; z_wy = ny; z_sx = -1; z_sy = -1; z_shown = 0u; z_t0 = cycles(); z_first = 1u;
     if (zl.layout == 0u) { z_stride_hw = zl.stride / 2u; z_nch = gv_nchunks((zl.len + 4095u) & ~4095u); z_lo = 0u; z_hi = 0u; }
@@ -394,24 +399,43 @@ static int tile_land(int32_t tx, int32_t ty)
     }
     return 0;
 }
-/* A version 1 tile: its stream (a 4 KB aligned superset) is landed at GAL_STREAM, once more on a failure, and decoded by the hardware straight into its place in window tw; the tile is whole when the decoder is done. 1 on a failure. */
-static int v1_tile_decode(uint32_t tw, int col, int row, int32_t tx, int32_t ty)
+/* A version 1 tile, pipelined: the decoder runs by itself, so while it decodes tile A the card reads the stream of the NEXT tile the zoom will want into the other stream buffer; the next pass starts that tile's decode at once, with no read.
+ * A tile's stream is read as a 4 KB aligned superset into GAL_STREAM (buffer 0) or GAL_STREAM2 (buffer 1), once more on a failure, and decoded by the hardware straight into its place in window tw; the tile is whole when the decoder is done.
+ * `pre` is the tile whose stream is already in a buffer (valid until a zoom opens or closes or another tile takes its buffer). The decoder reads the stream while it runs: the next read goes to the OTHER buffer. 1 on a failure. */
+#define GAL_STREAM2 (GAL_STREAM + 0x10000u)
+static uint32_t v1_stream_hw(uint32_t buf) { return buf ? GAL_STREAM2 : GAL_STREAM; }
+static int v1_pre_matches(const v1_pre_t *p, int32_t tx, int32_t ty) { return p->valid && p->tx == tx && p->ty == ty; }      /* the prefetched stream is the wanted tile's */
+
+static int v1_land_stream(int32_t tx, int32_t ty, uint32_t buf, uint32_t *off_in_buf)       /* the stream of tile (tx, ty) into buffer buf; 1 on a failure */
 {
     uint32_t fo, len; if (tgy_tile_loc(&v1z, (uint32_t)tx, (uint32_t)ty, &fo, &len) != TH_OK || len == 0u || len > v1z_smax) return 1;
+    if (v1_pre.valid && v1_pre.buf == buf) v1_pre.valid = 0u;                                 /* this read overwrites the buffer: whatever it held is gone, however the read ends */
     const uint32_t a = fo & ~4095u, e = (fo + len + 4095u) & ~4095u, n = e - a, tc = cycles(); int ok = 0;
     for (int attempt = 0; attempt < 2 && !ok; attempt++) {
-        REG_WR(R_LAND_BASE, GAL_STREAM); REG_WR(R_LAND_CTRL, 1u);
+        REG_WR(R_LAND_BASE, v1_stream_hw(buf)); REG_WR(R_LAND_CTRL, 1u);
         if (!slot_read_blocking(SLOT_PIC, a, 0x40000000u, n, CLK_HZ)) continue;
         const uint32_t t0 = cycles(); while (!(REG_RD(R_LAND_STATUS) & 1u) && (uint32_t)(cycles() - t0) < CLK_HZ / 10u) { }
         ok = REG_RD(R_LAND_OVF) == 0u && REG_RD(R_LAND_WORDS) == n / 4u;
     }
     if (!ok) return 1;
-    info.land_ms = (cycles() - tc) / (CLK_HZ / 1000u);
-    const uint32_t land_us = (cycles() - tc) / (CLK_HZ / 1000000u), td = cycles();
-    if (tgy_hw_tile_from(&v1fz, &v1z, (uint32_t)tx, (uint32_t)ty, (win_base(tw) + gv_tile_hw(col, row)) * 2u, GV_WIN_STRIDE_WORDS * 2u, GAL_STREAM * 2u + (fo - a)) != TH_OK) return 1;
-    info.copy_ms = (cycles() - td) / (CLK_HZ / 1000u);                                         /* the Info page's ZOOM COPY row is the decode of the tile for a version 1 picture */
-    const uint32_t dec_us = (cycles() - td) / (CLK_HZ / 1000000u);
-    info.zt_n++; info.zt_land_sum += land_us; info.zt_dec_sum += dec_us; if (land_us > info.zt_land_max) info.zt_land_max = land_us; if (dec_us > info.zt_dec_max) info.zt_dec_max = dec_us;
+    const uint32_t us = (cycles() - tc) / (CLK_HZ / 1000000u);
+    info.land_ms = us / 1000u; info.zt_n++; info.zt_land_sum += us; if (us > info.zt_land_max) info.zt_land_max = us;
+    *off_in_buf = fo - a; return 0;
+}
+static int v1_tile_decode(uint32_t tw, int col, int row, int32_t tx, int32_t ty)
+{
+    uint32_t buf, off;
+    if (v1_pre_matches(&v1_pre, tx, ty)) { buf = v1_pre.buf; off = v1_pre.off_in_buf; }                                     /* its stream was read while the previous tile decoded */
+    else { buf = 0u; if (v1_land_stream(tx, ty, buf, &off)) return 1; }
+    if (tgy_hw_start_from(&v1fz, &v1z, (uint32_t)tx, (uint32_t)ty, (win_base(tw) + gv_tile_hw(col, row)) * 2u, GV_WIN_STRIDE_WORDS * 2u, v1_stream_hw(buf) * 2u + off) != TH_OK) return 1;
+    if (v1_next.valid && v1_next.tw == tw) {                                                                                  /* the decoder is running: read the next tile into the other buffer */
+        uint32_t noff; const uint32_t nb = 1u - buf;
+        if (!v1_land_stream(v1_next.tx, v1_next.ty, nb, &noff)) { v1_pre.valid = 1u; v1_pre.buf = nb; v1_pre.off_in_buf = noff; v1_pre.tx = v1_next.tx; v1_pre.ty = v1_next.ty; }
+    }
+    if (tgy_hw_finish() != TH_OK) { v1_pre.valid = 0u; return 1; }
+    const uint32_t dec_us = tgy_hw_cycles() / (SDRAM_HZ / 1000000u);                                                         /* the decoder's own count of SDRAM-clock cycles for the tile */
+    info.copy_ms = dec_us / 1000u;                                                                                            /* the Info page's ZOOM COPY row is the decode of the tile for a version 1 picture */
+    info.zt_dec_n++; info.zt_dec_sum += dec_us; if (dec_us > info.zt_dec_max) info.zt_dec_max = dec_us;
     t_res[tw][row * GV_WIN_TX + col] = 1u;
     return 0;
 }
@@ -464,6 +488,11 @@ static int tile_pass_inner(int dx, int dy, uint32_t held, int moving, int tick)
         gv_tile_t need[GV_MAX_TILES]; const uint32_t n = gv_tiles_needed(&z_stop, cx, cy, t_wx[tw], t_wy[tw], lx, ly, need);
         for (uint32_t i = 0; i < n; i++) {
             int col, row; if (!gv_win_tile(t_wx[tw], t_wy[tw], need[i].tx, need[i].ty, &col, &row) || t_res[tw][row * GV_WIN_TX + col]) continue;
+            v1_next.valid = 0u;
+            if (zl.layout == 2u) for (uint32_t k = i + 1u; k < n; k++) {                      /* version 1: the next tile that needs the card is read while this one decodes */
+                int c2, r2; if (!gv_win_tile(t_wx[tw], t_wy[tw], need[k].tx, need[k].ty, &c2, &r2) || t_res[tw][r2 * GV_WIN_TX + c2]) continue;
+                v1_next.valid = 1u; v1_next.tw = tw; v1_next.col = c2; v1_next.row = r2; v1_next.tx = need[k].tx; v1_next.ty = need[k].ty; break;
+            }
             if (tile_job_start(tw, col, row, need[i].tx, need[i].ty)) return 1;
             break;                                                                           /* one tile a pass: one card command */
         }

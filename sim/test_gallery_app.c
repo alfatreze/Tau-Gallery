@@ -19,7 +19,9 @@ static uint16_t fb[512u * 1024u];                  /* the UI framebuffer, halfwo
 static uint32_t clk, irq_pend, vid_req, vid_bus, vid_sw, vid_due, vbase, vstride, land_base, land_words, land_ovf, input_n;
 static int force_ovf, force_short, viewer_dead, fail_pic_reads, pass_pic_reads; static uint32_t v1_starts_before, land_unaligned, zt_n_212;
 static int zb_ok_phase = 0; static int32_t map_cx, map_cy, map_rx1, map_rw2, map_x0, map_y0, map_rx0, map_ry0, map_ex, map_ey, map_rw1;
-static uint32_t rc_lead_n, rc_lead_bad; static uint32_t rc_prev, rc_starts, rc_retarget; static int32_t rc_bx, rc_by;
+static uint32_t rc_lead_n, rc_lead_bad; static struct { uint32_t src, len, dst, pitch, geom, qy, qc, status, polls, cycles; uint16_t ty[64], tc[64]; int tables_ok; uint32_t starts, loads; int corrupt_next; int pending; uint32_t p_src, p_len, p_dst, p_pitch, p_geom; } tg;
+static uint32_t reads_while_decoding;
+static uint32_t rc_prev, rc_starts, rc_retarget; static int32_t rc_bx, rc_by;
 static void ldr_lead_probe(void);
 static void ldr_probe(uint32_t dst);
 static void tile_read_probe(uint32_t off);
@@ -91,6 +93,7 @@ int slot_read_blocking(uint32_t slot, uint32_t off, uint32_t dst, uint32_t len, 
     if (zoom_phase && slot == 2u && len == 49152u) { tile_reads++; tile_read_probe(off); }
     if (!zoom_phase && slot == 2u && len == 131072u && dst >= 0x40000000u) ldr_probe(dst);
     if (zoom_phase && slot == 2u) { if (len > zoom_max_len) zoom_max_len = len; if (++reads_since_input > zoom_max_rs) zoom_max_rs = reads_since_input; }
+    if (tg.pending) reads_while_decoding++;                                                      /* a card read while the decoder runs: the pipeline overlaps them */
     if (slot == 2u && (dst >> 28) == 4u && ((off & 4095u) || (len & 4095u))) land_unaligned++;      /* a landing read of a picture starts and ends on 4 KB (the APF reads fastest aligned; every landing in this firmware keeps to it) */
     if (slot == 2u) { if (pass_pic_reads > 0) pass_pic_reads--; else if (fail_pic_reads > 0) { fail_pic_reads--; return 0; } }      /* a transient card error: after `pass` good reads the next `fail` reads of a picture fail */
     const uint8_t *src = slot == 5u ? idx_data : slot == 2u ? pic_data : 0; const uint32_t n = slot == 5u ? idx_len : pic_len;
@@ -164,18 +167,27 @@ static uint32_t next_input(void)
 
 /* ---- the hardware TGY decoder as tau_tgy_regs.sv / tau_tgy_dma.sv define it, over the SDRAM model: LOAD_TABLES reads the two tables at the programmed byte addresses, START decodes the tile at SRC with the C reference
  * pipeline and writes its RGB rows at DST + row * PITCH byte for byte; busy for a few polls; done / err / rejected like the RTL. ---- */
-static struct { uint32_t src, len, dst, pitch, geom, qy, qc, status, polls; uint16_t ty[64], tc[64]; int tables_ok; uint32_t starts, loads; int corrupt_next; } tg;
 static tgy_dec_t tg_dec; static tgy_planes_t tg_planes;
 static uint8_t mbyte(uint32_t a) { return (uint8_t)(mem[a / 2u] >> (8u * (a & 1u))); }
 static void msetb(uint32_t a, uint8_t v) { const uint32_t h = a / 2u, b = a & 1u; mem[h] = (uint16_t)((mem[h] & ~(0xFFu << (8u * b))) | (uint32_t)v << (8u * b)); }
 typedef struct { uint32_t dst, pitch, w; } tg_emit_t;
 static void tg_emit(void *c, unsigned row, const uint8_t *rgb) { tg_emit_t *e = c; for (uint32_t i = 0; i < e->w * 3u; i++) msetb(e->dst + row * e->pitch + i, rgb[i]); }
+static void tg_complete(void)                                                                                      /* the decoder finishes: fetch the stream from memory as it is NOW, decode, write the rows, set done or err */
+{
+    const unsigned fmt = (tg.p_geom >> 16) & 3u, w = (tg.p_geom >> 8) & 255u, h = tg.p_geom & 255u; uint8_t rows[3] = {0}, cols[3] = {0}; static uint8_t sbuf[1u << 20];
+    if (fmt == 2u) { rows[0] = (uint8_t)(2u * ((h + 15u) / 16u)); cols[0] = (uint8_t)(2u * ((w + 15u) / 16u)); rows[1] = rows[2] = (uint8_t)((h + 15u) / 16u); cols[1] = cols[2] = (uint8_t)((w + 15u) / 16u); }
+    else { rows[0] = rows[1] = rows[2] = (uint8_t)((h + 7u) / 8u); cols[0] = cols[1] = cols[2] = (uint8_t)((w + 7u) / 8u); }
+    for (uint32_t i = 0; i < tg.p_len && i < sizeof sbuf; i++) sbuf[i] = mbyte(tg.p_src + i);
+    tg_emit_t e = { tg.p_dst, tg.p_pitch, w };
+    const int err = (fmt == 1u || !w || !h || w > 128u || h > 128u) ? 1 : tgy_tile_rgb(&tg_dec, &tg_planes, sbuf, tg.p_len, fmt, rows, cols, w, h, tg.ty, tg.tc, tg_emit, &e);
+    tg.status = (tg.status & ~0x6u) | (err ? 4u : 2u) | (err ? (1u << 8) : 0u); tg.pending = 0; tg.cycles = 62u * tg.p_len + 20000u;                          /* the DMA budget of the RTL test: 62 SDRAM clocks a byte */
+}
 static uint32_t tgy_rd(uint32_t a)
 {
     if (!tgy_present) return 0u;
     switch (a) {
-    case 0x80000224u: { uint32_t s = tg.status & ~1u; if (tg.polls > 0) { tg.polls--; s |= 1u; } return 0x80000000u | s | (tg.tables_ok ? 8u : 0u); }
-    case 0x80000244u: return 4242u;
+    case 0x80000224u: { uint32_t s = tg.status & ~1u; if (tg.polls > 0) { tg.polls--; s |= 1u; if (tg.polls == 0 && tg.pending) tg_complete(); } return 0x80000000u | s | (tg.tables_ok ? 8u : 0u); }
+    case 0x80000244u: return tg.cycles;
     default: return 0u;
     }
 }
@@ -195,10 +207,8 @@ static void tgy_wr(uint32_t a, uint32_t v)
             const unsigned fmt = (tg.geom >> 16) & 3u, w = (tg.geom >> 8) & 255u, h = tg.geom & 255u; uint8_t rows[3] = {0}, cols[3] = {0}; static uint8_t sbuf[1u << 20];
             if (fmt == 2u) { rows[0] = (uint8_t)(2u * ((h + 15u) / 16u)); cols[0] = (uint8_t)(2u * ((w + 15u) / 16u)); rows[1] = rows[2] = (uint8_t)((h + 15u) / 16u); cols[1] = cols[2] = (uint8_t)((w + 15u) / 16u); }
             else { rows[0] = rows[1] = rows[2] = (uint8_t)((h + 7u) / 8u); cols[0] = cols[1] = cols[2] = (uint8_t)((w + 7u) / 8u); }
-            for (uint32_t i = 0; i < tg.len && i < sizeof sbuf; i++) sbuf[i] = mbyte(tg.src + i);                      /* the DMA's stream fetch from the landing window */
-            tg_emit_t e = { tg.dst, tg.pitch, w };
-            const int err = (fmt == 1u || !w || !h || w > 128u || h > 128u) ? 1 : tgy_tile_rgb(&tg_dec, &tg_planes, sbuf, tg.len, fmt, rows, cols, w, h, tg.ty, tg.tc, tg_emit, &e);
-            tg.status = (tg.status & ~0x6u) | (err ? 4u : 2u) | (err ? (1u << 8) : 0u); tg.starts++; tg.polls = 3;
+            (void)rows; (void)cols; (void)sbuf; (void)w; (void)h; (void)fmt;
+            tg.pending = 1; tg.p_src = tg.src; tg.p_len = tg.len; tg.p_dst = tg.dst; tg.p_pitch = tg.pitch; tg.p_geom = tg.geom; tg.starts++; tg.polls = 3;       /* the decode happens when the busy polls run out: the stream is read THEN, so a stream that is overwritten while the decoder runs decodes wrong (as the DMA would read it) */
         }
         break;
     default: break;
@@ -390,7 +400,8 @@ static void checkpoint(int n)
     case 207: force_ovf = 1; v1_starts_before = tg.starts; clear_texts(); break;                                                                                              /* the landing path counts an overflow: the next open must not show a damaged picture */
     case 208: chk(208, said("PICTURE DAMAGED IN TRANSFER") && vid_bus == 0u && tg.starts == v1_starts_before); force_ovf = 0; clear_texts(); break;                           /* a version 1 picture whose landing overflowed is refused before the decoder starts */
     case 210: chk(210, plane_is_rgb("v00.rgb") && zn == 1u && zs[0].layout == 2u && zs[0].w == 1000u && zs[0].h == 900u && zk < 0); break;                                         /* the v1 zoom scenario: v00 is open (fit), its full level is the one stop */
-    case 211: chk(211, zk == 0 && z_shown && v1_view_matches("v00_full.rgb", 1000u, 900u) && info.copy_ms != GI_NONE && info.land_ms != GI_NONE && z_sx >= 96 && z_sx <= 104 && z_sy >= 86 && z_sy <= 94 && info.zt_n >= 40u && info.zt_land_sum > 0u && info.zt_dec_sum > 0u && info.zt_land_max >= info.zt_land_sum / info.zt_n && info.zt_dec_max >= info.zt_dec_sum / info.zt_n && info.zt_pass_max > 0u); break;                                                                          /* A: the 1:1 view, decoded tile by tile into the window, equals the reference decode of the full level */
+    case 211: chk(211, zk == 0 && z_shown && v1_view_matches("v00_full.rgb", 1000u, 900u) && info.copy_ms != GI_NONE && info.land_ms != GI_NONE && z_sx >= 96 && z_sx <= 104 && z_sy >= 86 && z_sy <= 94 && info.zt_n >= 40u && info.zt_dec_n >= 40u && info.zt_land_sum > 0u && info.zt_dec_sum > 0u && info.zt_land_max >= info.zt_land_sum / info.zt_n && info.zt_dec_max >= info.zt_dec_sum / info.zt_dec_n && info.zt_pass_max > 0u
+               && reads_while_decoding >= 30u && info.zt_n >= info.zt_dec_n && info.zt_n <= info.zt_dec_n + 1u && info.zt_dec_sum / info.zt_dec_n >= 200u); break;                 /* the pipeline: nearly every tile's stream was read while the previous tile decoded, one read a tile (at most one over), and the decode time is the decoder's own counter (62 SDRAM clocks a byte plus 20,000 in the model) */                                                                          /* A: the 1:1 view, decoded tile by tile into the window, equals the reference decode of the full level */
     case 212: chk(212, zk == 0 && z_shown && z_sx > 0 && z_sy > 0 && v1_view_matches("v00_full.rgb", 1000u, 900u) && info.zt_catch > 0u && info.zt_moved > 0u && info.zt_moved <= info.zt_catch && info.zt_n > 40u); zt_n_212 = info.zt_n; break;                                                  /* panned right and down: still the reference pixels */
     case 213: chk(213, zk < 0 && vbase == GAL_PLANE_BASE && plane_is_rgb("v00.rgb")); break;                                                                                /* A: back to fit, the fit plane untouched */
     case 214: chk(214, zk == 0 && z_shown && v1_view_matches("v00_full.rgb", 1000u, 900u) && v1z_idx_ok && info.zt_n == zt_n_212 && info.zt_catch == 0u); break;                                                            /* zoom again: the same, the index kept */
@@ -406,6 +417,12 @@ static void checkpoint(int n)
     case 224: chk(224, zn == 0u && zk < 0 && vid_bus == 1u); break;                                                                                                         /* a 500 x 300 picture: its only level is no larger than the screen */
     case 230: clk_step = 1000000u; break;                                                                                                                                    /* from here a clock read is a frame: the pan's frame ticks happen */
     case 231: clk_step = 50u; break;
+    case 232: { v1_pre_t p = { 1u, 0u, 0u, 3, 4 }; uint32_t o;                                                                                                              /* the prefetch bookkeeping, directly */
+        chk(232, v1_pre_matches(&p, 3, 4) && !v1_pre_matches(&p, 3, 5) && !v1_pre_matches(&p, 4, 4) && (p.valid = 0u, !v1_pre_matches(&p, 3, 4)));                       /* only the tile it was read for, and only while valid */
+        v1_pre.valid = 1u; v1_pre.buf = 0u; v1_pre.tx = 1; v1_pre.ty = 1; chk(233, !v1_land_stream(0, 0, 1u, &o) && v1_pre.valid == 1u);                                      /* a read into the other buffer leaves it */
+        chk(234, !v1_land_stream(0, 0, 0u, &o) && v1_pre.valid == 0u); v1_pre.valid = 0u;                                                                              /* a read into its buffer takes it away */
+        v1_pre.valid = 1u; v1_pre.buf = 1u; chk(235, v1_land_stream(0, 0, 1u, &o) == 0 && v1_pre.valid == 0u); v1_pre.valid = 0u; force_ovf = 1; v1_pre.valid = 1u; v1_pre.buf = 0u;
+        chk(236, v1_land_stream(0, 0, 0u, &o) == 1 && v1_pre.valid == 0u); force_ovf = 0; v1_pre.valid = 0u; } break;                                                         /* even a failed read takes it away */
     case 226: v1z_smax = 100u; break;                                                                                                                                         /* no tile stream is allowed to be longer than 100 bytes */
     case 227: chk(227, said("PICTURE READ FAILED") && vid_bus == 0u && zk < 0); v1z_smax = V1Z_STREAM_MAX; clear_texts(); break;                                             /* the first tile is refused: the zoom is left with the message */
     case 228: force_short = 1; clear_texts(); break;                                                                                                                         /* a landing of one word too few (counted by the landing path) */
@@ -615,7 +632,7 @@ int main(int argc, char **argv)
         uint32_t S6[2048]; int k = 0;
 #define H6(key, n) do { for (int _i = 0; _i < (n); _i++) S6[k++] = (key); } while (0)
         S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(210); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 200); S6[k++] = CP(211);
-        S6[k++] = CP(230); H6(KEY_RIGHT, 40); H6(KEY_DOWN, 30); H6(0, 300); S6[k++] = CP(212); S6[k++] = CP(231);
+        S6[k++] = CP(230); H6(KEY_RIGHT, 40); H6(KEY_DOWN, 30); H6(0, 300); S6[k++] = CP(212); S6[k++] = CP(231); S6[k++] = CP(232);
         S6[k++] = KEY_A; S6[k++] = 0; H6(0, 3); S6[k++] = CP(213); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 200); S6[k++] = CP(214);
         S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); S6[k++] = CP(219);                                          /* back to fit, then to the grid; the index buffer too small */
         S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(220); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 20);                                                    /* open v00: no zoom stop; A does nothing */

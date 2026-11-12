@@ -29,6 +29,11 @@ int tgy_hw_tile(const tgy_file_t *f, const tgy_level_t *l, uint32_t tx, uint32_t
 int tgy_tile_loc(const tgy_level_t *l, uint32_t tx, uint32_t ty, uint32_t *off, uint32_t *len);
 /* The same decode with the stream at an explicit SDRAM byte address `src` (the app lands one tile's stream wherever it likes, for the zoom: the file is not resident). The tables are still the file's (f->base). */
 int tgy_hw_tile_from(const tgy_file_t *f, const tgy_level_t *l, uint32_t tx, uint32_t ty, uint32_t dst, uint32_t pitch, uint32_t src);
+/* The same split in two so the CPU can do something else while the decoder runs (the zoom reads the next tile's stream from the card): start_from programs and starts (TH_OK, or an error before anything started), finish waits (up to 0.5 s, ABORT on
+ * timeout) and returns TH_OK, TH_BUSY (the start was rejected), TH_HWERR or TH_TIMEOUT. The stream at `src` must not change between the two. tgy_hw_cycles: the decoder's own count of SDRAM-clock cycles for the last tile (valid after finish). */
+int tgy_hw_start_from(const tgy_file_t *f, const tgy_level_t *l, uint32_t tx, uint32_t ty, uint32_t dst, uint32_t pitch, uint32_t src);
+int tgy_hw_finish(void);
+uint32_t tgy_hw_cycles(void);
 /* The whole level: the picture's first pixel goes to dst0, tick(ctx, tx, ty) after each tile (may be 0; return non-zero to stop: TH_ABORT). */
 int tgy_hw_level(const tgy_file_t *f, const tgy_level_t *l, uint32_t dst0, uint32_t pitch, int (*tick)(void *ctx, uint32_t tx, uint32_t ty), void *ctx);
 /* The level on the 800 x 720 viewer canvas at its own rectangle: plane = SDRAM byte address of canvas pixel (0, 0), pitch 2,400. */
