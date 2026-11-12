@@ -59,6 +59,7 @@ def main():
     ap.add_argument("--hang-pack", metavar="KEY[:MODE]", help="a TEST package for the pack watchdog (W4): that meter's pack is replaced by its hang variant (needs --variant player2 and PACKS=1; the core's description says so)")
     ap.add_argument("--preset-probe", action="store_true", help="a TEST package for the preset-read measurement (docs/features/METER_PRESETS_EXTERNAL.md step 0b, B-963): writes preset-probe.bin (200 bytes: \"TPRB\" then byte i = (i*37+11) & 255) into the core's Assets folder, which the Diagnostic Build of this firmware opens and reads on every new track (Report rows PP ...)")
     ap.add_argument("--levels", action="store_true", help="with --photos: also write the zoom levels (tgy_convert.py --levels: raster half and 1:1 levels up to 9 MiB, tile levels beyond); about 45 MB more for a 12-megapixel photo")
+    ap.add_argument("--photo-format", choices=("v0", "v1"), default="v0", help="with --photos: v0 = the raw canvas files (default, every core before rev 29); v1 = the compressed container the hardware TGY decoder draws (core rev 29, firmware built with TGY=1)")
     ap.add_argument("--photos", type=Path, help="with --variant galleryapp: a folder of pictures to convert into the package (Assets/tau_gallery/common/photos/*.tgy and the index tau-library.tdb)")
     ap.add_argument("--note", help="replaces the default text after the build kind in the description")
     ap.add_argument("--rbf", type=Path, help="pair the ROM with this raw Quartus RBF instead of dist/'s")
@@ -230,7 +231,7 @@ def main():
         sys.path.insert(0, str(root / "tools/gallery"))
         import tgy_convert
         common = out / "Assets" / "tau_gallery" / "common"; (common / "photos").mkdir(parents=True)
-        if tgy_convert.main([str(args.photos), str(common / "photos"), "--card-dir", "Assets/tau_gallery/common/photos"] + (["--levels"] if args.levels else [])) != 0: sys.exit("photo conversion failed")
+        if tgy_convert.main([str(args.photos), str(common / "photos"), "--card-dir", "Assets/tau_gallery/common/photos", "--format", args.photo_format] + (["--levels"] if args.levels else [])) != 0: sys.exit("photo conversion failed")
         shutil.move(str(common / "photos" / "tau-library.tdb"), str(common / "tau-library.tdb"))
     cd = a / core_id                                   # H4: build-bound files are core-specific (tools/tau_layout.py)
     cd.mkdir(parents=True)
