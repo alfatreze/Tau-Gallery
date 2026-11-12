@@ -1,0 +1,52 @@
+[tasks]
+good
+good444
+bug1
+bug2
+bug3
+bug4
+bug5
+bug6
+bug7
+bug8
+bug9
+bug10
+bug11
+bug12
+bug13
+
+[options]
+mode prove
+depth 8
+bug11: mode bmc
+bug11: depth 40
+multiclock off
+
+[engines]
+smtbmc z3
+
+[script]
+read -formal -DFORMAL -I. tau_tgy_tile.sv tile_stubs.sv tile_formal.sv
+good: chparam -set BUG 0 tau_tgy_tile_formal
+good444: chparam -set C444 1 tau_tgy_tile_formal
+bug1: chparam -set BUG 1 tau_tgy_tile_formal
+bug2: chparam -set BUG 2 tau_tgy_tile_formal
+bug3: chparam -set BUG 3 tau_tgy_tile_formal
+bug4: chparam -set BUG 4 tau_tgy_tile_formal
+bug5: chparam -set BUG 5 tau_tgy_tile_formal
+bug6: chparam -set BUG 6 tau_tgy_tile_formal
+bug7: chparam -set BUG 7 tau_tgy_tile_formal
+bug8: chparam -set BUG 8 tau_tgy_tile_formal
+bug9: chparam -set BUG 9 tau_tgy_tile_formal
+bug10: chparam -set BUG 10 tau_tgy_tile_formal
+bug11: chparam -set BUG 11 tau_tgy_tile_formal
+bug12: chparam -set BUG 12 tau_tgy_tile_formal
+bug13: chparam -set BUG 13 tau_tgy_tile_formal
+prep -top tau_tgy_tile_formal
+memory_map -rom-only
+
+[files]
+../src/fpga/core/tau_tgy_tile.sv
+tile_stubs.sv
+tile_formal.sv
+tile_props.vh

@@ -183,4 +183,7 @@ module tau_tgy_tile #(parameter integer C444 = 0, parameter integer BUG = 0) (
             default: st <= S_IDLE;
         endcase
     end
+`ifdef FORMAL
+`include "tile_props.vh"          // proof-only properties, formal/tile_props.vh (not synthesised)
+`endif
 endmodule

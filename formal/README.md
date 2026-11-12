@@ -15,3 +15,12 @@ Not covered: the DMA's error path releases `clear_req` without waiting for the a
 Proved for ALL input sequences (k-induction, depth 12), given the scheduler contract (`done` only for an outstanding request; the port does not accept with C's 4-bit counter full): the secondary is granted only with C idle,
 nothing outstanding and nothing in flight (and always then); C is held while the secondary runs; each `done` goes to exactly one client; address, length, direction, write data, byte enables, next, index and read data belong
 to the owner. Mutants BUG 1..7 (p2mux) and 1..10 (dmux) all FAIL. Not proved: that a request is eventually done (a property of the scheduler) and C's bounded wait (needs a liveness assumption on the scheduler).
+
+## tile (tau_tgy_tile control FSM) -- unbounded proof
+`tile_props.vh` (included by the RTL under `ifdef FORMAL`), `tile_formal.sv` (free inputs), `tile_stubs.sv` (handshake-only stand-ins for the IDCT and the recon unit; their arithmetic stays with the bit-exact simulations). `make test-formal-tile`.
+Contract assumed: the entropy decoder talks (c_we, blk_done, dec_err) only while a block is requested; the stand-ins answer only after their start. Proved for all input sequences, C444 0 and 1: stored geometry matches the tile size and format;
+the walk position stays in range and equals a ghost count of finished blocks (every block once, Y raster, then Cb, then Cr); the pixel stage starts after exactly all blocks; each block request carries the right component, column, left and
+above flags; the IDCT is cleared before every block and started with no coefficient in the pipeline; the watchdog leaves S_DEC; done and err never together; quantiser table select, zigzag map, saturation and the plane write address and
+component are the specified ones. Mutants BUG 1..13 all die (BUG 11 by a 40-step BMC; BUG 12, the 2**17 clock watchdog, only by the induction step failing on the watchdog assertion, since no bounded run reaches it).
+Needs `memory_map -rom-only` in the script: otherwise the zigzag ROM is a free memory in the induction step.
+Not proved: that the decoder-side or IDCT/recon timing is right (simulation), that the pipeline and the multiplier are bit-exact beyond the saturation relation, liveness beyond the watchdog.

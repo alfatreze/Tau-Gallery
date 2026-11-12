@@ -1129,3 +1129,8 @@ test-formal-wfifo:
 test-formal-mux:
 	python3 formal/run_formal.py p2mux
 	python3 formal/run_formal.py dmux
+
+# Tau Gallery: UNBOUNDED formal proof (k-induction) of the TGY tile controller FSM (sby + yosys); mutants must FAIL (~1 min).
+.PHONY: test-formal-tile
+test-formal-tile:
+	python3 formal/run_formal.py tile
