@@ -179,14 +179,15 @@ static inline int gt_input(gt_t *g, gt_look_t *l, uint32_t theme_n, uint32_t edg
 
 /* ---- Info: what the firmware knows about itself and the last picture it opened (M1.6 slice 2) ---- */
 #define GI_NONE 0xFFFFFFFFu                                          /* open_ms before any picture was opened */
-#define GI_ROWS 18u
+#define GI_ROWS 19u
 typedef struct { uint32_t core_version, count, view_caps, open_ms, words, lost; const char *err; uint32_t set_layout, set_loads, set_stores, zoom_ms, land_ms, copy_ms, flip_ms;
-    uint32_t zt_n, zt_land_sum, zt_land_max, zt_dec_n, zt_dec_sum, zt_dec_max, zt_pass_max, zt_catch, zt_moved, zt_stall_run_max, pipe_off; } gi_t;      /* the version 1 zoom's tile statistics of the last zoom (microseconds; zt_catch frames the shown view was behind the wanted corner, zt_moved of them it moved) */      /* view_caps: R_VIEW_CAPS (bit 1 = the 800 x 720 viewer); err: the last status line, 0 = none */
+    uint32_t zt_n, zt_land_sum, zt_land_max, zt_dec_n, zt_dec_sum, zt_dec_max, zt_pass_max, zt_catch, zt_moved, zt_stall_run_max, pipe_off, zt_sp, zt_sc, zt_sn, zt_sj, zt_ss; } gi_t;      /* zt_s*: where the longest pass spent its microseconds: planning, Talos copy step, needed list, the tile, the rest */      /* the version 1 zoom's tile statistics of the last zoom (microseconds; zt_catch frames the shown view was behind the wanted corner, zt_moved of them it moved) */      /* view_caps: R_VIEW_CAPS (bit 1 = the 800 x 720 viewer); err: the last status line, 0 = none */
 typedef struct { const char *label; char value[28]; } gi_row_t;
 static inline char *gi_s(char *q, const char *p) { while (*p) *q++ = *p++; return q; }
 static inline char *gi_u(char *q, uint32_t v) { char t[10]; uint32_t n = 0; do { t[n++] = (char)('0' + v % 10u); v /= 10u; } while (v); while (n) *q++ = t[--n]; return q; }
 static inline uint32_t gi_cap(uint32_t v, uint32_t m) { return v > m ? m : v; }
 static inline char *gi_hex8(char *q, uint32_t v) { for (int i = 28; i >= 0; i -= 4) *q++ = "0123456789ABCDEF"[(v >> i) & 15u]; return q; }
+static inline char *gi_ms0(char *q, uint32_t us) { uint32_t ms = (us + 500u) / 1000u; return gi_u(q, ms > 99u ? 99u : ms); }      /* whole milliseconds, rounded, capped at 99 */
 static inline char *gi_us(char *q, uint32_t us)          /* microseconds as milliseconds with one decimal, capped at 999.9 */
 {
     if (us > 999900u) us = 999900u;
@@ -255,6 +256,12 @@ static inline void gi_format(const gi_t *d, gi_row_t r[GI_ROWS])
     r[16].label = "LONGEST STALL";
     if (d->zt_catch == 0u) { q = gi_s(r[16].value, "NONE YET"); *q = 0; }
     else { q = gi_u(r[16].value, gi_cap(d->zt_stall_run_max, 99999u)); q = gi_s(q, d->zt_stall_run_max == 1u ? " FRAME IN A ROW" : " FRAMES IN A ROW"); *q = 0; }
+    r[18].label = "PASS SPLIT";
+    if (d->zt_pass_max == 0u) { q = gi_s(r[18].value, "NONE YET"); *q = 0; }
+    else {
+        q = gi_s(r[18].value, "P"); q = gi_ms0(q, d->zt_sp); q = gi_s(q, " C"); q = gi_ms0(q, d->zt_sc); q = gi_s(q, " N"); q = gi_ms0(q, d->zt_sn);
+        q = gi_s(q, " J"); q = gi_ms0(q, d->zt_sj); q = gi_s(q, " S"); q = gi_ms0(q, d->zt_ss); q = gi_s(q, " MS"); *q = 0;               /* plan, Talos copy, needed list, job (the tile's card read and decode), show */
+    }
     r[17].label = "ZOOM PIPELINE"; q = gi_s(r[17].value, d->pipe_off ? "OFF" : "ON"); *q = 0;          /* the next tile's card read overlapped with a decode; A on this page switches it */
 }
 /* One key edge: 1 when the page should close (back to the menu), 2 for A (switch the zoom pipeline), else 0. */

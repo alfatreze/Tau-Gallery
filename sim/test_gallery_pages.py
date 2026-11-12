@@ -41,6 +41,10 @@ if __name__ == "__main__":
                      ("if (us > 999900u) us = 999900u;", ""),
                      ("gi_cap(d->zt_catch > d->zt_moved ? d->zt_catch - d->zt_moved : 0u, 99999u)", "gi_cap(d->zt_catch - d->zt_moved, 99999u)"),
                      ("gi_cap(d->zt_n, 9999u)", "gi_cap(d->zt_n, 99999u)"),
+                     ("uint32_t ms = (us + 500u) / 1000u;", "uint32_t ms = us / 1000u;"),
+                     ("ms > 99u ? 99u : ms", "ms"),
+                     ("q = gi_s(q, \" J\"); q = gi_ms0(q, d->zt_sj);", "q = gi_s(q, \" J\"); q = gi_ms0(q, d->zt_sn);"),
+                     ("if (d->zt_pass_max == 0u) { q = gi_s(r[18].value", "if (d->zt_n == 0u) { q = gi_s(r[18].value"),
                      ("for (n = 0; d->name[n] && n < 26u; n++)", "for (n = 0; d->name[n] && n < 40u; n++)"),
                      ("{ \"UP / DOWN\",      \"MOVE / SCROLL / PAGE\"},", "{ \"UP / DOWN\",      \"MOVE / SCROLL / PAGE / MORE TEXT HERE\"},")):
             assert a in src, a; w = build([], src.replace(a, b, 1)); rc, _ = run(w) if w else (1, ""); print("killed  " if rc else "SURVIVED", a[:56]); bad += rc == 0

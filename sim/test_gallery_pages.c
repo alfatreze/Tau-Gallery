@@ -84,10 +84,15 @@ int main(void)
           z.zt_n = 3u; z.zt_dec_n = 5u; gi_format(&z, r); chk("info: fewer reads than decodes (a stream used twice) is 0 unused, not a huge number", !strcmp(r[12].value, "5 DONE, 0 UNUSED")); z.zt_n = 3u; z.zt_dec_n = 3u;
           chk("info: LONGEST STALL is the longest run of stalled frames", !strcmp(r[16].label, "LONGEST STALL") && !strcmp(r[16].value, "4 FRAMES IN A ROW")); z.zt_stall_run_max = 1u; gi_format(&z, r); chk("info: one frame is singular", !strcmp(r[16].value, "1 FRAME IN A ROW")); z.zt_stall_run_max = 4u;
           z.pipe_off = 1u; gi_format(&z, r); chk("info: ZOOM PIPELINE says OFF when it is switched off", !strcmp(r[17].value, "OFF")); z.pipe_off = 0u; gi_format(&z, r); chk("info: and ON otherwise", !strcmp(r[17].value, "ON"));
+          gi_format(&z, r); chk("info: PASS SPLIT is NONE YET with no pass timed", (z.zt_pass_max = 0u, gi_format(&z, r), !strcmp(r[18].label, "PASS SPLIT") && !strcmp(r[18].value, "NONE YET"))); z.zt_pass_max = 21400u;
+          z.zt_sp = 1200u; z.zt_sc = 0u; z.zt_sn = 2400u; z.zt_sj = 16500u; z.zt_ss = 1300u; gi_format(&z, r);
+          chk("info: PASS SPLIT shows plan, copy, need, job and show in whole milliseconds", !strcmp(r[18].value, "P1 C0 N2 J17 S1 MS"));
+          z.zt_sj = 499u; gi_format(&z, r); chk("info: a split under half a millisecond rounds to 0, 500 up to 1", !strcmp(r[18].value, "P1 C0 N2 J0 S1 MS") && (z.zt_sj = 500u, gi_format(&z, r), !strcmp(r[18].value, "P1 C0 N2 J1 S1 MS")));
+          z.zt_sj = 4000000000u; gi_format(&z, r); chk("info: a huge part is capped at 99", !strcmp(r[18].value, "P1 C0 N2 J99 S1 MS")); z.zt_sj = 16500u;
           z.zt_land_sum = 14999u; z.zt_n = 3u; gi_format(&z, r); chk("info: the average is cut, not rounded (4.9 for 4,999 microseconds)", !strcmp(r[11].value, "3 AVG 4.9 MAX 9.5 MS"));
           z.zt_moved = 400u; gi_format(&z, r); chk("info: more frames moved than were behind (cannot be) gives 0 stalls, not a huge number", !strcmp(r[15].value, "0 OF 340 FRAMES"));
           z.zt_n = 100000u; z.zt_land_sum = 400000000u; z.zt_land_max = 4000000000u; gi_format(&z, r); chk("info: the tile count is capped at 9999 so the row fits", !strcmp(r[11].value, "9999 AVG 4.0 MAX 999.9 MS"));
-          z.zt_n = 4000000000u; z.zt_land_sum = 4000000000u; z.zt_land_max = 4000000000u; z.zt_dec_n = 4000000000u; z.zt_dec_sum = 4000000000u; z.zt_dec_max = 4000000000u; z.zt_pass_max = 4000000000u; z.zt_catch = 4000000000u; z.zt_moved = 0u; gi_format(&z, r);
+          z.zt_n = 4000000000u; z.zt_land_sum = 4000000000u; z.zt_land_max = 4000000000u; z.zt_sp = z.zt_sc = z.zt_sn = z.zt_sj = z.zt_ss = 4000000000u; z.zt_dec_n = 4000000000u; z.zt_dec_sum = 4000000000u; z.zt_dec_max = 4000000000u; z.zt_pass_max = 4000000000u; z.zt_catch = 4000000000u; z.zt_moved = 0u; gi_format(&z, r);
           int fits = 1; for (uint32_t i = 0; i < GI_ROWS; i++) if (strlen(r[i].label) > 14u || strlen(r[i].value) > 27u) fits = 0;
           chk("info: the largest values still fit the screen (label 14, value 27)", fits && !strcmp(r[14].value, "999.9 MS") && !strcmp(r[15].value, "99999 OF 99999 FRAMES")); }
         chk("info: A asks to switch the zoom pipeline (2), B and Left close (1)", gi_input(GP_KEY_A) == 2 && gi_input(GP_KEY_B) == 1 && gi_input(GP_KEY_LEFT) == 1);

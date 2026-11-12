@@ -216,7 +216,7 @@ static const char *const open_msg[] = { "", "OPEN FAILED", "HEADER READ FAILED",
 
 /* open_picture with the Info page's numbers: how long it took (ms), the landing's word counts (only when a landing ran), the status line text. */
 static void zoom_list(void);
-static gi_t info = { 0u, 0u, 0u, GI_NONE, 0u, 0u, 0, 0u, 0u, 0u, GI_NONE, GI_NONE, GI_NONE, GI_NONE, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u };
+static gi_t info = { 0u, 0u, 0u, GI_NONE, 0u, 0u, 0, 0u, 0u, 0u, GI_NONE, GI_NONE, GI_NONE, GI_NONE, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u };
 static gs_vals_t gset; static uint32_t last_act;                                              /* the persisted settings; the clock of the last key or card read (a save waits for a quiet second after it) */
 static uint32_t path_crc(uint32_t i) { const char *s = ent[i - page * PER_PAGE].path; uint32_t n = 0; while (s[n]) n++; return gf_crc32((const uint8_t *)s, n) & GS_M31; }
 static void remember(uint32_t i) { gset.last_idx = i; gset.last_crc = path_crc(i); }       /* the picture the next start resumes on: only one the viewer has shown */
@@ -260,6 +260,7 @@ static tgy_file_t v1fz; static tgy_level_t v1z; static uint8_t v1z_idx[V1Z_IDX_M
 typedef struct { uint32_t valid, buf, off_in_buf; int32_t tx, ty; } v1_pre_t;
 static v1_pre_t v1_pre;
 typedef struct { uint32_t valid, tw; int col, row; int32_t tx, ty; } v1_next_t;
+static uint32_t pst[4], pcopy;                                                               /* the stamps of the pass being timed (start, planned, copy or need list done, job done) and 1 when the pass ran a Talos copy step */
 static uint32_t z_stall_run, v1_pipe_off;                                                    /* frames in a row the shown view stood still; 1 when the pipeline is switched off (the Info page's A) */
 static v1_next_t v1_next;                                                                    /* set by tile_pass: the tile after the one being started, when it also needs the card */
 static void v1_zoom_list(void)                                                               /* a version 1 picture is open: its full level, if this core can decode it and it is upright */
@@ -334,7 +335,7 @@ static void zoom_open(int k, int32_t nx, int32_t ny)
         if (tgy_load_index(&v1fz, &v1z, v1_read_idx, 0, v1z_idx, V1Z_IDX_MAX) != TH_OK) { say("ZOOM INDEX READ FAILED", BAD); zk = -1; return; }
         v1z_idx_ok = 1u;
     }
-    info.zt_n = info.zt_land_sum = info.zt_land_max = info.zt_dec_n = info.zt_dec_sum = info.zt_dec_max = info.zt_pass_max = info.zt_catch = info.zt_moved = info.zt_stall_run_max = 0u; v1_pre.valid = 0u; z_stall_run = 0u;      /* the tile statistics are those of this zoom */
+    info.zt_n = info.zt_land_sum = info.zt_land_max = info.zt_dec_n = info.zt_dec_sum = info.zt_dec_max = info.zt_pass_max = info.zt_catch = info.zt_moved = info.zt_stall_run_max = info.zt_sp = info.zt_sc = info.zt_sn = info.zt_sj = info.zt_ss = 0u; v1_pre.valid = 0u; z_stall_run = 0u;      /* the tile statistics are those of this zoom */
     zl = zs[k]; zk = k; z_stop.w = zl.w; z_stop.h = zl.h; z_stop.scale_q16 = zl.scale_q16; gv_clamp(&z_stop, &nx, &ny);
     z_wx = nx; z_wy = ny; z_sx = -1; z_sy = -1; z_shown = 0u; z_t0 = cycles(); z_first = 1u;
     if (zl.layout == 0u) { z_stride_hw = zl.stride / 2u; z_nch = gv_nchunks((zl.len + 4095u) & ~4095u); z_lo = 0u; z_hi = 0u; }
@@ -469,6 +470,7 @@ static void tile_show(int32_t x, int32_t y)                                     
  * Returns 1 when a tile could not be read. */
 static int tile_pass_inner(int dx, int dy, uint32_t held, int moving, int tick)
 {
+    pcopy = 0u;
     if (moving) gv_move(&z_stop, &z_wx, &z_wy, dx, dy, held);
     int32_t px = z_wx, py = z_wy;
     if (z_shown) { px = z_sx + clampi(z_wx - z_sx, -SLACK, SLACK); py = z_sy + clampi(z_wy - z_sy, -SLACK, SLACK); gv_clamp(&z_stop, &px, &py); }
@@ -483,10 +485,12 @@ static int tile_pass_inner(int dx, int dy, uint32_t held, int moving, int tick)
         }
     }
     const uint32_t tw = t_recentre ? 1u - t_front : t_front;
-    if (t_job) tile_copy_step();
+    if (zl.layout == 2u) pst[1] = cycles();                                                    /* the window planning is done */
+    if (t_job) { pcopy = 1u; tile_copy_step(); if (zl.layout == 2u) pst[2] = pst[3] = cycles(); }
     else {
         const int32_t cx = (t_recentre && z_shown) ? z_sx : px, cy = (t_recentre && z_shown) ? z_sy : py;                      /* while composing, the tiles of the view on screen first: they let the flip happen at once */
         gv_tile_t need[GV_MAX_TILES]; const uint32_t n = gv_tiles_needed(&z_stop, cx, cy, t_wx[tw], t_wy[tw], lx, ly, need);
+        if (zl.layout == 2u) pst[2] = cycles();                                            /* the needed list is made */
         for (uint32_t i = 0; i < n; i++) {
             int col, row; if (!gv_win_tile(t_wx[tw], t_wy[tw], need[i].tx, need[i].ty, &col, &row) || t_res[tw][row * GV_WIN_TX + col]) continue;
             v1_next.valid = 0u;
@@ -497,6 +501,7 @@ static int tile_pass_inner(int dx, int dy, uint32_t held, int moving, int tick)
             if (tile_job_start(tw, col, row, need[i].tx, need[i].ty)) return 1;
             break;                                                                           /* one tile a pass: one card command */
         }
+        if (zl.layout == 2u) pst[3] = cycles();                                            /* the tile (card read and decode) is done */
     }
     const uint32_t b2 = 1u - t_front;
     if (t_recentre && !t_job && (z_shown ? gv_screen_ready(&z_stop, z_sx, z_sy, t_wx[b2], t_wy[b2], t_res[b2]) : gv_screen_ready(&z_stop, px, py, t_wx[b2], t_wy[b2], t_res[b2]))) { t_front = b2; t_recentre = 0u; info.flip_ms = (cycles() - t_rc_t0) / (CLK_HZ / 1000u); }      /* the new window has the view on screen whole: flip */
@@ -522,8 +527,11 @@ static int tile_pass_inner(int dx, int dy, uint32_t held, int moving, int tick)
 static int tile_pass(int dx, int dy, uint32_t held, int moving, int tick)                    /* the pass with its duration: the longest one is the Info page's LONGEST PASS (a slowdown in a pan is a long pass or a stalled frame) */
 {
     if (zl.layout != 2u) return tile_pass_inner(dx, dy, held, moving, tick);                  /* the statistics are for version 1 pictures (the version 0 zoom has its own rows) */
-    const uint32_t t0 = cycles(); const int r = tile_pass_inner(dx, dy, held, moving, tick);
-    const uint32_t us = (cycles() - t0) / (CLK_HZ / 1000000u); if (us > info.zt_pass_max) info.zt_pass_max = us;
+    const uint32_t t0 = cycles(); pst[0] = pst[1] = pst[2] = pst[3] = t0; const int r = tile_pass_inner(dx, dy, held, moving, tick);
+    const uint32_t t5 = cycles(), us = (t5 - t0) / (CLK_HZ / 1000000u), u = CLK_HZ / 1000000u;
+    if (us > info.zt_pass_max) {                                                             /* the longest pass so far: where its time went (microseconds): planning, Talos copy step, needed list, the tile, the rest (show, follow, flip) */
+        info.zt_pass_max = us; info.zt_sp = (pst[1] - pst[0]) / u; info.zt_sc = pcopy ? (pst[2] - pst[1]) / u : 0u; info.zt_sn = pcopy ? 0u : (pst[2] - pst[1]) / u; info.zt_sj = (pst[3] - pst[2]) / u; info.zt_ss = (t5 - pst[3]) / u;
+    }
     return r;
 }
 static int zoom_pass(int dx, int dy, uint32_t held, int moving, int tick) { return zl.layout == 0u ? raster_pass(dx, dy, held, moving, tick) : tile_pass(dx, dy, held, moving, tick); }
@@ -715,7 +723,7 @@ static void draw_theme(const gt_t *g, const gt_look_t *l)
     gfx_rect(110, PAGE_Y0 + 3u * LINE_H + 6u, 120, 14, ACC);                                       /* the accent as it is drawn with this theme */
     page_foot("UP DOWN ROW  LEFT RIGHT CHANGE  B BACK", 0, 0);
 }
-#define INFO_LINE_H 17u                          /* 18 rows from y 26 to 315 */
+#define INFO_LINE_H 16u                          /* 19 rows from y 26 to 314 */
 static void draw_info(void)
 {
     gi_row_t r[GI_ROWS];
