@@ -84,6 +84,11 @@ module tb_fullcore;
             bw(32'hF8002000 + off + 4 + 4 * q, wd);
         end
     end endtask
+    task reg_fixed(input [15:0] slot, input [8*20-1:0] nm, input integer tindex); begin       // tindex = the slot's position in data.json (the data table is indexed by position)
+        $sformat(cur_file, "%0s/%0s", dirpath, nm); load_file(cur_file);
+        if (fsize > 0) begin slotfile[slot] = cur_file; slotsize[slot] = fsize; datatable_set(tindex, slot, fsize); $display("host: slot %0d = %0s (%0d bytes)", slot, nm, fsize); end
+        else $display("host: slot %0d (%0s) has no file in the data directory", slot, nm);
+    end endtask
     task srv_open(input [15:0] slot); integer j, last, b; reg [8*300-1:0] nm; begin
         last = -1; for (j = 0; j < nchar; j = j + 1) if (pb[j] == "/") last = j;
         nm = 0; b = 0; for (j = last + 1; j < nchar; j = j + 1) begin nm = {nm[8*299-1:0], pb[j]}; b = b + 1; end
@@ -129,6 +134,26 @@ module tb_fullcore;
     reg trace_on = 0; integer npc = 0, cpu_edges = 0; initial trace_on = $test$plusargs("TRACE");
     initial forever begin #(64'd100000000); if (srv_on && npc < 200 && trace_on) begin npc = npc + 1; $display("cpu: rst=%b clk edges=%0d flushPending=%b flushCtr=%h booted=%b pcReg=%h iCYC=%b iADR=%h dCYC=%b | haltIt=%b lineLoader_valid=%b fetchPc_valid=%b stage0_valid=%b flush=%b fetchValid=%b | irq_ext=%h wdog_irq=%b exc=%b intJump=%b hadExc=%b MIE=%b mtvec=%h mcause=%h mepc=%h mtval=%h (t = %0d us)", dut.u_soc.rst, cpu_edges, dut.u_soc.cpu.IBusCachedPlugin_cache.lineLoader_flushPending, dut.u_soc.cpu.IBusCachedPlugin_cache.lineLoader_flushCounter, dut.u_soc.cpu.IBusCachedPlugin_fetchPc_booted, dut.u_soc.cpu.IBusCachedPlugin_fetchPc_pcReg, dut.u_soc.iCYC, {dut.u_soc.iADR, 2'b00}, dut.u_soc.dCYC, dut.u_soc.cpu.IBusCachedPlugin_cache_io_cpu_prefetch_haltIt, dut.u_soc.cpu.IBusCachedPlugin_cache.lineLoader_valid, dut.u_soc.cpu.IBusCachedPlugin_fetchPc_output_valid, dut.u_soc.cpu.IBusCachedPlugin_iBusRsp_stages_0_output_valid, dut.u_soc.cpu.IBusCachedPlugin_iBusRsp_flush, dut.u_soc.cpu.IBusCachedPlugin_cache.io_cpu_fetch_isValid, dut.u_soc.irq_ext, dut.u_soc.wdog_irq, dut.u_soc.cpu.CsrPlugin_exception, dut.u_soc.cpu.CsrPlugin_interruptJump, dut.u_soc.cpu.CsrPlugin_hadException, dut.u_soc.cpu.CsrPlugin_mstatus_MIE, {dut.u_soc.cpu.CsrPlugin_mtvec_base, 2'b00}, dut.u_soc.cpu.CsrPlugin_mcause_exceptionCode, dut.u_soc.cpu.CsrPlugin_mepc, dut.u_soc.cpu.CsrPlugin_mtval, $time / 1000000); end end
     always @(posedge dut.u_soc.clk) cpu_edges = cpu_edges + 1;
+    // ---- issue 026: the reset history of the CPU and, from its exit, the first 400 clocks of its fetch (+RSTTRACE)
+    reg rsttrace = 0; initial rsttrace = $test$plusargs("RSTTRACE"); integer rt_n = 0; reg rst_q = 1'bx;
+    always @(dut.u_soc.rst) if (rsttrace) begin $display("rst: u_soc.rst = %b at %0t ps", dut.u_soc.rst, $time); end
+    always @(posedge dut.u_soc.clk) begin
+        rst_q <= dut.u_soc.rst;
+        if (rsttrace && rst_q === 1'b1 && dut.u_soc.rst === 1'b0) rt_n = 400;
+        if (rsttrace && rt_n > 0) begin rt_n = rt_n - 1;
+            if (rt_n > 395 || dut.u_soc.cpu.IBusCachedPlugin_cache.lineLoader_flushCounter >= 8'h7C || dut.u_soc.cpu.IBusCachedPlugin_cache.lineLoader_flushCounter < 8'h02) $display("fetch: pcReg=%h fvalid=%b isValid=%b data=%h phys=%h memcmd=%b iCYC=%b iACK=%b haltIt=%b flushPend=%b flushCtr=%h loader_valid=%b decInstr=%h exc=%b", dut.u_soc.cpu.IBusCachedPlugin_fetchPc_pcReg, dut.u_soc.cpu.IBusCachedPlugin_fetchPc_output_valid,
+                dut.u_soc.cpu.IBusCachedPlugin_cache_io_cpu_fetch_isValid, dut.u_soc.cpu.IBusCachedPlugin_cache_io_cpu_fetch_data, dut.u_soc.cpu.IBusCachedPlugin_cache_io_cpu_fetch_physicalAddress, dut.u_soc.cpu.IBusCachedPlugin_cache_io_mem_cmd_valid,
+                dut.u_soc.iCYC, dut.u_soc.iACK, dut.u_soc.cpu.IBusCachedPlugin_cache_io_cpu_prefetch_haltIt, dut.u_soc.cpu.IBusCachedPlugin_cache.lineLoader_flushPending, dut.u_soc.cpu.IBusCachedPlugin_cache.lineLoader_flushCounter, dut.u_soc.cpu.IBusCachedPlugin_cache.lineLoader_valid,
+                dut.u_soc.cpu.decode_INSTRUCTION, dut.u_soc.cpu.CsrPlugin_exception);
+            $display("   tags: wrEn=%b wrAddr=%h wrData=%h rdEn=%b rdAddr=%h tag[0]=%h tag[1]=%h tag[127]=%h tagRdPort=%h fetchHit=%b decHit=%b | wtv=%b fire=%b rspv=%b fctr=%h _zz_2_now=%b", dut.u_soc.cpu.IBusCachedPlugin_cache._zz_2, dut.u_soc.cpu.IBusCachedPlugin_cache.lineLoader_write_tag_0_payload_address, dut.u_soc.cpu.IBusCachedPlugin_cache._zz_ways_0_tags_port, dut.u_soc.cpu.IBusCachedPlugin_cache._zz_fetchStage_read_waysValues_0_tag_valid_1, dut.u_soc.cpu.IBusCachedPlugin_cache._zz_fetchStage_read_waysValues_0_tag_valid, dut.u_soc.cpu.IBusCachedPlugin_cache.ways_0_tags[0], dut.u_soc.cpu.IBusCachedPlugin_cache.ways_0_tags[1], dut.u_soc.cpu.IBusCachedPlugin_cache.ways_0_tags[127], dut.u_soc.cpu.IBusCachedPlugin_cache._zz_ways_0_tags_port1, dut.u_soc.cpu.IBusCachedPlugin_cache.fetchStage_hit_valid, dut.u_soc.cpu.IBusCachedPlugin_cache.decodeStage_hit_valid, dut.u_soc.cpu.IBusCachedPlugin_cache.lineLoader_write_tag_0_valid, dut.u_soc.cpu.IBusCachedPlugin_cache.lineLoader_fire, dut.u_soc.cpu.IBusCachedPlugin_cache.io_mem_rsp_valid, dut.u_soc.cpu.IBusCachedPlugin_cache.lineLoader_flushCounter, dut.u_soc.cpu.IBusCachedPlugin_cache._zz_2);
+        end
+    end
+    // ---- the CPU self-check (issue 026): after the host's reset exit the CPU must run the firmware: no exception taken, and the PC must leave the reset area
+    integer exc_n = 0, pc_max = 0; reg run_on = 0;
+    always @(posedge dut.u_soc.clk) if (srv_on) begin
+        if (dut.u_soc.cpu.CsrPlugin_exception === 1'b1) exc_n = exc_n + 1;
+        if (dut.u_soc.cpu.IBusCachedPlugin_fetchPc_pcReg > pc_max && dut.u_soc.cpu.IBusCachedPlugin_fetchPc_pcReg < 32'h00100000) pc_max = dut.u_soc.cpu.IBusCachedPlugin_fetchPc_pcReg;
+    end
     // ---- the boot and the scenario ----
     task wait_us(input integer us); reg [63:0] t; begin t = us; t = t * 64'd1000000; #(t); end endtask   // 64 bit: 36 ms in ps overflows an integer
     initial begin #(WDPS); $display("host: WATCHDOG at 60 ms of simulated time, stuck before the scenario (status %0d, target %h)", hres, rdv); $fflush(); $finish; end
@@ -157,6 +182,8 @@ module tb_fullcore;
         // wait for the core's ready-to-run, then leave reset
         i = 0; br(32'hF8001000); while (rdv[31:16] != 16'h636D && i < 5000) begin wait_us(1); br(32'hF8001000); i = i + 1; end
         $display("host: target says %h at %0t", rdv, $time); $fflush();
+        // the slots with a fixed file name in data.json (dist/Cores/.../data.json: 4 tau-loading.bin, 5 tau-library.tdb, 6 tau-cold.bin, 8 tau-assets.bin) are known to the host from the start: it opens them itself
+        reg_fixed(4, "tau-loading.bin", 2); reg_fixed(5, "tau-library.tdb", 3); reg_fixed(6, "tau-cold.bin", 4); reg_fixed(8, "tau-assets.bin", 5);
         bw(32'hF8001000, 32'h6F6B0000); hcmd(16'h0011, 0, 0, 0);
         $display("host: reset released at %0t", $time); $fflush();
         srv_on = 1;
@@ -164,6 +191,8 @@ module tb_fullcore;
         else if (scenario == 2) begin wait_us(maxus); grab; end                       // one frame after maxus
         else if (scenario == 1) begin repeat (12) begin wait_us(maxus / 12); $fflush(); grab; $fflush(); end end
         $display("host: done at %0t: %0d target commands, %0d reads, %0d opens, %0d frames", $time, target_cmds, reads_done, opens_done, frames);
+        $display("cpu check: %0d exceptions after reset exit, highest fetch address %h", exc_n, pc_max);
+        if (exc_n == 0 && pc_max > 32'h100) $display("FULLCORE CPU PASSED"); else $display("FULLCORE CPU FAILED");
         $finish;
     end
 endmodule

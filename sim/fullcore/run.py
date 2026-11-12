@@ -25,8 +25,10 @@ def main():
         env = dict(os.environ, APP="gallery", TGY="1", TAU_BUILD_OUT=str(ROOT / "work/fullcore_fw")); subprocess.run(["bash", "fw2/build_gallery.sh"], env=env, check=True, capture_output=True)
         rom = "work/fullcore_fw/gallery-app/tau.rom"
     cmd = ["vvp", "-n", str(vvp.resolve()), f"+ROM={Path(rom).resolve()}", f"+DIR={Path(a.dir or '.').resolve()}", f"+OUT={Path(a.out).resolve()}", f"+MAXUS={a.maxus}", f"+SCRIPT={a.script}"] + a.extra
-    out = open(Path(a.log).resolve(), "w") if a.log else None
-    r = subprocess.run(cmd, stdout=out or sys.stdout, stderr=subprocess.STDOUT, cwd=ROOT / "build/fullcore")             # cwd: the Altera RAM model reads ./apf/build_id.ver
+    r = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT / "build/fullcore")                                   # cwd: the Altera RAM model reads ./apf/build_id.ver
+    if a.log: Path(a.log).write_text(r.stdout + r.stderr)
+    else: sys.stdout.write(r.stdout + r.stderr)
+    if "FULLCORE CPU PASSED" not in r.stdout: print("FULLCORE: the CPU check did not pass (see docs/issues/026)"); sys.exit(r.returncode or 1)
     sys.exit(r.returncode)
 
 if __name__ == "__main__": main()

@@ -1134,3 +1134,8 @@ test-formal-mux:
 .PHONY: test-formal-tile
 test-formal-tile:
 	python3 formal/run_formal.py tile
+
+# Tau Gallery: the whole-core simulation (needs work/quartus_sim_lib/altera_mf.v, Intel's file, never committed; ~3 min): the real CPU must run the firmware (FULLCORE CPU PASSED), docs/FULLCORE_SIM.md. Not in gate.
+.PHONY: test-fullcore
+test-fullcore:
+	python3 sim/fullcore/run.py --dir work/fullcore_data --maxus 1500 --script 0
