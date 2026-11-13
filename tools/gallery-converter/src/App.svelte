@@ -134,7 +134,7 @@
     {#if format === 'v0'}
     <label class="opt"><input type="checkbox" bind:checked={levels} disabled={busy} /><span>Zoom levels (pan and zoom)<small>Large pictures keep their detail for zooming. About 45 MB more on the card for each large picture; small ones add nothing.</small></span></label>
     {:else}
-    <p class="note">Zoom comes with the picture: a picture larger than the screen also gets its full-size level for panning and zooming, no setting needed. A very large picture takes a long time to convert (10 to 20 minutes for 100 megapixels on the test machine, so far one picture tried).</p>
+    <p class="note">Zoom comes with the picture: a picture larger than the screen also gets its full-size level for panning and zooming, no setting needed. A very large dense photograph can take a few minutes to convert (about 2 minutes for 100 megapixels on an 8-core machine); the converter uses the machine's cores.</p>
     <details class="adv"><summary>Quality ({fitQuality} fit view, {quality} zoom level)</summary>
       <label class="opt"><span>Fit view quality: {fitQuality}<small>The picture as first shown (JPEG-style quality, 1 to 100).</small><input type="range" min="50" max="100" step="1" bind:value={fitQuality} disabled={busy} aria-label="Fit view quality" /></span></label>
       <label class="opt"><span>Zoom level quality: {quality}<small>Only for pictures that are not JPEG (a JPEG's own data is kept as it is, with no loss).</small><input type="range" min="50" max="100" step="1" bind:value={quality} disabled={busy} aria-label="Zoom level quality" /></span></label>

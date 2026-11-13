@@ -42,6 +42,7 @@ def main(argv=None):
     ap.add_argument("--quality", type=int, default=92, help="v1: the quality of a full-resolution level encoded from a non-JPEG picture")
     ap.add_argument("--fit-quality", type=int, default=90, help="v1: the quality of the fit level")
     ap.add_argument("--card-layout", action="store_true", help="write OUT as the card's tree: the pictures in OUT/<card-dir>, the index in the folder above it")
+    ap.add_argument("--jobs", type=int, default=0, help="v1: processes that code the tiles (0: automatic, the machine's cores up to 8; 1: one). The file is the same whatever the number; a dense 100 megapixel photo takes about 18 minutes on one process")
     ap.add_argument("--merge", action="store_true", help="keep the pictures the output library already has; a picture with the same name is replaced")
     a = ap.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"): sys.stdout.reconfigure(line_buffering=True)        # an event reaches a reader the moment it is printed, not when the run ends (the app shows progress from them)
@@ -76,7 +77,7 @@ def main(argv=None):
         except Exception as e:                                       # a file that is not a readable picture is skipped, and said so
             print(json.dumps({"event": "skip", "file": p.name, "error": str(e)})); skipped += 1; continue
         used.add(stem.lower())
-        if a.format == "v1": data, thumb, size = tgy_make.canvas_container(p, prep, a.quality, a.fit_quality, a.upscale)
+        if a.format == "v1": data, thumb, size = tgy_make.canvas_container(p, prep, a.quality, a.fit_quality, a.upscale, jobs=a.jobs)
         else: data = tgy.pack_tgy(canvas, rect, thumb, size, levels)
         write_atomic(photos / (stem + ".tgy"), data); old.pop((stem + ".tgy").lower(), None)           # (a kept picture of the same name is replaced)
         entries.append(dict(path=path, name=name_of(shown), size=len(data), width=size[0], height=size[1])); thumbs.append(thumb)

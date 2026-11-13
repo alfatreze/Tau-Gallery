@@ -41,7 +41,29 @@ def tile_grid(w, h, sub):
 def pack_level(e):
     return struct.pack("<IIHHHHBBBBBBBBIIIIII", e["w"], e["h"], *e["rect"], e["layout"], e["mode"], e["pixfmt"], e["kind"], e["qy"], e["qc"], e["tile_log2"], e["flags"], e["data_off"], e["data_len"], e["index_off"], e["index_len"], e["index_crc"], 0)
 
-def write_container(width, height, orientation, thumb565, levels):
+def _encode_one(t): return V.encode_tile(t[0], t[1])
+
+def auto_jobs():
+    """The processes the encoder uses when asked for 'automatic' (0): the machine's cores up to 8 (more gain little: the picture's decode and the file assembly stay serial)."""
+    import os
+    return max(1, min(os.cpu_count() or 1, 8))
+
+def encode_tiles(tiles, jobs=0):
+    """The stream of each (grids, shapes) tile, in the order given. Every tile is coded as a stream of its own (the symbol layer's contexts start afresh at a tile), so coding them on several processes gives the SAME bytes as one process
+    (tested); jobs 0 = automatic, 1 = this process only. The tiles are handed over in windows of 16 per process so a very large picture never has all its tiles waiting in memory at once."""
+    jobs = auto_jobs() if not jobs else jobs
+    if jobs <= 1:
+        for t in tiles: yield _encode_one(t)
+        return
+    import multiprocessing
+    with multiprocessing.Pool(jobs) as pool:
+        window = []
+        for t in tiles:
+            window.append(t)
+            if len(window) >= jobs * 16: yield from pool.map(_encode_one, window, chunksize=4); window = []
+        if window: yield from pool.map(_encode_one, window, chunksize=4)
+
+def write_container(width, height, orientation, thumb565, levels, jobs=0):
     """levels: list of dicts: kind, pic (a jpegcoef.Jpeg-like coefficient picture; for KIND_FIT_RAW the RGB888 canvas bytes under 'raw'), rect (x, y, w, h placement in the 800 x 720 canvas for the fit levels, else (0, 0, w, h)).
     The level order in the file is the list order (put the fit level first: it is the first thing a viewer reads)."""
     assert len(thumb565) == THUMB_BYTES and 0 < len(levels) <= MAX_LEVELS
@@ -59,8 +81,8 @@ def write_container(width, height, orientation, thumb565, levels):
                 e[key] = tables.index(t)
             assert len(tables) <= MAX_TABLES
             streams = []; index = b""; pos = 0
-            for ty, tx, grids, shapes in R.split_tiles(pic):
-                s = V.encode_tile(grids, shapes); streams.append(s); index += struct.pack("<III", pos, len(s), crc(s)); pos += len(s)
+            for s in encode_tiles(((grids, shapes) for ty, tx, grids, shapes in R.split_tiles(pic)), jobs):
+                streams.append(s); index += struct.pack("<III", pos, len(s), crc(s)); pos += len(s)
             blobs.append((index, b"".join(streams))); e["index_crc"] = crc(index)
         entries.append(e)
     tables_blob = struct.pack("<H", len(tables)) + b"".join(struct.pack("<64H", *t) for t in tables)
