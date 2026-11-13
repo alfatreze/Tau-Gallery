@@ -33,7 +33,7 @@ int tgy_level(const tgy_file_t *f, uint32_t i, tgy_level_t *l)
     const uint8_t *e = f->hdr + f->level_off + i * TH_LEVEL;
     const uint32_t w = th32(e), h = th32(e + 4), layout = e[16], mode = e[17], fmt = e[18], kind = e[19], qy = e[20], qc = e[21], log2 = e[22];
     if (layout != 1u || mode != 1u || log2 != 7u) return TH_UNSUPPORTED;
-    if (fmt != 0u && fmt != 2u) return TH_UNSUPPORTED;                             /* 4:4:4 needs the larger chroma memory (C444) this core does not have */
+    if (fmt > 2u) return TH_UNSUPPORTED;                                           /* 0 grey, 1 4:4:4 (the core's decoder is built with C444, K6), 2 4:2:0 */
     if (w < 1u || h < 1u || w > 65535u || h > 65535u) return TH_RANGE;
     const uint32_t cols = (w + TH_TILE - 1u) / TH_TILE, rows = (h + TH_TILE - 1u) / TH_TILE;
     const uint32_t doff = th32(e + 24), dlen = th32(e + 28), ioff = th32(e + 32), ilen = th32(e + 36);

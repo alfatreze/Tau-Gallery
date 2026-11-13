@@ -54,10 +54,10 @@ def canvas_container(path, prep, quality=92, fit_quality=90, upscale=False, full
             if tgy.needs_srgb(src_img): raise ValueError("a wide-gamut profile: the fit view is converted to sRGB, so the zoom level is encoded from the converted picture to keep the colours")
             if orient != 1: raise ValueError("an EXIF orientation: the zoom level is encoded from the upright picture (the hardware decoder draws a level as it is stored; a phone's portrait photo is rotated by its tag)")
             from PIL import JpegImagePlugin
-            if src_img.mode != "L" and JpegImagePlugin.get_sampling(src_img) != 2: raise ValueError("not 4:2:0: the core's decoder has no 4:4:4 (and 4:2:2 is not in the container): encoded again as 4:2:0")
+            if src_img.mode != "L" and JpegImagePlugin.get_sampling(src_img) not in (0, 2): raise ValueError("not 4:2:0 or 4:4:4 (4:2:2 and the rest are not in the container): encoded again as 4:2:0")
             j = jpegcoef.read_jpeg(data); pic = j
             if (j.width, j.height) not in ((prep.width, prep.height), (prep.height, prep.width)): pic = None
-            if pic is not None and C.sub_of(pic) == C.SUB_444: pic = None                      # backstop: a level that is not 4:2:0 or grey is never kept
+            if pic is not None and C.sub_of(pic) not in (C.SUB_444, C.SUB_420, C.SUB_GREY): pic = None   # backstop: only the formats the core's decoder runs (K6: 4:4:4 included) are kept
         except (ValueError, IndexError, StopIteration, KeyError, AssertionError, OSError): pic = None
         if pic is None: orient = 1; pic = E.encode_rgb(np.asarray(prep), quality, 2)
         levels.append(dict(kind=C.KIND_FULL, pic=pic, rect=(0, 0, prep.width, prep.height)))

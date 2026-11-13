@@ -77,7 +77,7 @@
 /* Interrupts (bitstream built with TAU_IRQ; reads 0 without it): the pending register drives the CPU's external interrupt inputs; the CPU's own mask CSR (0xBC0) enables each line and the
  * pending lines are readable in CSR 0xFC0. fw2/platform/start.S has the trap path (irq_enable, irq_disable, and a weak irq_handler(pending) that the firmware may define). */
 #define R_IRQ_PEND   0x80000214u        /* read: pending sources (sticky); write 1 to a bit to clear it. 0 data-slot command done, 1 vsync rising, 2 landing path idle (rising), 3 a video mode switch completed, 4 the TGY decoder finished or failed (rising; TAU_TGY, rev 29) */
-/* Hardware TGY decoder (TAU_TGY, CORE_VERSION rev 29 = 0x4D50331D; docs/TGY_HW_DMA.md; the driver is fw2/gallery/tgy_hw.c). Reads 0 on a core without it. */
+/* Hardware TGY decoder (TAU_TGY, CORE_VERSION rev 30 = 0x4D50331E; docs/TGY_HW_DMA.md; the driver is fw2/gallery/tgy_hw.c). Reads 0 on a core without it. */
 #define R_TGY_CTRL   0x80000220u        /* write: bit 0 START_TILE, 1 LOAD_TABLES, 2 ABORT, 3 CLEAR (done, err, rejected) */
 #define R_TGY_STATUS 0x80000224u        /* read: [0] busy, [1] done, [2] err, [3] tables loaded, [4] a start was rejected, [11:8] error code (1 decoder or watchdog, 2 tile timeout, 15 abort), [31] present */
 #define R_TGY_SRC    0x80000228u        /* SDRAM byte address of the tile stream (any byte) */

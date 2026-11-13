@@ -60,6 +60,7 @@ module tau_gfx #(
     // Mutation-test hooks only (make test-rtl-fb-mutation): see tau_talos.sv (OP_CORNERS). Never set outside that test.
     parameter BUG_CORNERS_FILL = 0,
     parameter BUG_CORNERS_BG = 0,
+    parameter BUG_DSB = 0,
     // Mutation-test hook only (-PBUG_IGNORE_BAR_HI=1, make test-rtl-fb-mutation): 1 forces
     // pre_bar_lit_raw's high 2 bits (cmd_glyph_hi) to always read 0, degenerating BAR's lit-row
     // count back to its old 7-bit-only behaviour -- proves the test actually exercises a lit count
@@ -267,6 +268,7 @@ module tau_gfx #(
         .BUG_IGNORE_RC_CUT(BUG_IGNORE_RC_CUT),
         .BUG_CORNERS_FILL(BUG_CORNERS_FILL),
         .BUG_CORNERS_BG(BUG_CORNERS_BG),
+        .BUG_DSB(BUG_DSB),
         .BUG_IGNORE_BAR_HI(BUG_IGNORE_BAR_HI),
         .DBUF_ENABLE(DBUF_ENABLE),
         .FONT_RAM_ENABLE(FONT_RAM_ENABLE),

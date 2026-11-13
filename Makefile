@@ -226,7 +226,12 @@ test-rtl-fb-mutation: | $(RTL_BUILD_DIR)
 	run -Ptb_mp3_fb.BUG_IGNORE_RC_CUT=1; \
 	run -Ptb_mp3_fb.BUG_IGNORE_BAR_HI=1; \
 	run -Ptb_mp3_fb.BUG_CORNERS_FILL=1; \
-	run -Ptb_mp3_fb.BUG_CORNERS_BG=1
+	run -Ptb_mp3_fb.BUG_CORNERS_BG=1; \
+	run -Ptb_mp3_fb.BUG_DSB=3; \
+	run -Ptb_mp3_fb.BUG_DSB=4; \
+	run -Ptb_mp3_fb.BUG_DSB=5; \
+	run -Ptb_mp3_fb.BUG_DSB=6; \
+	run -Ptb_mp3_fb.BUG_DSB=7
 
 # PHASE_F_SPEC.md section 12: software reference renderer + pixel-diff
 # fixtures, run the whole scene through the RTL sim and through
@@ -1097,7 +1102,7 @@ test-rtl-tgy-unit:
 	for c in 0 1; do iverilog -g2012 -P tb_tau_tgy_unit.C444=$$c -o $(RTL_BUILD_DIR)/unit_c$$c.out $(TGY_UNIT_SRC) && vvp $(RTL_BUILD_DIR)/unit_c$$c.out +VEC=$(RTL_BUILD_DIR)/dec_vec.hex | /usr/bin/grep -E "^tile|PASSED|FAILED" | tee $(RTL_BUILD_DIR)/unit_c$$c.log; /usr/bin/grep -q "^UNIT PASSED" $(RTL_BUILD_DIR)/unit_c$$c.log || exit 1; done
 	for b in 1 2 3 4 5 6; do iverilog -g2012 -P tb_tau_tgy_unit.C444=1 -P tb_tau_tgy_unit.BUG=$$b -o $(RTL_BUILD_DIR)/unit_m$$b.out $(TGY_UNIT_SRC) && if vvp $(RTL_BUILD_DIR)/unit_m$$b.out +VEC=$(RTL_BUILD_DIR)/dec_vec.hex | /usr/bin/grep -q "^UNIT PASSED"; then echo "MUTANT SURVIVED: $$b"; exit 1; else echo "mutant killed: $$b"; fi; done
 
-# Tau Gallery: tau_soc.v with TGY_ENABLE and the real VexRiscv running sim/fw_tgy/main.c: the MMIO window 0x220-0x24C, the interrupt source 4 and CORE_VERSION rev 29 (-DTAU_TGY) against tau_tgy_unit and the port model; the picture memory compared byte for byte.
+# Tau Gallery: tau_soc.v with TGY_ENABLE and the real VexRiscv running sim/fw_tgy/main.c: the MMIO window 0x220-0x24C, the interrupt source 4 and CORE_VERSION rev 30 (-DTAU_TGY) against tau_tgy_unit and the port model; the picture memory compared byte for byte.
 TGY_SOC_SRC = sim/tb_tgy_soc.v build/rtl/tau_soc_sim.v src/fpga/rtl/VexRiscv_Full.v src/fpga/core/pcm_fifo.v src/fpga/core/tau_halcyon.sv src/fpga/core/tau_sdram_addr_decode.sv src/fpga/core/tau_sdram_wb_adapter.sv src/fpga/core/tau_cdc_sync1.sv src/fpga/core/tau_clut_wr.sv src/fpga/core/tau_cymo_resamp.sv src/fpga/core/tau_cymo_feed.sv src/fpga/core/tau_pcm_ring.sv sim/sp_model.v src/fpga/core/tau_tgy_unit.sv src/fpga/core/tau_tgy_regs.sv src/fpga/core/tau_tgy_dma.sv src/fpga/core/tau_tgy_dcore.sv src/fpga/core/tau_tgy_wfifo.sv src/fpga/core/tau_cdc_gray_bus.sv src/fpga/core/tau_tgy_dec.sv src/fpga/core/tau_tgy_tile.sv src/fpga/core/tau_tgy_ent.sv src/fpga/core/tau_tgy_idct.sv src/fpga/core/tau_tgy_recon.sv src/fpga/core/tau_hist_if.sv src/fpga/core/tau_hist.sv
 .PHONY: test-rtl-tgy-soc
 test-rtl-tgy-soc: $(RTL_BUILD_DIR)/tau_soc_sim.v

@@ -24,7 +24,7 @@ static void run_tile(void)
     if (fmt == 2) { rows[0] = 2 * ((h + 15) / 16); cols[0] = 2 * ((w + 15) / 16); rows[1] = rows[2] = (h + 15) / 16; cols[1] = cols[2] = (w + 15) / 16; }
     else { rows[0] = rows[1] = rows[2] = (h + 7) / 8; cols[0] = cols[1] = cols[2] = (w + 7) / 8; }
     (void)nc; emit_t e = { hw.dst, hw.pitch };
-    int err = (fmt == 1 || w == 0 || h == 0 || w > 128 || h > 128) ? 1 : tgy_tile_rgb(&dec, &planes, mem + hw.src, hw.len, fmt, rows, cols, w, h, hw.ty, hw.tc, emit, &e);
+    int err = (fmt == 3 || w == 0 || h == 0 || w > 128 || h > 128) ? 1 : tgy_tile_rgb(&dec, &planes, mem + hw.src, hw.len, fmt, rows, cols, w, h, hw.ty, hw.tc, emit, &e);
     hw.status = (hw.status & ~0x6u) | (err ? 4u : 2u) | (err ? (1u << 8) : 0u);
 }
 uint32_t REG_RD(uint32_t a)

@@ -62,8 +62,8 @@ def suite(C, MK, tgy, tmp):
     def full_fmt(sub, grey=False, kind=1):
         f = tmp / f"s{sub}{grey}.jpg"; im = picture(1000, 900, 9); (im.convert("L") if grey else im).save(f, quality=90, **({} if grey else {"subsampling": sub}))
         data, _, _ = MK.canvas_container(f, tgy.prepare(Image.open(f)), 92, 90, False, jobs=1); c = C.Container(data); return [e["pixfmt"] for e in c.levels if e["kind"] == kind]
-    check("a 4:4:4 JPEG's zoom level is stored as 4:2:0 (the core's decoder has no 4:4:4); 4:2:0 stays 4:2:0; grey stays grey; 4:2:2 is stored as 4:2:0 too",
-          full_fmt(0) == [C.SUB_420] and full_fmt(2) == [C.SUB_420] and full_fmt(0, grey=True) == [C.SUB_GREY] and full_fmt(1) == [C.SUB_420])
+    check("a 4:4:4 JPEG's zoom level stays 4:4:4 (K6: the core's decoder has C444); 4:2:0 stays 4:2:0; grey stays grey; 4:2:2 is stored as 4:2:0",
+          full_fmt(0) == [C.SUB_444] and full_fmt(2) == [C.SUB_420] and full_fmt(0, grey=True) == [C.SUB_GREY] and full_fmt(1) == [C.SUB_420])
     # colour: a JPEG whose ICC profile is not sRGB has its fit view converted to sRGB, so its zoom level must come from the converted picture (not the raw coefficients) or the colours jump on zoom
     from PIL import ImageEnhance, ImageCms
     wide = wide_profile(); srgb_icc = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
@@ -93,11 +93,11 @@ def suite(C, MK, tgy, tmp):
         ex = _I.Exif(); ex[0x0112] = tag; ft = tmp / f"rot{tag}.jpg"; picture(1100, 700, 18).save(ft, "JPEG", quality=85, subsampling=2, exif=ex); pt = tgy.prepare(_I.open(ft))
         ct = C.Container(MK.canvas_container(ft, pt, 92, 90, False, jobs=1)[0]); fl = [e for e in ct.levels if e["kind"] == 1][0]
         check(f"orientation {tag}: the zoom level has the upright size {pt.width} x {pt.height} and the header orientation 1", (fl["w"], fl["h"]) == (pt.width, pt.height) and ct.orientation == 1)
-    # speed: the coefficient read is the slow part, and it is skipped for every case that is encoded again (4:4:4, rotated, wide-gamut, not a JPEG)
+    # speed: the coefficient read is the slow part, and it is skipped for every case that is encoded again (4:2:2, rotated, wide-gamut, not a JPEG)
     calls = []; real_read = MK.jpegcoef.read_jpeg
     MK.jpegcoef.read_jpeg = lambda data: (calls.append(1), real_read(data))[1]
     try:
-        for label, path_, want in (("4:2:0", tmp / "s2False.jpg", 1), ("4:4:4", tmp / "s0False.jpg", 0), ("rotated", fr, 0), ("wide-gamut", tmp / "icc_wide.jpg", 0), ("PNG", png, 0)):
+        for label, path_, want in (("4:2:0", tmp / "s2False.jpg", 1), ("4:4:4", tmp / "s0False.jpg", 1), ("4:2:2", tmp / "s1False.jpg", 0), ("rotated", fr, 0), ("wide-gamut", tmp / "icc_wide.jpg", 0), ("PNG", png, 0)):
             calls.clear(); MK.canvas_container(path_, tgy.prepare(Image.open(path_)), 92, 90, False, jobs=1); check(f"the JPEG coefficient read happens {'once' if want else 'not at all'} for a {label} picture (it is skipped when the level is encoded again)", len(calls) == want)
     finally: MK.jpegcoef.read_jpeg = real_read
     import multiprocessing
@@ -119,11 +119,8 @@ if __name__ == "__main__":
                            ("no profile counts as wide-gamut", "needs_srgb(img):\n", "needs_srgb(img):\n    return True\n"),
                            ("a wide-gamut profile is never recognised", "return _icc_profile(img) is not None", "return False"),
                            ("a rotated JPEG keeps its coefficients (and the tag)", 'if orient != 1: raise ValueError("an EXIF orientation', 'if False: raise ValueError("an EXIF orientation'),
-                           ("the subsampling is not told from the header (the coefficients are read first)", 'if src_img.mode != "L" and JpegImagePlugin.get_sampling(src_img) != 2: raise ValueError(', 'if False: raise ValueError('),
-                           ("a PNG is read as a JPEG", 'if src_img.format != "JPEG": raise ValueError(', 'if False: raise ValueError('),
-                           ("a 4:4:4 JPEG keeps its 4:4:4 level", "if pic is not None and C.sub_of(pic) == C.SUB_444: pic = None", "pass"),
-                           ("a 4:2:0 JPEG is encoded again as well", "if pic is not None and C.sub_of(pic) == C.SUB_444: pic = None", "if pic is not None: pic = None"),
-                           ("a grey JPEG is encoded again as well", "if pic is not None and C.sub_of(pic) == C.SUB_444: pic = None", "if pic is not None and C.sub_of(pic) != C.SUB_420: pic = None"),
+                           ("the subsampling is not told from the header (the coefficients are read first)", 'if src_img.mode != "L" and JpegImagePlugin.get_sampling(src_img) not in (0, 2): raise ValueError(', 'if False: raise ValueError('),
+                           ("a 4:4:4 JPEG is encoded again as 4:2:0 (the pre-K6 rule)", 'JpegImagePlugin.get_sampling(src_img) not in (0, 2): raise ValueError(', 'JpegImagePlugin.get_sampling(src_img) != 2: raise ValueError('),
                            ("the windows come back reversed", "if len(window) >= jobs * 16: yield from pool.map(_encode_one, window, chunksize=4); window = []", "if len(window) >= jobs * 16: yield from reversed(pool.map(_encode_one, window, chunksize=4)); window = []"),
                            ("the last window is dropped", "        if window: yield from pool.map(_encode_one, window, chunksize=4)\n", ""),
                            ("a full window is dropped", "if len(window) >= jobs * 16: yield from pool.map(_encode_one, window, chunksize=4); window = []", "if len(window) >= jobs * 16: window = []"),

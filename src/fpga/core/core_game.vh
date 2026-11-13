@@ -865,7 +865,7 @@ tau_sdram_dmux u_dmux (
     .s_next(sa_cpu_w_next), .s_idx(sa_cpu_w_idx), .s_wdata(sa_cpu_w_data), .s_be(sa_cpu_w_be),
     .s_r_valid(sa_cpu_r_valid), .s_r_data(sa_cpu_r_data), .s_r_last(sa_cpu_r_last), .s_done(sa_cpu_done)
 );
-tau_tgy_unit #(.C444(0)) u_tgy (
+tau_tgy_unit #(.C444(1)) u_tgy (
     .clk_sys(clk_sys), .rst_sys(cpu_reset), .reg_addr(soc_tgy_addr), .reg_we(soc_tgy_we), .reg_wdata(soc_tgy_wdata), .reg_hit(soc_tgy_hit), .reg_rdata(soc_tgy_rdata), .irq(soc_tgy_irq),
     .clk_mem(clk_sdram), .rst_mem(sa_rst_sdram), .clk_dec(clk_dec),
     .p_valid(td_valid), .p_ready(td_ready), .p_we(td_we), .p_addr(td_addr), .p_len(td_len), .p_next(td_next), .p_idx(td_idx), .p_wdata(td_wdata), .p_be(td_be),

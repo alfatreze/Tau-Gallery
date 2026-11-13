@@ -27,6 +27,7 @@ module tb_mp3_fb;
     parameter BUG_IGNORE_BAR_HI = 0;        // mutation hook: 1 must fail this bench (make test-rtl-fb-mutation)
     parameter BUG_CORNERS_FILL = 0;         // mutation hook: 1 must fail this bench (make test-rtl-fb-mutation)
     parameter BUG_CORNERS_BG = 0;           // mutation hook: 1 must fail this bench (make test-rtl-fb-mutation)
+    parameter BUG_DSB = 0;                  // mutation hook (K2 OP_DSBLIT): 3..7 must fail this bench (make test-rtl-fb-mutation)
 
     reg clk_sdram = 0, clk_sys = 0, clk_vid = 0, reset = 1;
     always #5    clk_sdram = ~clk_sdram;   // 100 MHz
@@ -78,7 +79,7 @@ module tb_mp3_fb;
     tau_gfx #(.BUG_IGNORE_BLIT_STRIDE(BUG_IGNORE_BLIT_STRIDE), .BUG_IGNORE_KEY(BUG_IGNORE_KEY),
              .BUG_SBLIT_NO_SCALE(BUG_SBLIT_NO_SCALE), .BLIT_BLEND_ENABLE(1),
              .BUG_BLEND_ALWAYS_SRC(BUG_BLEND_ALWAYS_SRC),
-             .BUG_IGNORE_RC_CUT(BUG_IGNORE_RC_CUT), .BUG_CORNERS_FILL(BUG_CORNERS_FILL), .BUG_CORNERS_BG(BUG_CORNERS_BG),
+             .BUG_IGNORE_RC_CUT(BUG_IGNORE_RC_CUT), .BUG_CORNERS_FILL(BUG_CORNERS_FILL), .BUG_CORNERS_BG(BUG_CORNERS_BG), .BUG_DSB(BUG_DSB),
              .BUG_IGNORE_BAR_HI(BUG_IGNORE_BAR_HI)) dut (
         .reset(reset), .clk_sys(clk_sys), .clk_sdram(clk_sdram), .clk_vid(clk_vid),
         .cmd_push(cmd_push), .cmd_op(cmd_op), .cmd_addr(cmd_addr),
@@ -194,6 +195,40 @@ module tb_mp3_fb;
             cmd_glyph <= lit9[6:0]; cmd_glyph_hi <= lit9[8:7]; cmd_sx <= 2'd0; cmd_sy <= 2'd0; cmd_push <= 1'b1;
             @(posedge clk_sys);
             cmd_push <= 1'b0;
+        end
+    endtask
+
+
+    // ---- K2: OP_DSBLIT against a plain model (word at address a reads back as a + 1; the output pixel is the per-channel rounded average of the 2 x 2 box at floor(i * den / num)) ----
+    integer dsb_fail = 0;
+    function [15:0] dsb_px(input integer a); dsb_px = (a & 16'hFFFF) + 1; endfunction
+    task dsb_test(input [15:0] src, input integer sw, input integer sh, input [1:0] sxl, input [1:0] syl, input [18:0] dst, input [255:0] name);
+        integer nx, dx, ny, dy, ow, oh, i, j, x0, y0, bad, sr, sg, sb, er, eg, eb;
+        reg [15:0] t0, t1, t2, t3, e;
+        begin
+            nx = (sxl == 0) ? 3 : (sxl == 1) ? 2 : 1;  dx = (sxl == 0) ? 4 : (sxl == 1) ? 3 : (sxl == 2) ? 2 : 3;
+            ny = (syl == 0) ? 3 : (syl == 1) ? 2 : 1;  dy = (syl == 0) ? 4 : (syl == 1) ? 3 : (syl == 2) ? 2 : 3;
+            ow = sw * nx / dx; oh = sh * ny / dy; if (ow > 127) ow = 127; if (oh > 127) oh = 127;
+            rows_written = 0; cmd_fg <= 16'd0; cmd_bg <= src;
+            push(4'd11, dst, sw[8:0], sh[8:0], 7'd0, sxl, syl);
+            wait (rows_written == oh); repeat (60) @(posedge clk_sdram);
+            bad = 0;
+            check(rows_written == oh, {name, ": output rows"});
+            for (j = 0; j < oh; j = j + 1) begin
+                if (row_addr[j] !== dst + j * 512) bad = bad + 1;
+                if (row_len[j] != ow) bad = bad + 1;
+                for (i = 0; i < ow; i = i + 1) begin
+                    x0 = i * dx / nx; y0 = j * dy / ny;
+                    t0 = dsb_px(src + y0 * 512 + x0);       t1 = dsb_px(src + y0 * 512 + x0 + 1);
+                    t2 = dsb_px(src + (y0 + 1) * 512 + x0); t3 = dsb_px(src + (y0 + 1) * 512 + x0 + 1);
+                    sr = t0[15:11] + t1[15:11] + t2[15:11] + t3[15:11];
+                    sg = t0[10:5] + t1[10:5] + t2[10:5] + t3[10:5];
+                    sb = t0[4:0] + t1[4:0] + t2[4:0] + t3[4:0];
+                    er = (sr + 2) >> 2; eg = (sg + 2) >> 2; eb = (sb + 2) >> 2; e = {er[4:0], eg[5:0], eb[4:0]};
+                    if (row_pix[j][i] !== e) begin bad = bad + 1; if (bad < 4) $display("   %0s: out (%0d,%0d) got %04x expected %04x", name, i, j, row_pix[j][i], e); end
+                end
+            end
+            check(bad == 0, {name, ": every pixel, row address and length"});
         end
     endtask
 
@@ -381,6 +416,16 @@ module tb_mp3_fb;
         check(row_pix[1][0] == 16'h7001 && row_pix[1][3] == 16'h7002,
               "SBLIT 2x: row1 = row0 (vert)");
 
+
+        // ---- K2: OP_DSBLIT, the four ratios on each axis, mixed ratios, awkward source sizes ----
+        dsb_test(16'h8000, 12, 8, 2'd0, 2'd0, 19'hA000, "DSBLIT 3:4");
+        dsb_test(16'h2345, 9, 7, 2'd1, 2'd1, 19'hA400, "DSBLIT 2:3");
+        dsb_test(16'h6FF0, 10, 6, 2'd2, 2'd2, 19'hA800, "DSBLIT 1:2");
+        dsb_test(16'h0BA7, 11, 10, 2'd3, 2'd3, 19'hAC00, "DSBLIT 1:3");
+        dsb_test(16'h5A5A, 13, 9, 2'd0, 2'd3, 19'hB000, "DSBLIT 3:4 by 1:3");
+        dsb_test(16'h9C31, 14, 14, 2'd2, 2'd1, 19'hB400, "DSBLIT 1:2 by 2:3");
+        dsb_test(16'hFF00, 96, 12, 2'd1, 2'd0, 19'hB800, "DSBLIT 96 wide 2:3 by 3:4");
+
         // ---- BLIT with alpha blend (B5), DSP mode -------------------------
         // dest 0x3FFF+1=0x4000 (R=8,G=0,B=0, readback model); src offset
         // 0x000F+1=0x0010 (R=0,G=0,B=16). alpha=128 (~50%) makes the DSP
@@ -538,7 +583,7 @@ module tb_mp3_fb;
 
     initial begin
         #500000;
-        $display("TIMEOUT -- engine stalled");
+        $display("TIMEOUT -- engine stalled (rows_written=%0d astate=%0d k=%0d ex=%0d rows_left=%0d)", rows_written, dut.u_talos.astate, dut.u_talos.dsb_k, dut.u_talos.sblit_ex, dut.u_talos.char_rows_left);
         $finish;
     end
 

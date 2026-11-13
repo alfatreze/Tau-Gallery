@@ -12,9 +12,9 @@ typedef struct {
 extern caps_t caps;
 
 /* The CORE_VERSION values this image accepts (192 KB + CLK66 + writable font memory bitstream, rev 27). The same text is in the ROM as TAUFWPAIR (platform.c) for the package checks. */
-#ifdef P2_TGY      /* Tau Gallery on the core with the hardware TGY decoder (rev 29, build_gallery.sh TGY=1; 128 KB RAM) */
-#define P2_CORE_VERSION 0x4D50331Du
-#define P2_CORE_VERSION_HEX "4D50331D"
+#ifdef P2_TGY      /* Tau Gallery on the core with the hardware TGY decoder (rev 30, build_gallery.sh TGY=1; 128 KB RAM) */
+#define P2_CORE_VERSION 0x4D50331Eu
+#define P2_CORE_VERSION_HEX "4D50331E"
 #elif defined(P2_RAM128)   /* Tau Gallery on the 128 KB core (rev 28, build_gallery.sh RAM128=1) */
 #define P2_CORE_VERSION 0x4D50331Cu
 #define P2_CORE_VERSION_HEX "4D50331C"

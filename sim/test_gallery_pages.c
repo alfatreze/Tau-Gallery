@@ -72,7 +72,7 @@ int main(void)
         d.zoom_ms = 0u; d.land_ms = 0u; d.copy_ms = 0u; gi_format(&d, r);
         chk("info: 0 ms is a time, not 'none yet'", !strcmp(r[7].value, "0 MS") && !strcmp(r[8].value, "0 MS") && !strcmp(r[9].value, "0 MS"));
         d.zoom_ms = 4000000000u; gi_format(&d, r); chk("info: a huge time still fits", strlen(r[7].value) <= 27u);
-        { gi_t z = { 0x4D50331Du, 52u, 0x80000003u, 257u, 29696u, 0u, 0 };                                                                          /* the version 1 zoom statistics */
+        { gi_t z = { 0x4D50331Eu, 52u, 0x80000003u, 257u, 29696u, 0u, 0 };                                                                          /* the version 1 zoom statistics */
           gi_format(&z, r); chk("info: tile rows say NONE YET before any tile", !strcmp(r[11].label, "TILES READ") && !strcmp(r[11].value, "NONE YET") && !strcmp(r[12].label, "TILES DECODED") && !strcmp(r[12].value, "NONE YET") && !strcmp(r[16].label, "LONGEST STALL") && !strcmp(r[16].value, "NONE YET") && !strcmp(r[17].label, "ZOOM PIPELINE") && !strcmp(r[17].value, "ON") && !strcmp(r[13].label, "TILE DECODE") && !strcmp(r[13].value, "NONE YET") && !strcmp(r[14].label, "LONGEST PASS") && !strcmp(r[14].value, "NONE YET") && !strcmp(r[15].label, "PAN STALLS") && !strcmp(r[15].value, "NONE YET"));
           z.zt_n = 3u; z.zt_land_sum = 12000u; z.zt_land_max = 9500u; z.zt_dec_n = 3u; z.zt_dec_sum = 6000u; z.zt_dec_max = 3100u; z.zt_pass_max = 21400u; z.zt_catch = 340u; z.zt_moved = 328u; gi_format(&z, r);
           chk("info: TILES READ shows the count, the average and the maximum of the card read", !strcmp(r[11].value, "3 AVG 4.0 MAX 9.5 MS"));

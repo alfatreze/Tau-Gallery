@@ -88,8 +88,9 @@ def suite(exe):
     out, _ = run(exe, "showfull", data); check("a level wider than the canvas is refused by show (TH_RANGE, 5) with no start", "run 5" in out and "starts 0" in out)
     out, got = run(exe, "retry", data); e = c.levels[fit]; plane = np.frombuffer(got, np.uint8).reshape(720, 2400)
     check("a rejected start returns TH_BUSY (9); the retry works (CLEAR removed the sticky flag) and the tile is right", "first 9" in out and "run 0" in out and np.array_equal(plane[ry:ry + 128, rx * 3:(rx + 128) * 3].reshape(128, 128, 3), c.pixels(fit)[:128, :128]))
-    d444 = MK.from_jpeg(TJ.encode(image(700, 500, 24), quality=90, subsampling=0)); out, _ = run(exe, "full", d444)
-    check("a 4:4:4 level is not offered on this core (find: TH_NOLEVEL, 6)", "find 6" in out)
+    d444 = MK.from_jpeg(TJ.encode(image(700, 500, 24), quality=90, subsampling=0)); c444 = C.Container(d444); out, got = run(exe, "full", d444); e = c444.levels[0]
+    pic = np.frombuffer(got, np.uint8).reshape(e["h"] + 1, e["w"] * 3 + 5)[:e["h"], 1:1 + e["w"] * 3].reshape(e["h"], e["w"], 3)
+    check("a 4:4:4 level (K6, the decoder is built with C444) is kept as it is and decodes to the reference", e["pixfmt"] == C.SUB_444 and "run 0" in out and np.array_equal(pic, c444.pixels(0)))
     # 2d. only the first part of the file is resident (the fit level comes first): the fit level shows, the full level is not offered
     data = MK.from_image(image(1000, 900, 21)); c = C.Container(data); fit = [i for i, e in enumerate(c.levels) if e["kind"] == C.KIND_FIT][0]; e = c.levels[fit]
     end = max(e["data_off"] + e["data_len"], e["index_off"] + e["index_len"]); end = (end + 4095) // 4096 * 4096
@@ -129,7 +130,6 @@ MUTANTS = [
     ("a level beyond the resident bytes offered", "    if (ilen != rows * cols * TH_IDX || ioff < TH_HEAD || ioff > f->n || ilen > f->n - ioff) return TH_RANGE;\n    if (doff < TH_HEAD || doff > f->n || dlen > f->n - doff) return TH_RANGE;", "    if (ilen != rows * cols * TH_IDX) return TH_RANGE;"),
     ("absent core not detected", "if (!tgy_hw_present()) return TH_ABSENT;", ""),
     ("START without a separate CLEAR store first", "REG_WR(R_TGY_CTRL, 8u);                                                        /* CLEAR", "/* CLEAR"),
-    ("4:4:4 level accepted", "if (fmt != 0u && fmt != 2u) return TH_UNSUPPORTED;", ""),
     ("level larger than the canvas accepted on show", "if ((uint32_t)l->rx + l->w > GT_CANVAS_W || (uint32_t)l->ry + l->h > GT_CANVAS_H) return TH_RANGE;", ""),
     ("index read failure ignored", "if (!rd(ctx, l->idx_off, l->idx_len, buf)) return TH_SHORT;", ""),
     ("stream length halved", "REG_WR(R_TGY_LEN, len);", "REG_WR(R_TGY_LEN, len / 2u);"),

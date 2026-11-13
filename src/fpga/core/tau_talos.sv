@@ -112,6 +112,9 @@ module tau_talos #(
     // BUG_CORNERS_BG = 1 paints the corners with the foreground colour instead of the background colour. Never set outside that test.
     parameter BUG_CORNERS_FILL = 0,
     parameter BUG_CORNERS_BG = 0,
+    // K2 mutation hook (make test-rtl-fb-mutation): BUG_DSB = 3 the average truncates (no +2),
+    // 4 the lower neighbour is read for the second and third taps too, 5 the row step is at most 1, 6 the column step is at most 1, 7 green is summed from 5 bits. Never set outside that test.
+    parameter BUG_DSB = 0,
     // Mutation-test hook only (-PBUG_IGNORE_BAR_HI=1, make test-rtl-fb-mutation): 1 forces
     // pre_bar_lit_raw's high 2 bits (cmd_glyph_hi) to always read 0, degenerating BAR's lit-row
     // count back to its old 7-bit-only behaviour -- proves the test actually exercises a lit count
@@ -339,6 +342,7 @@ module tau_talos #(
     localparam [3:0] OP_RUN = 4'd0, OP_RECT = 4'd1, OP_CHAR = 4'd2, OP_COPY = 4'd3,
                      OP_BLIT = 4'd4, OP_BAR = 4'd5, OP_SBLIT = 4'd6, OP_CBLIT = 4'd7,
                      OP_RRECT = 4'd8,
+                     OP_DSBLIT = 4'd11,      // K2 (Tau Gallery 1.0): scaled blit DOWN by 3:4, 2:3, 1:2 or 1:3, each output pixel the rounded average of a 2 x 2 source box (RGB565, per channel)
                      OP_CORNERS = 4'd10;     // K3 (Tau Gallery 1.0): only the four corner cuts of an OP_RRECT, painted over what is already there (no main fill)
     // B11 (PHASE_F_SPEC.md section 5): hardware rounded-rect, the first opcode past the original
     // 3-bit field's 0-7 range -- cmd_op widened to 4 bits (the FIFO word already reserved 5 bits
@@ -429,6 +433,8 @@ module tau_talos #(
             default: scale_nd = {3'd1, 3'd3};   // 3x
         endcase
     endfunction
+    wire [5:0] dnd_x = dscale_nd(q_sx);
+    wire [5:0] dnd_y = dscale_nd(q_sy);
     wire [5:0] nd_x = scale_nd(q_sx);
     wire [5:0] nd_y = scale_nd(q_sy);
     wire [8:0] ext_x = scale_ext(q_sx);
@@ -459,6 +465,41 @@ module tau_talos #(
                 default: scaled = {2'd0, src} * 11'd3;
             endcase
             sblit_ext = (scaled > 11'd127) ? 9'd127 : scaled[8:0];
+        end
+    endfunction
+
+    // K2: OP_DSBLIT. The same machinery as OP_SBLIT (sblit_mode, the per-pixel transactions through A_IDLE, the glyph buffer row and the sticky strides) with four reads per output pixel: the
+    // source pixel at the Bresenham column / row and its right, lower and lower-right neighbours (always inside the source, see dsb_dx). The output pixel is the average
+    // of the four per channel of the RGB565 word, rounded half up ((sum + 2) >> 2). The down-ratio of each axis is the 2-bit scale field: 0 = 3:4, 1 = 2:3, 2 = 1:2, 3 = 1:3 (output : source);
+    // the output extent is src * 3 >> 2, floor(src * 2 / 3), src >> 1, floor(src / 3), at most 127. The source position of output column i is floor(i * den / num): the Bresenham here adds den and
+    // steps the source by as many whole num as fit (0..3 in one output pixel), where the enlarging SBLIT steps by at most one.
+    function [5:0] dscale_nd(input [1:0] sel);        // {num, den}
+        case (sel)
+            2'd0:    dscale_nd = {3'd3, 3'd4};
+            2'd1:    dscale_nd = {3'd2, 3'd3};
+            2'd2:    dscale_nd = {3'd1, 3'd2};
+            default: dscale_nd = {3'd1, 3'd3};
+        endcase
+    endfunction
+    function [8:0] dsb_ext(input [8:0] src, input [1:0] sel);
+        reg [19:0] v;
+        begin
+            case (sel)
+                2'd0: v = ({11'd0, src} * 20'd3) >> 2;
+                2'd1: v = (({11'd0, src} << 1) * 20'd171) >> 9;      // floor(x / 3) = (x * 171) >> 9 for x < 512
+                2'd2: v = {11'd0, src} >> 1;
+                default: v = ({11'd0, src} * 20'd171) >> 9;
+            endcase
+            dsb_ext = (v > 20'd127) ? 9'd127 : v[8:0];
+        end
+    endfunction
+    // whole source steps of one output pixel: how many times num fits into (accumulator + den), 0..3
+    function [1:0] dsb_step(input [3:0] total, input [2:0] num);
+        begin
+            if (total >= {1'b0, num} + {1'b0, num} + {1'b0, num}) dsb_step = 2'd3;
+            else if (total >= {1'b0, num} + {1'b0, num})          dsb_step = 2'd2;
+            else if (total >= {1'b0, num})                        dsb_step = 2'd1;
+            else                                                  dsb_step = 2'd0;
         end
     endfunction
 
@@ -581,6 +622,11 @@ module tau_talos #(
     always @(posedge clk_sdram) begin
         q_sblit_out_w <= sblit_ext(cmd_mem_rd[32:24], cmd_mem_rd[7:6]);   // q_w, q_sx
         q_sblit_out_h <= sblit_ext(cmd_mem_rd[23:15], cmd_mem_rd[5:4]);   // q_h, q_sy
+    end
+    reg [8:0] q_dsb_out_w, q_dsb_out_h;
+    always @(posedge clk_sdram) begin
+        q_dsb_out_w <= dsb_ext(cmd_mem_rd[32:24], cmd_mem_rd[7:6]);
+        q_dsb_out_h <= dsb_ext(cmd_mem_rd[23:15], cmd_mem_rd[5:4]);
     end
     wire [8:0] sblit_out_w = q_sblit_out_w;
     wire [8:0] sblit_out_h = q_sblit_out_h;
@@ -929,6 +975,29 @@ module tau_talos #(
     reg        sblit_mode;
     reg [8:0]  sblit_ex;              // current source column, 0..source_w-1
     reg [24:0] sblit_src_row_addr;    // current source ROW's base address
+    // K2 (OP_DSBLIT) state, only meaningful while sblit_mode && dsb_en
+    reg        dsb_en;
+    reg [1:0]  dsb_k;                 // which of the four taps is next: 0 (0,0) 1 (+x,0) 2 (0,+y) 3 (+x,+y)
+    reg [6:0]  dsb_sr, dsb_sb;        // running sums of the taps (5-bit channels)
+    reg [7:0]  dsb_sg;                // (6-bit channel)
+    // no clamp at the last source column / row: the last output pixel's source position is at most src - 2 (den / num >= 4 / 3), so both neighbours always exist
+    wire       dsb_dx = dsb_k[0] || (BUG_DSB == 4 && dsb_k[1]);
+    wire       dsb_dy = dsb_k[1];
+    wire [7:0] dsb_rs = {1'b0, dsb_sr} + {3'd0, p0_q[15:11]};
+    wire [7:0] dsb_gs = dsb_sg + {2'd0, (BUG_DSB == 7) ? {1'b0, p0_q[10:6]} : p0_q[10:5]};
+    wire [7:0] dsb_bs = {1'b0, dsb_sb} + {3'd0, p0_q[4:0]};
+    wire [7:0] dsb_rnd = (BUG_DSB == 3) ? 8'd0 : 8'd2;
+    wire [7:0] dsb_r2 = dsb_rs + dsb_rnd, dsb_g2 = dsb_gs + dsb_rnd, dsb_b2 = dsb_bs + dsb_rnd;
+    wire [15:0] dsb_pix = {dsb_r2[6:2], dsb_g2[7:2], dsb_b2[6:2]};
+    wire [3:0]  dsb_xt  = {1'b0, acc_x} + {1'b0, char_den};
+    wire [1:0]  dsb_xs0 = dsb_step(dsb_xt, char_num);
+    wire [1:0]  dsb_xs  = (BUG_DSB == 6 && dsb_xs0 > 2'd1) ? 2'd1 : dsb_xs0;
+    wire [2:0]  dsb_xa  = dsb_xt[2:0] - ((dsb_xs == 2'd0) ? 3'd0 : (dsb_xs == 2'd1) ? char_num : (dsb_xs == 2'd2) ? {char_num[1:0], 1'b0} : ({char_num[1:0], 1'b0} + char_num));
+    wire [3:0]  dsb_yt  = {1'b0, acc_y} + {1'b0, char_deny};
+    wire [1:0]  dsb_ys0 = dsb_step(dsb_yt, char_numy);
+    wire [1:0]  dsb_ys  = (BUG_DSB == 5 && dsb_ys0 > 2'd1) ? 2'd1 : dsb_ys0;
+    wire [2:0]  dsb_ya  = dsb_yt[2:0] - ((dsb_ys == 2'd0) ? 3'd0 : (dsb_ys == 2'd1) ? char_numy : (dsb_ys == 2'd2) ? {char_numy[1:0], 1'b0} : ({char_numy[1:0], 1'b0} + char_numy));
+    wire [11:0] dsb_ystride = (dsb_ys == 2'd0) ? 12'd0 : (dsb_ys == 2'd1) ? {2'd0, blt_src_stride} : (dsb_ys == 2'd2) ? {1'b0, blt_src_stride, 1'b0} : ({1'b0, blt_src_stride, 1'b0} + {2'd0, blt_src_stride});
 
     // B8 (Phase F, section 5 detailed design) state. cblit_mode selects the
     // one-pixel-at-a-time read path (A_CBLIT_RD/A_CBLIT_WAIT below) over
@@ -1158,6 +1227,7 @@ module tau_talos #(
             key_dst_done <= 1'b0;
             bl_v0 <= 1'b0; bl_v1 <= 1'b0; bl_drain <= 1'b0;
             sblit_mode   <= 1'b0;
+            dsb_en       <= 1'b0; dsb_k <= 2'd0; dsb_sr <= 7'd0; dsb_sg <= 8'd0; dsb_sb <= 7'd0;
             cblit_mode   <= 1'b0;
             rd_ptr <= 0; rd_ptr_g <= 0;
             inflight <= 1'b0; cur_is_fence <= 1'b0;
@@ -1277,7 +1347,7 @@ module tau_talos #(
                     // not just between rows.
                     end else if (sblit_mode && char_rows_left_nz
                                  && !char_row_ready && !bl_drain && can_sdram) begin
-                        p0_addr   <= sblit_src_row_addr + {16'd0, sblit_ex};
+                        p0_addr   <= sblit_src_row_addr + {16'd0, sblit_ex} + (dsb_en ? ({24'd0, dsb_dx} + (dsb_dy ? {15'd0, blt_src_stride} : 25'd0)) : 25'd0);
                         p0_rd_req <= 1'b1;
                         astate    <= A_SBLIT;
 
@@ -1487,6 +1557,29 @@ module tau_talos #(
                                 char_rows_left_nz <= (sblit_out_w != 9'd0) && (sblit_out_h != 9'd0);
                                 sblit_ex <= 9'd0; acc_x <= 3'd0; acc_y <= 3'd0;
                                 copy_cnt <= 8'd0;
+                                dsb_en <= 1'b0;
+                            end
+                            // K2: OP_DSBLIT, see the header comment above dscale_nd. The same set-up as OP_SBLIT with the down ratios, the down extent and the tap state.
+                            OP_DSBLIT: begin
+                                copy_mode  <= 1'b0;
+                                blit_mode  <= 1'b1;
+                                sblit_mode <= 1'b1;
+                                cblit_mode <= 1'b0;
+                                bar2_pending <= 1'b0;
+                                rrect_pending <= 1'b0;
+                                rrect_active  <= 1'b0;
+                                blit_dst_addr      <= blt_dst_base + {6'd0, q_addr};
+                                sblit_src_row_addr <= blt_src_base + {6'd0, {q_fg[2:0], q_bg}};
+                                char_num  <= dnd_x[5:3];
+                                char_den  <= dnd_x[2:0];
+                                char_numy <= dnd_y[5:3];
+                                char_deny <= dnd_y[2:0];
+                                char_w            <= q_dsb_out_w[6:0];
+                                char_rows_left    <= q_dsb_out_h;
+                                char_rows_left_nz <= (q_dsb_out_w != 9'd0) && (q_dsb_out_h != 9'd0);
+                                sblit_ex <= 9'd0; acc_x <= 3'd0; acc_y <= 3'd0;
+                                copy_cnt <= 8'd0;
+                                dsb_en <= 1'b1; dsb_k <= 2'd0; dsb_sr <= 7'd0; dsb_sg <= 8'd0; dsb_sb <= 7'd0;
                             end
                             // Phase F B8 ("B8 detailed design", PHASE_F_SPEC.md section 5): CLUT
                             // blit. Reuses OP_BLIT's own addressing (blit_dst_addr/blit_src_addr,
@@ -1590,7 +1683,11 @@ module tau_talos #(
                         // vertical scaling can be fractional too. SBLIT steps its
                         // OWN source-row address (sblit_src_row_addr, by the sticky
                         // STRIDE) instead of CHAR's font-cell row index (ey).
-                        if (acc_y + char_numy >= char_deny) begin
+                        if (sblit_mode && dsb_en) begin
+                            // K2: the row step is 0..3 source rows
+                            acc_y <= dsb_ya;
+                            sblit_src_row_addr <= sblit_src_row_addr + {13'd0, dsb_ystride};
+                        end else if (acc_y + char_numy >= char_deny) begin
                             acc_y <= acc_y + char_numy - char_deny;
                             if (sblit_mode)
                                 sblit_src_row_addr <= sblit_src_row_addr + {15'd0, blt_src_stride};
@@ -1729,7 +1826,25 @@ module tau_talos #(
                 // the NEXT pixel's read -- never chains a second request
                 // directly from here.
                 A_SBLIT: begin
-                    if (p0_data_available) begin
+                    if (p0_data_available && dsb_en) begin
+                        // K2: sum the four taps; the fourth completes the pixel
+                        p0_end_burst_req <= 1'b1;
+                        astate <= A_IDLE;
+                        if (dsb_k != 2'd3) begin
+                            dsb_k  <= dsb_k + 2'd1;
+                            dsb_sr <= dsb_rs[6:0]; dsb_sg <= dsb_gs; dsb_sb <= dsb_bs[6:0];
+                        end else begin
+                            gb_we = 1'b1; gb_addr = copy_cnt[6:0]; gb_data = dsb_pix;
+                            dsb_k <= 2'd0; dsb_sr <= 7'd0; dsb_sg <= 8'd0; dsb_sb <= 7'd0;
+                            if (copy_cnt == char_w[6:0] - 7'd1) begin
+                                char_row_ready <= 1'b1;
+                            end else begin
+                                copy_cnt <= copy_cnt + 8'd1;
+                                acc_x    <= dsb_xa;
+                                sblit_ex <= sblit_ex + {7'd0, dsb_xs};
+                            end
+                        end
+                    end else if (p0_data_available) begin
                         gb_we = 1'b1; gb_addr = copy_cnt[6:0]; gb_data = p0_q;
                         p0_end_burst_req <= 1'b1;
                         if (copy_cnt == char_w[6:0] - 7'd1) begin
