@@ -134,7 +134,7 @@ def run(workdir, setdir):
     if r.returncode: rc = 1; out += "\nFAIL scenario zoom\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
     global V1SET
     if V1SET is None: V1SET = Path(tempfile.mkdtemp()); make_v1_set(V1SET)
-    for sc in ("v1", "v1nohw", "v1zoom", "v1map", "v1rot"):
+    for sc in ("v1", "v1nohw", "v1zoom", "v1map", "v1rot", "v1mask"):
         r = subprocess.run([str(workdir / "t"), str(V1SET), sc], capture_output=True, text=True, timeout=900)
         if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
         else: out += "\n" + r.stdout
@@ -422,10 +422,10 @@ def mutants(setdir, tail=None):
         ("gallery_app.c", "(rot_pan + ROT_STEP > rot_pan_max ? rot_pan_max : rot_pan + ROT_STEP)", "(rot_pan + ROT_STEP)"),
         ("gallery_app.c", "(rot_pan > ROT_STEP ? rot_pan - ROT_STEP : 0u)", "(rot_pan - ROT_STEP)"),
         ("gallery_app.c", "rot_view(); prev = REG_RD(R_INPUT) & 0xFFFFu; held = 0u; next_tick = cycles(); continue;", "prev = REG_RD(R_INPUT) & 0xFFFFu; held = 0u; next_tick = cycles(); continue;"),
-        ("gallery_app.c", "if (rot_o != 0u && (edge & (KEY_A | KEY_R1))) continue;", ""),
+        ("gallery_app.c", "if ((rot_o != 0u || mask_i != 0u) && (edge & (KEY_A | KEY_R1))) continue;", ""),
         ("gallery_app.c", "sel = n; rot_o = 0u;", "sel = n;"),
         ("gallery_app.c", "            REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16); REG_WR(R_VIEW_BASE, GAL_PLANE_BASE);                                              /* the upright plane (the previous picture may have been turned: the view pointed at the turned plane) */\n", ""),
-        ("gallery_app.c", "    rot_o = 0u;\n    const int r = open_timed(sel, 1);", "    const int r = open_timed(sel, 1);"),
+        ("gallery_app.c", "    rot_o = 0u; mask_i = 0u; mask_painted = 0u;\n    const int r = open_timed(sel, 1);", "    mask_i = 0u; mask_painted = 0u;\n    const int r = open_timed(sel, 1);"),
         ("gallery_app.c", "rot_pan = rot_pan_max / 2u;", "rot_pan = 0u;"),
         ("gallery_app.c", "px = (GT_CANVAS_W - pw) / 2u,", "px = 0u,"),
         ("gallery_app.c", "rot_clear(rows); rot_pan_max", "rot_pan_max"),
@@ -441,6 +441,23 @@ def mutants(setdir, tail=None):
         ("gallery_app.c", "    gfx_text(x, 2, b, DIM, BG);\n", ""),
         ("gallery_app.c", "const uint32_t n = id == GDP_INFO ? gdi_rows(d, m, r) : gds_rows(m, r);", "const uint32_t n = gdi_rows(d, m, r);"),
         ("gallery_app.c", "gdp_t pg; gdp_open(&pg, &m);", "gdp_t pg; m.has &= ~GDM_SHOT; gdp_open(&pg, &m);"),
+    ]
+    muts += [                                                                                                      # the crop masks
+        ("gallery_app.c", "mask_i = gm_next(mask_i);", "mask_i = mask_i + 1u;"),
+        ("gallery_app.c", "mask_p = h > w; }", "mask_p = 0u; }"),
+        ("gallery_app.c", "if ((edge & KEY_START) && !(mask_i && gm_can_turn(mask_i))) continue;", ""),
+        ("gallery_app.c", "if (mask_painted) { const int r = view_reopen();", "if (0) { const int r = view_reopen();"),
+        ("gallery_app.c", "mask_black(base, 0u, GT_CANVAS_W, 0u, y0); mask_black(base, 0u, GT_CANVAS_W, y1, rows);", "mask_black(base, 0u, GT_CANVAS_W, y1, rows);"),
+        ("gallery_app.c", "mask_black(base, 0u, GT_CANVAS_W, y1, rows); mask_black(base, 0u, x0, y0, y1);", "mask_black(base, 0u, x0, y0, y1);"),
+        ("gallery_app.c", "mask_black(base, 0u, x0, y0, y1); mask_black(base, x1, GT_CANVAS_W, y0, y1);", "mask_black(base, x1, GT_CANVAS_W, y0, y1);"),
+        ("gallery_app.c", "mask_black(base, 0u, x0, y0, y1); mask_black(base, x1, GT_CANVAS_W, y0, y1);\n", "mask_black(base, 0u, x0, y0, y1);\n"),
+        ("gallery_app.c", "    mask_painted = 0u;\n    if (rot_o == 0u) { REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16);", "    if (rot_o == 0u) { REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16);"),
+        ("gallery_app.c", "sel = n; rot_o = 0u; mask_i = 0u; mask_painted = 0u;", "sel = n; rot_o = 0u; mask_painted = 0u;"),
+        ("gallery_app.c", "rot_o = gr_turn(rot_o, (edge & KEY_Y) != 0u); mask_i = 0u;", "rot_o = gr_turn(rot_o, (edge & KEY_Y) != 0u);"),
+        ("gallery_app.c", "if ((rot_o != 0u || mask_i != 0u) && (edge & (KEY_A | KEY_R1))) continue;", "if (rot_o != 0u && (edge & (KEY_A | KEY_R1))) continue;"),
+        ("gallery_app.c", "*x = rot_px + (xa < xb ? xa : xb);", "*x = (xa < xb ? xa : xb);"),
+        ("gallery_app.c", "const uint32_t base = rot_o ? GAL_ROT_BASE : GAL_PLANE_BASE, rows = rot_o ? rot_rows : GT_CANVAS_H;", "const uint32_t base = GAL_PLANE_BASE, rows = rot_o ? rot_rows : GT_CANVAS_H;"),
+        ("gallery_app.c", "gm_crop(mask_i, mask_p, rx, ry, rw, rh, &x0, &y0, &x1, &y1);", "gm_crop(mask_i, 0u, rx, ry, rw, rh, &x0, &y0, &x1, &y1);"),
     ]
     only = sys.argv[sys.argv.index("--only") + 1] if "--only" in sys.argv else None                                   # --only TEXT: just the mutants whose original code contains TEXT (Tier B of CLAUDE.md section 4: the mutants of the code you changed)
     if only: muts = [m for m in muts if only in m[1]]; assert muts, "no mutant matches --only"
