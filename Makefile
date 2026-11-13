@@ -948,6 +948,17 @@ test-gallery-settings:
 test-gallery-pages:
 	$(PYTHON) sim/test_gallery_pages.py
 	$(PYTHON) sim/test_gallery_pages.py --mutants
+.PHONY: test-gallery-quick
+# Tier B of CLAUDE.md section 4: the plain tests (no mutants) of the gallery firmware and tools, 3 to 8 minutes (8 measured while another suite ran). The mutants of what you changed are run separately; `make test-gallery-*` is the full sweep (Tier C).
+test-gallery-quick:
+	$(PYTHON) sim/test_gallery_app.py
+	$(PYTHON) sim/test_gallery_view.py
+	$(PYTHON) sim/test_gallery_pages.py
+	$(PYTHON) sim/test_gallery_fmt.py
+	$(PYTHON) sim/test_gallery_settings.py
+	$(PYTHON) sim/test_gallery_folder.py
+	$(PYTHON) sim/test_tgy_hw.py
+	$(PYTHON) sim/test_install_dev_core.py
 test-gallery-app:
 	$(PYTHON) sim/test_gallery_app.py
 	$(PYTHON) sim/test_gallery_app.py --mutants
