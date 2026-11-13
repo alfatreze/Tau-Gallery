@@ -304,8 +304,11 @@ def firmware_formats(root=ROOT):
     if not taua or not tail:
         raise CompatError("cannot read the TAUA version check (fw/assets_core.h) or the cover file name (fw/timg.inc)")
     t = tree_facts(root)
+    gf = re.search(r"if \(ver != (\d+)u\) return GF_VERSION", (root / "fw2/gallery/gallery_fmt.c").read_text())      # the newest TGIX version the firmware's reader accepts (0 has its own branch above this line)
+    if not gf:
+        raise CompatError("cannot read the TGIX version check (fw2/gallery/gallery_fmt.c)")
     return {"tau-library.tdb": {"name": "tau-library", "version": t["library_index_version"]},
-            "tgix": {"name": "tgix", "version": 1},                                      # the gallery's picture index: the same file name, another format. The schema's versions start at 1: this reader reads a TGIX version field (tools/gallery/tgy.py IDX_VERSION, 0 today) below `version`
+            "tgix": {"name": "tgix", "version": int(gf.group(1)) + 1},                                      # the gallery's picture index: the same file name, another format. The schema's versions start at 1: this reader reads a TGIX version field (tools/gallery/tgy.py IDX_VERSION, 0 today) below `version`
 
             "tau-assets.bin": {"name": "TAUA", "version": int(taua.group(1)), "sections": t["assets_sections"],
                                "max_bytes": t["assets_read_limit_bytes"], "preserve_unknown_sections": True},
