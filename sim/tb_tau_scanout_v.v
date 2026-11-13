@@ -9,6 +9,7 @@ module tb_tau_scanout_v #(parameter integer BUG = 0, parameter integer SLOW = 0)
     always #7.5  clk_sys = ~clk_sys;       // 66.667 MHz
 
     reg enable = 1'b0, enable_set = 1'b0, hold = 1'b0;
+    reg [1:0] fx_mode = 2'd0; reg fx_lut_on = 1'b0;      // the pixel effects off: the picture must reach the output exactly as the plane holds it
     wire [23:0] slot_word = 24'h002000;                  // scaler slot 1: bits [23:13] = 1, function [2:0] = 0
     wire frame_end;
     wire        lb_we_w;
@@ -20,6 +21,7 @@ module tb_tau_scanout_v #(parameter integer BUG = 0, parameter integer SLOW = 0)
 
     tau_scanout_v #(.BUG(BUG)) dut (
         .reset(reset), .clk_sys(clk_sys), .clk_sdram(clk_sdram), .clk_vid(clk_vid), .enable(enable), .hold(hold), .slot_word(slot_word),
+        .fx_mode(fx_mode), .fx_lut_on(fx_lut_on), .fx_lut_we(1'b0), .fx_lut_word(18'd0), .fx_lut_busy(),
         .lb_we(lb_we), .lb_waddr(lb_waddr), .lb_wdata(lb_wdata), .fill_done_line(fill_done_line), .fill_seen(fill_seen),
         .underflow_cnt(underflow), .fill_req_tgl(fill_req_tgl), .fill_line_req(fill_line_req), .vblank_tgl(vblank_tgl),
         .video_rgb(rgb), .video_de(de), .video_hs(hs), .video_vs(vs), .scan_vc(scan_vc), .frame_end(frame_end));

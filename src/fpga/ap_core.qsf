@@ -799,6 +799,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE core/tau_talos.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/tau_scanout.sv
 # Tau Gallery modules (found through SEARCH_PATH core in every fit so far; listed so test_check_qsf_files holds and a missing file is an error, B-1063)
 set_global_assignment -name SYSTEMVERILOG_FILE core/tau_scanout_v.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/tau_pixfx.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/tau_vidmode.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/tau_land.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/tau_sdram_p2mux.sv

@@ -229,6 +229,11 @@ module tau_gfx #(
     input  wire        view_en,         // clk_sys level: the requested mode, 1 = 800 x 720 viewer (scaler slot 1), 0 = 400 x 360 UI (slot 0); see tau_vidmode.sv
     input  wire [24:0] view_base,       // word address of plane line 0
     input  wire [15:0] view_stride,     // words per plane line
+    input  wire [1:0]  pix_mode,        // clk_sys: the viewer's pixel effects (tau_pixfx): 0 off, 1 ordered dither, 2 ordered + temporal
+    input  wire        pix_lut_on,      // clk_sys: the viewer's colour tables on
+    input  wire        pix_lut_we,      // clk_sys: a colour table store strobe
+    input  wire [17:0] pix_lut_word,    // clk_sys: {channel, index, value}
+    output wire        pix_lut_busy,    // clk_sys: a store is under way
     output wire        vid_cur,         // clk_sys (synchronised): the mode on the bus
     output wire        vid_pend,        // clk_sys (synchronised): a switch is under way (the pending frame)
     output wire [15:0] vid_switches     // clk_sys: completed mode switches (wraps)
@@ -356,6 +361,7 @@ module tau_gfx #(
             tau_scanout_v u_scanout_v (
                 .reset(reset), .clk_sys(clk_sys), .clk_sdram(clk_sdram), .clk_vid(clk_vid),
                 .enable(view_en), .hold(v_hold), .slot_word(slot_w),
+                .fx_mode(pix_mode), .fx_lut_on(pix_lut_on), .fx_lut_we(pix_lut_we), .fx_lut_word(pix_lut_word), .fx_lut_busy(pix_lut_busy),
                 .lb_we(vlb_we), .lb_waddr(vlb_waddr), .lb_wdata(vlb_wdata),
                 .fill_done_line(fill_done_line), .fill_seen(fill_seen),
                 .underflow_cnt(v_uf),
@@ -383,6 +389,7 @@ module tau_gfx #(
             assign gfx_underflow = cur_s[1] ? v_uf : u_uf;
         end else begin : g_noview
             assign view_target   = 1'b0;
+            assign pix_lut_busy  = 1'b0;
             assign vid_cur       = 1'b0;
             assign vid_pend      = 1'b0;
             assign vid_switches  = 16'd0;

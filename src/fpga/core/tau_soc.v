@@ -220,6 +220,12 @@ module tau_soc #(
     output wire         fb_view_req,
     output wire [24:0]  fb_view_base,
     output wire [15:0]  fb_view_stride,
+    // Tau Gallery pixel effects of the viewer (tau_pixfx): the dither mode, the colour tables (a store strobe and word) and the busy flag from the scan-out (clk_sys)
+    output wire [1:0]   fb_pix_mode,
+    output wire         fb_pix_lut_on,
+    output wire         fb_pix_lut_we,
+    output wire [17:0]  fb_pix_lut_word,
+    input  wire         fb_pix_lut_busy,
     input  wire         fb_vid_cur,
     input  wire         fb_vid_pend,
     input  wire [15:0]  fb_vid_switches,
@@ -1275,6 +1281,16 @@ module tau_soc #(
     assign fb_view_req    = (VIEW_ENABLE != 0) && view_req_r;
     assign fb_view_base   = (VIEW_ENABLE != 0) ? view_base_r : 25'd0;
     assign fb_view_stride = (VIEW_ENABLE != 0) ? view_stride_r : 16'd0;
+    // pixel effects of the viewer: PIX_CTRL write [1:0] dither mode (0 off, 1 ordered, 2 ordered + temporal), [2] colour tables on; read {busy at [8], tables on [2], mode [1:0]};
+    // PIX_LUT write {channel [17:16] 0 R 1 G 2 B, index [15:8], value [7:0]}: one store, ignored while busy (poll PIX_CTRL bit 8 before the next)
+    localparam [9:0] R_PIX_CTRL = 10'h250, R_PIX_LUT = 10'h254;
+    reg  [1:0]  pix_mode_r = 2'd0;
+    reg         pix_lut_on_r = 1'b0, pix_lut_we_r = 1'b0;
+    reg  [17:0] pix_lut_word_r = 18'd0;
+    assign fb_pix_mode     = (VIEW_ENABLE != 0) ? pix_mode_r : 2'd0;
+    assign fb_pix_lut_on   = (VIEW_ENABLE != 0) && pix_lut_on_r;
+    assign fb_pix_lut_we   = (VIEW_ENABLE != 0) && pix_lut_we_r;
+    assign fb_pix_lut_word = pix_lut_word_r;
     localparam [8:0] R_WDOG_ARM = 9'h1DC, R_WDOG_ST = 9'h1E0, R_WDOG_ACK = 9'h1E4, R_WDOG_CNT = 9'h1E8;   // pack watchdog (ARM write-only, ST and CNT read-only, ACK write-only)                                          // per-port SDRAM statistics window
     reg         stats_ctl_we = 1'b0, stats_idx_we = 1'b0;
     reg  [1:0]  stats_ctl_d  = 2'd0;
@@ -1470,7 +1486,7 @@ module tau_soc #(
         con_wr      <= 1'b0;
         tgt_go      <= 1'b0;
         fb_cmd_push <= 1'b0;
-        wave_ctl_we <= 1'b0; wave_idx_we <= 1'b0; stats_ctl_we <= 1'b0; stats_idx_we <= 1'b0; sda_we <= 1'b0; land_clear_r <= 1'b0; irq_clr_we <= 1'b0; wdog_arm_we <= 1'b0; wdog_ack_we <= 1'b0;
+        wave_ctl_we <= 1'b0; wave_idx_we <= 1'b0; stats_ctl_we <= 1'b0; stats_idx_we <= 1'b0; sda_we <= 1'b0; land_clear_r <= 1'b0; pix_lut_we_r <= 1'b0; irq_clr_we <= 1'b0; wdog_arm_we <= 1'b0; wdog_ack_we <= 1'b0;
         poly_clear <= 1'b0; poly_go <= 1'b0; poly_push_we <= 1'b0; poly_idx_we <= 1'b0;
         lpc_cfg_we <= 1'b0; lpc_coef_idx_we <= 1'b0; lpc_coef_data_we <= 1'b0;
         lpc_warm_idx_we <= 1'b0; lpc_warm_data_we <= 1'b0; lpc_residual_we <= 1'b0;
@@ -1566,6 +1582,8 @@ module tau_soc #(
                 R_LAND_CTRL:   if (LAND_ENABLE != 0 && dDAT_MOSI[0]) land_clear_r <= 1'b1;   // a one-clock pulse: restart the word and drop counts
                 R_IRQ_PEND:    if (IRQ_ENABLE != 0) begin irq_clr_d <= dDAT_MOSI; irq_clr_we <= 1'b1; end
                 R_VIEW_BASE:   if (VIEW_ENABLE != 0) view_base_r <= dDAT_MOSI[24:0];
+                R_PIX_CTRL:    if (VIEW_ENABLE != 0) begin pix_mode_r <= dDAT_MOSI[1:0]; pix_lut_on_r <= dDAT_MOSI[2]; end
+                R_PIX_LUT:     if (VIEW_ENABLE != 0) begin pix_lut_word_r <= dDAT_MOSI[17:0]; pix_lut_we_r <= 1'b1; end
                 R_VIEW_STRIDE: if (VIEW_ENABLE != 0) view_stride_r <= dDAT_MOSI[15:0];
                 9'h100:     begin poly_clear <= dDAT_MOSI[0]; poly_go <= dDAT_MOSI[1]; end
                 9'h104:     begin poly_push_d <= dDAT_MOSI; poly_push_we <= 1'b1; end
@@ -1728,8 +1746,9 @@ module tau_soc #(
             R_IRQ_PEND:    mmio_rdata = (IRQ_ENABLE != 0) ? irq_pend : 32'd0;
             R_VID_MODE:    mmio_rdata = (VIEW_ENABLE != 0) ? {fb_vid_switches, 13'd0, view_req_r, fb_vid_pend, fb_vid_cur} : 32'd0;   // [31:16] completed switches, [2] requested, [1] pending, [0] on the bus
             R_VIEW_BASE:   mmio_rdata = (VIEW_ENABLE != 0) ? {7'd0, view_base_r} : 32'd0;
+            R_PIX_CTRL:    mmio_rdata = (VIEW_ENABLE != 0) ? {23'd0, fb_pix_lut_busy, 5'd0, pix_lut_on_r, pix_mode_r} : 32'd0;
             R_VIEW_STRIDE: mmio_rdata = (VIEW_ENABLE != 0) ? {16'd0, view_stride_r} : 32'd0;
-            R_VIEW_CAPS:   mmio_rdata = (VIEW_ENABLE != 0) ? 32'h80000003 : 32'd0;                    // [31] present, [1] 800 x 720 viewer, [0] mode sequencer
+            R_VIEW_CAPS:   mmio_rdata = (VIEW_ENABLE != 0) ? 32'h80000007 : 32'd0;                    // [31] present, [2] pixel effects (dither, colour tables), [1] 800 x 720 viewer, [0] mode sequencer
             R_SDA_VAL:     mmio_rdata = (SDA_ENABLE != 0) ? sda_val : 32'd0;             // the snapshot of the selected counter (stable until the next select)
             R_STATS_DATA:  mmio_rdata = stats_rd;                                      // audio statistics read-out word at STATS_IDX (0 when not built)
             R_FONT_IDX:    mmio_rdata = (FONT_RAM_ENABLE != 0) ? {19'd0, font_idx} : 32'd0;

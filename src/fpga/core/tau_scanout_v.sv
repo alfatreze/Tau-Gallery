@@ -37,6 +37,13 @@ module tau_scanout_v #(
     input  wire [11:0] lb_waddr,          // {line parity, word 0..1199}
     input  wire [15:0] lb_wdata,
 
+    // pixel effects (tau_pixfx: the colour tables and the ordered dither); mode 0, lut_on 0 leaves the picture exactly as the plane holds it
+    input  wire [1:0]  fx_mode,           // clk_sys: 0 off, 1 ordered dither, 2 ordered + temporal
+    input  wire        fx_lut_on,         // clk_sys
+    input  wire        fx_lut_we,         // clk_sys: one-cycle strobe for a table store
+    input  wire [17:0] fx_lut_word,       // clk_sys: {channel, index, value}
+    output wire        fx_lut_busy,       // clk_sys
+
     input  wire [9:0]  fill_done_line,    // clk_sdram: the plane line of the last finished fill
     input  wire        fill_seen,         // clk_sdram, sticky: at least one fill has finished
 
@@ -44,7 +51,7 @@ module tau_scanout_v #(
 
     output reg         fill_req_tgl  = 1'b0,
     output reg  [9:0]  fill_line_req = 10'd0,
-    output reg         vblank_tgl    = 1'b0,
+    output reg         vblank_tgl    = 1'b0,                                           // the vertical-blank toggle, delayed by the pixel-effects latency so it stays one clock ahead of vs
 
     output reg  [23:0] video_rgb     = 24'd0,
     output reg         video_de      = 1'b0,
@@ -79,6 +86,7 @@ module tau_scanout_v #(
     assign scan_vc = vc;
     assign frame_end = h_last && v_last;
 
+    reg vb_raw = 1'b0, vb1 = 1'b0;
     // ---- fill request and vertical-blank toggle ----------------------------
     wire [9:0] vc_next = v_last ? 10'd0 : vc + 10'd1;
     wire [9:0] vc_req  = (BUG == 5) ? (vc_next + 10'd1) : vc_next;                          // BUG 5: two lines ahead
@@ -91,9 +99,11 @@ module tau_scanout_v #(
                 fill_line_req <= vc_req - Y0;
                 fill_req_tgl  <= ~fill_req_tgl;
             end
-            if (vc == VB_LINE) vblank_tgl <= ~vblank_tgl;
+            if (vc == VB_LINE) vb_raw <= ~vb_raw;
         end
     end
+    // the video outputs are 2 clocks later than before the pixel effects were added (their pipeline): the toggle follows by the same 2 extra clocks
+    always @(posedge clk_vid) begin vb1 <= vb_raw; vblank_tgl <= vb1; end
 
     // ---- enable (clk_sys level -> three-flop synchroniser) -----------------
     reg [2:0] en_sync = 3'b000;
@@ -144,6 +154,13 @@ module tau_scanout_v #(
 
     reg [23:0] s1_px = 24'd0;
     reg        s1_de = 1'b0, s1_hs = 1'b0, s1_vs = 1'b0;
+    reg [2:0]  s1_x = 3'd0, s1_y = 3'd0;                                                  // the pixel's column and line in the picture (low 3 bits: X0 and Y0 are multiples of 8 less the BUG 1 offset), for the dither matrix
+    reg [1:0]  fph = 2'd0;                                                                // frame phase for the temporal dither
+    always @(posedge clk_vid) begin
+        if (reset || hold) fph <= 2'd0; else if (frame_end) fph <= fph + 2'd1;
+        s1_x <= hc[2:0] - X0[2:0];
+        s1_y <= vc[2:0] - Y0[2:0];
+    end
     always @(posedge clk_vid) begin
         case (hc[1:0])
             2'd0: s1_px <= grp[23:0];
@@ -156,13 +173,19 @@ module tau_scanout_v #(
         s1_vs <= vs_w;
     end
 
-    // ---- stage 2: the video outputs (grp holds {B,G,R} per pixel, the bus wants {R,G,B}) ----
+    // ---- pixel effects, 2 clocks (grp holds {B,G,R} per pixel, the effects and the bus want {R,G,B}) ----
     wire [23:0] rgb_x = (BUG == 9) ? s1_px : {s1_px[7:0], s1_px[15:8], s1_px[23:16]};        // BUG 9: byte order not swapped
+    wire [23:0] fx_px; wire fx_de, fx_hs, fx_vs;
+    tau_pixfx u_fx (.clk_sys(clk_sys), .clk_vid(clk_vid), .reset(reset), .mode(fx_mode), .lut_on(fx_lut_on), .lut_we(fx_lut_we), .lut_word(fx_lut_word), .lut_busy(fx_lut_busy),
+        .px_in(rgb_x), .de_in(s1_de), .hs_in(s1_hs), .vs_in(s1_vs), .x_in(s1_x), .y_in(s1_y), .f_in(fph),
+        .px_out(fx_px), .de_out(fx_de), .hs_out(fx_hs), .vs_out(fx_vs));
+
+    // ---- stage 2: the video outputs ----
     always @(posedge clk_vid) begin
-        video_rgb <= (s1_de && en_vid) ? rgb_x : ((video_de && !s1_de && BUG != 11) ? slot_word : 24'd0);     // BUG 11: no slot word
-        video_de  <= s1_de;
-        video_hs  <= s1_hs;
-        video_vs  <= s1_vs;
+        video_rgb <= (fx_de && en_vid) ? fx_px : ((video_de && !fx_de && BUG != 11) ? slot_word : 24'd0);     // BUG 11: no slot word
+        video_de  <= fx_de;
+        video_hs  <= fx_hs;
+        video_vs  <= fx_vs;
     end
 
     // ---- late-line counter ---------------------------------------------------

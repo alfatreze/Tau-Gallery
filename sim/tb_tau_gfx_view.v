@@ -80,7 +80,7 @@ module tb_tau_gfx_view #(parameter integer BUG_VIEW = 0, parameter integer SLOW 
         .p0_wr_req(p0_wr), .p0_rd_req(p0_rd), .p0_end_burst_req(p0_eb), .p0_available(p0_av), .p0_ready(p0_rdy), .p0_data_available(p0_da), .wsrc_addr(wsa), .wsrc_q(wsq),
         .video_rgb(rgb), .video_de(de), .video_hs(hs), .video_vs(vs), .scan_vc(svc),
         .gfx_idle(), .gfx_fence(), .gfx_free(), .gfx_ovf(), .gfx_underflow(uf),
-        .view_en(view_en), .view_base(BASE[24:0]), .view_stride(STRIDE[15:0]), .vid_cur(), .vid_pend(), .vid_switches());
+        .view_en(view_en), .view_base(BASE[24:0]), .view_stride(STRIDE[15:0]), .pix_mode(2'd0), .pix_lut_on(1'b0), .pix_lut_we(1'b0), .pix_lut_word(18'd0), .pix_lut_busy(), .vid_cur(), .vid_pend(), .vid_switches());
     vw_sdram_stub #(.BASE(BASE), .STRIDE(STRIDE), .SLOWRD(SLOW)) mem (.clk(clk_sdram), .p0_addr(p0_addr), .p0_data(p0_data), .p0_wr_len(p0_len), .p0_wr_stream(p0_str),
         .p0_wr_req(p0_wr), .p0_rd_req(p0_rd), .p0_end_burst_req(p0_eb), .p0_q(p0_q), .p0_available(p0_av), .p0_ready(p0_rdy), .p0_data_available(p0_da), .wsrc_addr(wsa), .wsrc_q(wsq));
 
