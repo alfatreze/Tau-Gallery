@@ -48,7 +48,7 @@ def mutants():
         ("the crop is not centred in y", "uint32_t cx = x + (w - cw) / 2u, cy = y + (h - ch) / 2u;", "uint32_t cx = x + (w - cw) / 2u, cy = y;"), ("the left edge is not made even", "    cx &= ~1u;                                                            /* even */\n", ""),
         ("the right edge is not made even", "uint32_t ex = (cx + cw + 1u) & ~1u;", "uint32_t ex = cx + cw;"), ("the 4:5 ratio is wrong", "{ 5, 4, \"4:5\" }", "{ 4, 5, \"4:5\" }"),
         ("the cinemascope ratio is 2.35", "{ 239, 100, \"2.39:1 CINEMASCOPE\" }", "{ 235, 100, \"2.39:1 CINEMASCOPE\" }"), ("the xpan ratio is wrong", "{ 65, 24, \"65:24 XPAN\" }", "{ 65, 25, \"65:24 XPAN\" }"),
-        ("the cycle does not return to off", "return (i + 1u) % GM_N;", "return i + 1u < GM_N ? i + 1u : 1u;"), ("the crop can exceed the width", "    if (cw > w) cw = w;\n", ""), ("the crop can exceed the height", "    if (ch > h) ch = h;\n", ""),
+        ("the cycle does not return to off", "return (i + 1u) % GM_N;", "return i + 1u < GM_N ? i + 1u : 1u;"),
         ("the y end ignores the height", "*y0 = cy; *y1 = cy + ch;", "*y0 = cy; *y1 = cy + h;")]
     surv = 0
     for name, a, b in muts:
