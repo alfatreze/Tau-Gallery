@@ -81,6 +81,25 @@ def suite(C, MK, tgy, tmp):
     check(f"the wide-gamut profile test is not vacuous: the conversion to sRGB moves the mean colour by {shift:.1f} levels", shift > 2.0 and tgy.needs_srgb(Image.open(tmp / "icc_wide.jpg")))
     check(f"a 4:2:0 JPEG with a wide-gamut profile: the zoom level has the fit view's colours (difference {d_wide:.2f}) because it is encoded from the converted picture", d_wide < 1.5 and not ll_wide)
     check("a 4:2:0 JPEG with an sRGB profile, and one with none, keep their own coefficients (lossless) and the colours agree", ll_srgb and ll_none and d_srgb < 1.5 and d_none < 1.5 and not tgy.needs_srgb(Image.open(tmp / "icc_srgb.jpg")))
+    # orientation: a phone's portrait photo is a landscape file with an EXIF tag. The core draws a level as stored, so the zoom level is written upright and the tag reset
+    from PIL import Image as _I
+    ex = _I.Exif(); ex[0x0112] = 6; fr = tmp / "rot6.jpg"; picture(1200, 800, 17).save(fr, "JPEG", quality=85, subsampling=2, exif=ex)
+    rp = tgy.prepare(_I.open(fr)); rd, _, _ = MK.canvas_container(fr, rp, 92, 90, False, jobs=1); rc = C.Container(rd); rfull = [k for k, e in enumerate(rc.levels) if e["kind"] == 1][0]
+    ref = np.asarray(rp, float); got = rc.pixels(rfull).astype(float)
+    mse = float(((ref - got[:ref.shape[0], :ref.shape[1]]) ** 2).mean()); psnr = 99.0 if mse == 0 else 10 * np.log10(255 ** 2 / mse)
+    check(f"an EXIF-rotated JPEG: the zoom level is upright ({rc.levels[rfull]['w']} x {rc.levels[rfull]['h']} for a 1200 x 800 file with tag 6), the header says orientation 1 and the picture matches the rotated source (PSNR {psnr:.1f} dB)",
+          (rc.levels[rfull]["w"], rc.levels[rfull]["h"]) == (800, 1200) and rc.orientation == 1 and psnr > 27.0)
+    for tag in (2, 3, 4, 5, 7, 8):
+        ex = _I.Exif(); ex[0x0112] = tag; ft = tmp / f"rot{tag}.jpg"; picture(1100, 700, 18).save(ft, "JPEG", quality=85, subsampling=2, exif=ex); pt = tgy.prepare(_I.open(ft))
+        ct = C.Container(MK.canvas_container(ft, pt, 92, 90, False, jobs=1)[0]); fl = [e for e in ct.levels if e["kind"] == 1][0]
+        check(f"orientation {tag}: the zoom level has the upright size {pt.width} x {pt.height} and the header orientation 1", (fl["w"], fl["h"]) == (pt.width, pt.height) and ct.orientation == 1)
+    # speed: the coefficient read is the slow part, and it is skipped for every case that is encoded again (4:4:4, rotated, wide-gamut, not a JPEG)
+    calls = []; real_read = MK.jpegcoef.read_jpeg
+    MK.jpegcoef.read_jpeg = lambda data: (calls.append(1), real_read(data))[1]
+    try:
+        for label, path_, want in (("4:2:0", tmp / "s2False.jpg", 1), ("4:4:4", tmp / "s0False.jpg", 0), ("rotated", fr, 0), ("wide-gamut", tmp / "icc_wide.jpg", 0), ("PNG", png, 0)):
+            calls.clear(); MK.canvas_container(path_, tgy.prepare(Image.open(path_)), 92, 90, False, jobs=1); check(f"the JPEG coefficient read happens {'once' if want else 'not at all'} for a {label} picture (it is skipped when the level is encoded again)", len(calls) == want)
+    finally: MK.jpegcoef.read_jpeg = real_read
     import multiprocessing
     real_pool = multiprocessing.Pool
     def no_pool(*a, **k): raise AssertionError("a pool was started")
@@ -99,6 +118,9 @@ if __name__ == "__main__":
                            ("every profile counts as wide-gamut", 'return None if "srgb" in ImageCms.getProfileDescription(prof).lower() else prof', "return prof"),
                            ("no profile counts as wide-gamut", "needs_srgb(img):\n", "needs_srgb(img):\n    return True\n"),
                            ("a wide-gamut profile is never recognised", "return _icc_profile(img) is not None", "return False"),
+                           ("a rotated JPEG keeps its coefficients (and the tag)", 'if orient != 1: raise ValueError("an EXIF orientation', 'if False: raise ValueError("an EXIF orientation'),
+                           ("the subsampling is not told from the header (the coefficients are read first)", 'if src_img.mode != "L" and JpegImagePlugin.get_sampling(src_img) != 2: raise ValueError(', 'if False: raise ValueError('),
+                           ("a PNG is read as a JPEG", 'if src_img.format != "JPEG": raise ValueError(', 'if False: raise ValueError('),
                            ("a 4:4:4 JPEG keeps its 4:4:4 level", "if pic is not None and C.sub_of(pic) == C.SUB_444: pic = None", "pass"),
                            ("a 4:2:0 JPEG is encoded again as well", "if pic is not None and C.sub_of(pic) == C.SUB_444: pic = None", "if pic is not None: pic = None"),
                            ("a grey JPEG is encoded again as well", "if pic is not None and C.sub_of(pic) == C.SUB_444: pic = None", "if pic is not None and C.sub_of(pic) != C.SUB_420: pic = None"),

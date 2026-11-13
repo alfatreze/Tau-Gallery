@@ -61,8 +61,11 @@ def make_v1_set(d):
     ex = _I.Exif(); ex[0x0112] = 3; bio = _io.BytesIO(); TJ.picture(1000, 900, seed=10).save(bio, "JPEG", quality=90, exif=ex)                 # a 1000 x 900 JPEG whose EXIF orientation is 180 degrees: its full level is stored unrotated, the viewer would have to rotate it: no zoom
     (d / "src6.jpg").write_bytes(bio.getvalue()); prep6 = tgy.prepare(_I.open(d / "src6.jpg"))
     data6, thumb6, size6 = tgy_make.canvas_container(d / "src6.jpg", prep6); add(6, data6, thumb6, size6, "V1 rotated 06")
+    c6 = C.Container(data6); (d / "v06_full.rgb").write_bytes(c6.pixels([k for k, e in enumerate(c6.levels) if e["kind"] == C.KIND_FULL][0]).tobytes()); assert c6.orientation == 1      # the reference of the rotated picture's zoom level (written upright)
     big = TJ.picture(2000, 1700, seed=11); (d / "src7.jpg").write_bytes(b""); big.save(d / "src7.jpg", "JPEG", quality=90); prep7 = tgy.prepare(_I.open(d / "src7.jpg"))      # larger than the 11 x 10 tile window (1408 x 1280): a pan has to load tiles, so the view can stall
     data7, thumb7, size7 = tgy_make.canvas_container(d / "src7.jpg", prep7); add(7, data7, thumb7, size7, "V1 big 07")
+    old = bytearray(data6); old[18] = 3; old[52:56] = C.struct.pack("<I", C.crc(bytes(old[:52])))                                       # a file written by an older converter: the upright zoom level but the EXIF tag (180 degrees) still in the header: the viewer must not zoom it
+    add(10, bytes(old), thumb6, size6, "V1 old rotated 10")
     for i, (w, h, nm) in ((8, (3600, 1200, "V1 wide 08")), (9, (1100, 3300, "V1 tall 09"))):                                  # a 3:1 panorama (the picture sits at y 226 on the fit canvas) and a 1:3 portrait (at x 280): shapes that do not fill the 800 x 720 canvas
         pic_ = TJ.picture(w, h, seed=20 + i); (d / f"src{i}.jpg").write_bytes(b""); pic_.save(d / f"src{i}.jpg", "JPEG", quality=85); prep_ = tgy.prepare(_I.open(d / f"src{i}.jpg"))
         data_, thumb_, size_ = tgy_make.canvas_container(d / f"src{i}.jpg", prep_, jobs=1); add(i, data_, thumb_, size_, nm)
@@ -135,7 +138,8 @@ def mutants(setdir, tail=None):
             ("gallery_app.c", "if (a < off || a >= off + GX_THUMB_BYTES) continue;", "if (a < off) continue;"),
             ("gallery_app.c", "path[0] = '/';", "path[0] = 'x';"),
             ("gallery_app.c", "if (edge & KEY_B) { gal_view_off();", "if (edge & KEY_B) { "),
-            ("gallery_app.c", "if (!v1_on || h4[18] != 1u) return;", "if (!v1_on) return;"),                                                                          # a rotated picture would zoom
+            ("gallery_app.c", "if (!v1_on || h4[18] != 1u) return;", "if (!v1_on) return;"),                                                                          # a file with an orientation tag would zoom
+            ("gallery_app.c", "if (!v1_on || h4[18] != 1u) return;", "if (!v1_on || h4[18] != 1u || 1) return;"),                                                       # no picture would zoom
             ("gallery_app.c", "if (v1z.idx_len <= v1z_cap) ir =", "if (v1z.idx_len <= v1z_cap * 99u) ir ="),                                                                                      # an index larger than the buffer is accepted
             ("gallery_app.c", "if (zs[k].layout == 2u && !v1z_idx_ok) {", "if (zs[k].layout == 2u && 0) {"),                                                                 # the tile index is never loaded
             ("gallery_app.c", "{ say(\"ZOOM INDEX READ FAILED\", BAD); zk = -1; return; }", "{ say(\"ZOOM INDEX READ FAILED\", BAD); zk = -1; }"),                              # a failed index read goes on to zoom
