@@ -39,26 +39,8 @@ The Pocket answers only what a desk cannot: timing margin of the real fit, elect
 8. **Report honestly.** Say what was simulated, what was synthesised, what was fitted and what ran on a Pocket, and what was not run.
 
 ## Subagent delegation policy
-
-Before spawning a subagent (Task/Agent tool), check whether it's actually worth the overhead:
-- Only delegate when the work is verbose/high-volume (test runs, log scanning, multi-file research,
-  large doc fetches) or genuinely parallelizable. Small, quick lookups stay in the main context —
-  a subagent's own startup cost (loading CLAUDE.md, skills, MCP tool defs) isn't worth it for trivial work.
-- Never spawn a subagent just to "be thorough" — spawn one because its output would otherwise bloat
-  the main conversation.
-
-When delegating, write the subagent prompt to minimize its cost and the tokens it returns:
-- Scope it tightly: state the exact question/deliverable, the specific files/paths/URLs it needs
-  (not "explore the codebase"), and an explicit output format so it doesn't over-explain.
-- Explicitly cap output: tell it to report back a short summary or the specific artifact needed —
-  not full transcripts, full file contents, or step-by-step narration — since only the returned text
-  re-enters the main context.
-- Pick the cheapest model that can do the job: use `model: haiku` for mechanical/simple subagent tasks
-  (formatting, running a command and reporting pass/fail, simple lookups), and reserve a stronger model
-  for subagents doing real reasoning or judgment calls.
-- Keep the spawn prompt itself short — everything in it enters the subagent's context immediately,
-  on top of whatever CLAUDE.md/skills/MCP tools it auto-loads.
-- Prefer one well-scoped subagent over several redundant ones; batch independent lookups into a single
-  subagent call when they don't need separate context isolation.
-- If a task doesn't clearly need isolation (verbose output, parallelism), just do it directly instead
-  of delegating.
+**Rule 10 of `docs/PROJECT_RULES.md` is mandatory: mechanical work goes to a Haiku subagent** (`model: haiku`). What counts, what never does (design, RTL, firmware and converter logic, judging results, owner decisions, and every card write, install, removal, commit or push), and how to check the report are there. In short:
+- Delegate: test and suite runs that report pass or fail, log and report scanning, collecting numbers into tables, mechanical edits with a stated rule, file listings and counts, summaries of long output, checksum and link checks.
+- Prompt: short, with the exact files and commands, the output format and a cap on what comes back (only the returned text re-enters this context). One well-scoped subagent over several redundant ones; independent ones in parallel.
+- Do not spawn one for a single quick command, or when the prompt would be as long as the work.
+- A subagent's note is its report, not proof: re-run the deciding command or read the diff before it goes into a commit or an audit entry.
