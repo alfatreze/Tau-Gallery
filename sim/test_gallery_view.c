@@ -377,6 +377,31 @@ int main(void)
         s2 = gv_grid_step(s2, 10u, 4u, 2u, 1u); chk("grid step: a new Up on the first picture goes to the last", s2 == 9u);
         chk("grid step: a held Up from the last picture stops at the first row and does not loop", ({ uint32_t q = 9u; for (int i = 0; i < 100; i++) q = gv_grid_step(q, 10u, 4u, 2u, 0u); q == 1u; }));
     }
+    {   /* where a picture sits on the fit canvas: the converter's rule in floating point (round half to even) for every size to 800 x 800 and 200,000 random ones, on the 800 x 720 canvas and the 96 x 72 thumbnail; a tie that
+         * the converter's floating point rounds the other way (25 of 640,000 sizes) is allowed to differ by one pixel */
+        int okf = 1, near_ok = 1; uint32_t seed = 3u, exact = 0u, total = 0u;
+        for (uint32_t n = 0; n < 840000u; n++) for (int cv = 0; cv < 2; cv++) {
+            uint32_t w, hh; const uint32_t cw = cv ? 96u : 800u, ch = cv ? 72u : 720u;
+            if (n < 640000u) { w = 1u + n / 800u; hh = 1u + n % 800u; } else { seed = seed * 1664525u + 1013904223u; w = 1u + (seed >> 8) % 65535u; seed = seed * 1664525u + 1013904223u; hh = 1u + (seed >> 8) % 65535u; }
+            double sc = fmin(fmin((double)cw / w, (double)ch / hh), 1.0); uint32_t rw = (uint32_t)nearbyint(w * sc), rh = (uint32_t)nearbyint(hh * sc); if (rw < 1u) rw = 1u; if (rh < 1u) rh = 1u; if (rw > cw) rw = cw; if (rh > ch) rh = ch;
+            const int32_t x = (int32_t)((cw - rw) / 2u / 2u * 2u), y = (int32_t)((ch - rh) / 2u); int32_t gx, gy, gw, gh; gv_fit_rect(w, hh, cw, ch, &gx, &gy, &gw, &gh); total++;
+            if (gx == x && gy == y && gw == (int32_t)rw && gh == (int32_t)rh) exact++;
+            else if (abs(gw - (int32_t)rw) > 1 || abs(gh - (int32_t)rh) > 1 || abs(gx - x) > 2 || abs(gy - y) > 1) near_ok = 0;
+            if (gw < 1 || gh < 1 || gx < 0 || gy < 0 || gx + gw > (int32_t)cw || gy + gh > (int32_t)ch || (gx & 1)) okf = 0;
+        }
+        chk("fit rect: inside the canvas, x even, for 1,680,000 cases", okf);
+        chk("fit rect: equals the converter's rule except for exact ties that its floating point rounds the other way (under 0.01 % of sizes, one pixel)", near_ok && exact * 10000u >= total * 9999u);
+        int32_t x, y, w, h;
+        gv_fit_rect(21600u, 10800u, 800u, 720u, &x, &y, &w, &h); chk("fit rect: the 21600 x 10800 map sits at y 160, 800 x 400 (not the whole canvas)", x == 0 && y == 160 && w == 800 && h == 400);
+        gv_fit_rect(8192u, 12288u, 800u, 720u, &x, &y, &w, &h); chk("fit rect: an 8192 x 12288 portrait is 480 x 720 at x 160", x == 160 && y == 0 && w == 480 && h == 720);
+        gv_fit_rect(6000u, 3575u, 800u, 720u, &x, &y, &w, &h); chk("fit rect: 6000 x 3575 is 800 x 477 at y 121", x == 0 && y == 121 && w == 800 && h == 477);
+        gv_fit_rect(1000u, 900u, 800u, 720u, &x, &y, &w, &h); chk("fit rect: 1000 x 900 fills the canvas", x == 0 && y == 0 && w == 800 && h == 720);
+        gv_fit_rect(300u, 200u, 800u, 720u, &x, &y, &w, &h); chk("fit rect: a small picture is not enlarged and sits centred (300 x 200 at 250, 260)", x == 250 && y == 260 && w == 300 && h == 200);
+        gv_fit_rect(101u, 192u, 72u, 96u, &x, &y, &w, &h); gv_fit_rect(192u, 101u, 96u, 72u, &x, &y, &w, &h); chk("fit rect: an exact tie rounds to even (192 x 101 into 96 x 72 gives 50 rows, at y 11)", w == 96 && h == 50 && y == 11);
+        gv_fit_rect(0u, 500u, 800u, 720u, &x, &y, &w, &h); chk("fit rect: no size gives the whole canvas", x == 0 && y == 0 && w == 800 && h == 720);
+        gv_fit_rect(70000u, 100u, 800u, 720u, &x, &y, &w, &h); chk("fit rect: a size over 65,535 gives the whole canvas", w == 800 && h == 720);
+        gv_fit_rect(1001u, 700u, 800u, 720u, &x, &y, &w, &h); chk("fit rect: x is made even (1001 x 700 is 800 x 559 at y 80)", (x & 1) == 0 && w == 800 && h == 559 && y == 80);
+    }
     printf(fails ? "FAILED %d\n" : "PASSED\n", fails);
     return fails != 0;
 }

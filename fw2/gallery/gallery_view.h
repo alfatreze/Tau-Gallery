@@ -121,6 +121,38 @@ static inline void gv_move(const gv_stop_t *s, int32_t *x, int32_t *y, int dirx,
     gv_clamp(s, x, y);
 }
 
+/* ---- where a picture sits on a fit canvas ---- */
+/* The converter fits the picture into the canvas (never enlarged, the size rounded half to even) and centres it on black: x rounded down to an even pixel, y to a pixel. A version 1 file stores the WHOLE canvas as its fit
+ * level, so the picture's own rectangle is worked out here from its size with the converter's rule (tgy.fit_rect; checked against it in sim/test_gallery_view.py). A size of 0 or over 65,535 gives the whole canvas. */
+static inline void gv_fit_rect(uint32_t w, uint32_t h, uint32_t cw, uint32_t ch, int32_t *x, int32_t *y, int32_t *rw, int32_t *rh)
+{
+    uint32_t pw = cw, ph = ch;
+    if (w != 0u && h != 0u && w <= 65535u && h <= 65535u) {
+        if (w <= cw && h <= ch) { pw = w; ph = h; }
+        else if (w * ch >= h * cw) {                                                           /* the width limits */
+            const uint32_t num = h * cw; uint32_t q = num / w; const uint32_t m = num % w;
+#if BUG == 28
+            if (2u * m >= w) q++;                                                              /* ties round up, not to even */
+#else
+            if (2u * m > w || (2u * m == w && (q & 1u))) q++;
+#endif
+            pw = cw; ph = q < 1u ? 1u : q > ch ? ch : q;
+        } else {                                                                               /* the height limits */
+            const uint32_t num = w * ch; uint32_t q = num / h; const uint32_t m = num % h;
+            if (2u * m > h || (2u * m == h && (q & 1u))) q++;
+            ph = ch; pw = q < 1u ? 1u : q > cw ? cw : q;
+        }
+    }
+#if BUG == 29
+    *x = (int32_t)((cw - pw) / 2u); *y = (int32_t)((ch - ph) / 2u);                              /* x not made even */
+#elif BUG == 30
+    *x = (int32_t)((cw - pw) / 2u / 2u * 2u); *y = (int32_t)((ch - ph) / 2u / 2u * 2u);          /* y made even as well */
+#else
+    *x = (int32_t)((cw - pw) / 2u / 2u * 2u); *y = (int32_t)((ch - ph) / 2u);
+#endif
+    *rw = (int32_t)pw; *rh = (int32_t)ph;
+}
+
 /* ---- grid navigation ---- */
 /* One direction key in the grid: the picture selected next. dir 0 left, 1 right, 2 up, 3 down; fresh = 1 for a new press, 0 for a key repeat. A held key walks to the end of the library and stops there; only a NEW press
  * on the first picture (left or up) goes to the last, and on the last picture (right or down) to the first. Down from the last row goes to the last picture (the row may be short), as before. */

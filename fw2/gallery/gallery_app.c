@@ -193,7 +193,8 @@ static int open_v1(int show_progress)
     if (r == TH_TIMEOUT) return 10;
     if (r != TH_OK) return 8;
     pic.width = v1f.width; pic.height = v1f.height; pic.file_size = fsize; pic.canvas_off = 0u; pic.canvas_len = 0u; pic.thumb_off = 0u;
-    pic.rx = v1l.rx; pic.ry = v1l.ry; pic.rw = v1l.rw; pic.rh = v1l.rh;
+    { int32_t fx, fy, fw, fh; gv_fit_rect(v1f.width, v1f.height, GT_CANVAS_W, GT_CANVAS_H, &fx, &fy, &fw, &fh);                 /* where the PICTURE is on the fit canvas (the fit level is the whole canvas): the map and the zoom entry convert fit and level coordinates with it */
+      pic.rx = (uint16_t)fx; pic.ry = (uint16_t)fy; pic.rw = (uint16_t)fw; pic.rh = (uint16_t)fh; }
     v1_on = 1u;
     return 0;
 }

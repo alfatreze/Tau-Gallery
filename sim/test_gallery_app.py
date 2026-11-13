@@ -63,6 +63,9 @@ def make_v1_set(d):
     data6, thumb6, size6 = tgy_make.canvas_container(d / "src6.jpg", prep6); add(6, data6, thumb6, size6, "V1 rotated 06")
     big = TJ.picture(2000, 1700, seed=11); (d / "src7.jpg").write_bytes(b""); big.save(d / "src7.jpg", "JPEG", quality=90); prep7 = tgy.prepare(_I.open(d / "src7.jpg"))      # larger than the 11 x 10 tile window (1408 x 1280): a pan has to load tiles, so the view can stall
     data7, thumb7, size7 = tgy_make.canvas_container(d / "src7.jpg", prep7); add(7, data7, thumb7, size7, "V1 big 07")
+    for i, (w, h, nm) in ((8, (3600, 1200, "V1 wide 08")), (9, (1100, 3300, "V1 tall 09"))):                                  # a 3:1 panorama (the picture sits at y 226 on the fit canvas) and a 1:3 portrait (at x 280): shapes that do not fill the 800 x 720 canvas
+        pic_ = TJ.picture(w, h, seed=20 + i); (d / f"src{i}.jpg").write_bytes(b""); pic_.save(d / f"src{i}.jpg", "JPEG", quality=85); prep_ = tgy.prepare(_I.open(d / f"src{i}.jpg"))
+        data_, thumb_, size_ = tgy_make.canvas_container(d / f"src{i}.jpg", prep_, jobs=1); add(i, data_, thumb_, size_, nm)
     order = sorted(range(len(ents)), key=lambda k: ents[k]["path"]); (d / "tau-library.tdb").write_bytes(tgy.pack_index([ents[k] for k in order], [ths[k] for k in order]))
 
 def make_set(d, n=18):
@@ -110,7 +113,7 @@ def run(workdir, setdir):
     if r.returncode: rc = 1; out += "\nFAIL scenario zoom\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
     global V1SET
     if V1SET is None: V1SET = Path(tempfile.mkdtemp()); make_v1_set(V1SET)
-    for sc in ("v1", "v1nohw", "v1zoom"):
+    for sc in ("v1", "v1nohw", "v1zoom", "v1map"):
         r = subprocess.run([str(workdir / "t"), str(V1SET), sc], capture_output=True, text=True, timeout=900)
         if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
         else: out += "\n" + r.stdout
@@ -311,6 +314,12 @@ def mutants(setdir, tail=None):
         ("gallery_app.c", "#define REP_RATE (CLK_HZ / 12u)", "#define REP_RATE (CLK_HZ * 4u)"),
         ("gallery_app.c", "dk == KEY_UP ? 2u : 3u", "dk == KEY_UP ? 3u : 2u"),
         ("gallery_app.c", "rep_next = cycles() + (fresh ? REP_DELAY : REP_RATE);", "rep_next = now + (fresh ? REP_DELAY : REP_RATE);"),
+    ]
+    muts += [                                                                                                      # where a version 1 picture sits on the fit canvas
+        ("gallery_app.c", "pic.rx = (uint16_t)fx; pic.ry = (uint16_t)fy; pic.rw = (uint16_t)fw; pic.rh = (uint16_t)fh; }", "pic.rx = v1l.rx; pic.ry = v1l.ry; pic.rw = v1l.rw; pic.rh = v1l.rh; }"),
+        ("gallery_app.c", "gv_fit_rect(v1f.width, v1f.height, GT_CANVAS_W, GT_CANVAS_H, &fx, &fy, &fw, &fh);", "gv_fit_rect(v1f.height, v1f.width, GT_CANVAS_W, GT_CANVAS_H, &fx, &fy, &fw, &fh);"),
+        ("gallery_app.c", "gv_fit_rect(v1f.width, v1f.height, GT_CANVAS_W, GT_CANVAS_H, &fx, &fy, &fw, &fh);", "gv_fit_rect(v1f.width, v1f.height, GT_CANVAS_H, GT_CANVAS_W, &fx, &fy, &fw, &fh);"),
+        ("gallery_app.c", "pic.rx = (uint16_t)fx; pic.ry = (uint16_t)fy;", "pic.rx = (uint16_t)fy; pic.ry = (uint16_t)fx;"),
     ]
     muts += [                                                                                                      # an index kept on the card (the block cache)
         ("gallery_app.c", "if (v1c_age[i] < v1c_age[victim]) victim = i;", "if (v1c_age[i] > v1c_age[victim]) victim = i;"),

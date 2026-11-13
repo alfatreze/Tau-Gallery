@@ -441,6 +441,14 @@ static void checkpoint(int n)
     case 219: v1z_cap = 600u; v1c_bs = 256u; v1c_n = 2u; v1c_reads = 0u; break;                                                                                                                                         /* an index of 768 bytes (64 tiles) no longer fits the buffer */
     case 220: pic_data[v1z.idx_off + 7u] ^= 1u; clear_texts(); chk(220, zn == 1u && zk < 0 && vid_bus == 1u && !v1z_idx_ok); break;                                                                      /* the index (768 bytes) no longer fits the buffer as far as this test is concerned: the picture still has its zoom stop */
     case 246: chk(246, said("ZOOM INDEX READ FAILED") && zk < 0 && !v1z_idx_ok); pic_data[v1z.idx_off + 7u] ^= 1u; break;      /* a flipped bit in an index kept on the card: the checksum, read in pieces, refuses it; the fit view stays */
+    case 290: chk(290, sel == 8u && pic.rx == 0u && pic.ry == 226u && pic.rw == 800u && pic.rh == 267u && pic.width == 3600u); break;                                              /* the 3600 x 1200 panorama: its own rectangle on the fit canvas, not the whole canvas */
+    case 291: { chk(291, zk == 0 && z_shown && z_stop.w == 3600 && z_stop.h == 1200 && abs(z_sx - 1400) <= 8 && abs(z_sy - 240) <= 8); } break;                                                        /* the zoom keeps the fit view's centre: the middle of the picture (level 1800, 600), so the corner is about (1400, 240) (the fit canvas's centre is 0.5 pixel off the picture's); with the canvas as the picture it started at the bottom (480) */
+    case 292: { const double sc = 800.0 / 3600.0; const int32_t ex = (int32_t)floor(z_sx * sc / 4.0) * 4, ey = (int32_t)floor(226.0 + z_sy * sc + 0.5); chk(292, abs(m_rx - ex) <= 4 && abs(m_ry - ey) <= 2 && m_rw >= 160 && m_rw <= 180); } break;      /* the map rectangle is where the view is, on the picture */
+    case 296: poll_adv = 1111111u; break;                                                                                                                       /* a key poll is a frame: the map's held keys step */
+    case 297: poll_adv = 0u; break;
+    case 293: chk(293, m_ry >= 226 && m_ry + m_rh <= 226 + 267 && m_ry + m_rh >= 226 + 267 - 3); break;                                                                                /* pushed down it stops at the bottom edge of the PICTURE (y 493), not the canvas's (720) */
+    case 294: chk(294, zk == 0 && z_shown && z_sy >= 470 && z_sy <= 480 && z_sy + 720 <= 1200); break;                                                                               /* the jump lands at the bottom of the level (corner y about 480) */
+    case 295: chk(295, sel == 9u && pic.rx == 280u && pic.ry == 0u && pic.rw == 240u && pic.rh == 720u); break;                                                                        /* the 1100 x 3300 portrait: 240 x 720 at x 280 */
     case 244: chk(244, zk == 0 && z_shown && v1z_idx_ok && v1z.idx == 0 && v1z.fetch && v1c_reads > 6u && v1c_reads < 60u && v1_view_matches("v00_full.rgb", 1000u, 900u)); { /* the cache's replacement rule, driven directly: blocks A, B, A, C, A with two slots read 3 times from the card (least recently used out; a hit renews a block) */
         const uint32_t b0 = v1z.idx_off / 256u, A = (b0 + 1u) * 256u + 40u, B = (b0 + 2u) * 256u + 40u, C = v1z.idx_off; uint8_t e[12]; int okk = (v1z.idx_off % 256u) <= 240u;
         v1c_clock = 0u; for (uint32_t q = 0; q < 16u; q++) { v1c_pos[q] = 0xFFFFFFFFu; v1c_age[q] = 0u; } v1c_reads = 0u;
@@ -714,6 +722,19 @@ int main(int argc, char **argv)
         S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); for (int i = 0; i < 6; i++) { S6[k++] = KEY_LEFT; S6[k++] = 0; } S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(217); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 60); S6[k++] = CP(218); S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(226); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 60); S6[k++] = CP(227); S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(228); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 60); S6[k++] = CP(229); S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); for (int i = 0; i < 7; i++) { S6[k++] = KEY_RIGHT; S6[k++] = 0; } S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(250);
         S6[k++] = KEY_A; S6[k++] = 0; H6(0, 400); S6[k++] = CP(230); H6(KEY_RIGHT, 120); H6(0, 100); S6[k++] = CP(251); S6[k++] = CP(231); H6(0, 400); S6[k++] = CP(270); H6(KEY_LEFT, 10); S6[k++] = CP(272); H6(KEY_LEFT, 190); S6[k++] = CP(271); S6[k++] = CP(273); H6(0, 10); S6[k++] = CP(274); S6[k++] = CP(225); S6[k++] = END;
         nscript = k; memcpy(script, S6, (size_t)k * sizeof S6[0]);
+        if (!setjmp(done)) gallery_app_main();
+        printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
+    }
+    if (argc > 2 && !strcmp(argv[2], "v1map")) {                                                           /* pictures that do not fill the fit canvas: a 3:1 panorama (v08) and a 1:3 portrait (v09): the picture's own rectangle drives the zoom entry and the map */
+        uint32_t S7[4096]; int k = 0;
+        S7[k++] = KEY_L1; S7[k++] = 0; for (int i = 0; i < 8; i++) { S7[k++] = KEY_RIGHT; S7[k++] = 0; } S7[k++] = KEY_A; S7[k++] = 0; S7[k++] = CP(290);                /* open v08 */
+        S7[k++] = KEY_A; S7[k++] = 0; for (int i = 0; i < 400; i++) S7[k++] = 0; S7[k++] = CP(291);                                                                        /* zoom in: the first view */
+        S7[k++] = KEY_START; S7[k++] = 0; S7[k++] = 0; S7[k++] = CP(292);                                                                                               /* the map */
+        S7[k++] = CP(296); for (int i = 0; i < 80; i++) S7[k++] = KEY_DOWN; S7[k++] = 0; S7[k++] = CP(293); S7[k++] = CP(297);                                                                                  /* the rectangle pushed down as far as it goes */
+        S7[k++] = KEY_A; S7[k++] = 0; for (int i = 0; i < 400; i++) S7[k++] = 0; S7[k++] = CP(294);                                                                        /* jump there */
+        S7[k++] = KEY_B; S7[k++] = 0; S7[k++] = KEY_B; S7[k++] = 0; S7[k++] = KEY_RIGHT; S7[k++] = 0; S7[k++] = KEY_A; S7[k++] = 0; S7[k++] = CP(295);               /* back to the grid, v09, open */
+        S7[k++] = END;
+        nscript = k; memcpy(script, S7, (size_t)k * sizeof S7[0]);
         if (!setjmp(done)) gallery_app_main();
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
     }
