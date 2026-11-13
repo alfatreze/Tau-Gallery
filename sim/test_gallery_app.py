@@ -55,6 +55,9 @@ def make_v1_set(d):
         if i == 5:
             b = bytearray(data); b[9] ^= 0x40; data = bytes(b)
         add(i, data, thumb, size, f"V1 picture {i:02d}")
+    prep11 = tgy.prepare(imgs[1]); data11, thumb11, size11 = tgy_make.canvas_container(None, prep11); c11 = C.Container(data11); e11 = c11.levels[0]      # v11: v01's picture with the stream of tile 20 damaged: the decode starts, counts 20 tiles, then fails (a partial decode in the histogram unit)
+    ioff, = C.struct.unpack_from("<I", data11, e11["index_off"] + 12 * 20); b11 = bytearray(data11); b11[e11["data_off"] + ioff:e11["data_off"] + ioff + 40] = b"\xff" * 40
+    add(11, bytes(b11), thumb11, size11, "V1 late damage 11")
     canvas, rect, thumb, size = tgy.render(imgs[2]); add(2, tgy.pack_tgy(canvas, rect, thumb, size), thumb, size, "V0 picture 02")
     import io as _io
     from PIL import Image as _I
@@ -134,7 +137,7 @@ def run(workdir, setdir):
     if r.returncode: rc = 1; out += "\nFAIL scenario zoom\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
     global V1SET
     if V1SET is None: V1SET = Path(tempfile.mkdtemp()); make_v1_set(V1SET)
-    for sc in ("v1", "v1nohw", "v1zoom", "v1map", "v1rot", "v1mask"):
+    for sc in ("v1", "v1nohw", "v1zoom", "v1map", "v1rot", "v1mask", "v1hist", "v1mirror"):
         r = subprocess.run([str(workdir / "t"), str(V1SET), sc], capture_output=True, text=True, timeout=900)
         if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
         else: out += "\n" + r.stdout
@@ -150,7 +153,7 @@ def run(workdir, setdir):
         if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
     global LBSET
     if LBSET is None: LBSET = Path(tempfile.mkdtemp()); make_libbig_set(LBSET)
-    for sc in ("libbig0", "libbig1", "libbig2", "libbig3", "libbigset"):
+    for sc in ("libbig0", "libbig1", "libbig2", "libbig3", "libbigset", "colour"):
         r = subprocess.run([str(workdir / "t"), str(LBSET), sc], capture_output=True, text=True, timeout=900)
         if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
     for sc in ("big", "bigresume250", "bigresume299"):
@@ -244,7 +247,7 @@ def mutants(setdir, tail=None):
             ("gallery_app.c", "gset.last_idx = i; gset.last_crc = path_crc(i); }", "gset.last_idx = i; }"),
             ("gallery_app.c", "gs_resume_index(&gset, head.count, path_crc(gset.last_idx)) : 0u;", "gset.last_idx : 0u;"),
             ("gallery_app.c", "        settings_tick();\n        const uint32_t dkeys", "        const uint32_t dkeys"),
-            ("gallery_app.c", "else if (r == GP_OPEN_SETTINGS) { gsp_t sp = { 0 }; draw_settings(&sp); while (!gsp_input(&sp, &gset.resume, &gset.grid, &gset.dither, next_edge(&prev))) { fx_apply(); draw_settings(&sp); } }", "else if (r == GP_OPEN_SETTINGS) { gsp_t sp = { 0 }; draw_settings(&sp); while (!gsp_input(&sp, &gset.resume, &gset.grid, &gset.dither, next_edge(&prev))) { fx_apply(); draw_settings(&sp); } gset.resume = 1u; }"),
+            ("gallery_app.c", "else if (r == GP_OPEN_SETTINGS) { gsp_t sp = { 0 }; draw_settings(&sp); while (!gsp_input(&sp, &gset.resume, &gset.grid, &gset.dither, &gset.lut, next_edge(&prev))) { fx_apply(); draw_settings(&sp); } }", "else if (r == GP_OPEN_SETTINGS) { gsp_t sp = { 0 }; draw_settings(&sp); while (!gsp_input(&sp, &gset.resume, &gset.grid, &gset.dither, &gset.lut, next_edge(&prev))) { fx_apply(); draw_settings(&sp); } gset.resume = 1u; }"),
             ("gallery_settings.c", "if (gs_publish_due(cycles(), last_activity, CLK_HZ, 1)) publish(v);", "publish(v);"),
             ("gallery_settings.c", "if (m & (1u << k)) set_wr(k, w[k]); }", "set_wr(k, w[k]); }"),
             ("gallery_settings.c", "gs_stats.layout = (w[GS_W_LAYOUT] >> 27) & 15u; gs_stats.loads++;", "gs_stats.layout = 0u; gs_stats.loads++;"),
@@ -382,14 +385,14 @@ def mutants(setdir, tail=None):
         ("gallery_app.c", ": hs_rect(pw, ph);", ": hs_rect(ph, pw);"),
         ("gallery_app.c", "thumb_hist(gx_thumb_off(&head, e->thumb), &det_hist, e->width, e->height)", "thumb_hist(gx_thumb_off(&head, e->thumb), &det_hist, 0u, 0u)"),
         ("gallery_app.c", "row = px / HS_TW, col = px % HS_TW;", "row = px / HS_TW, col = (px % HS_TW) + 1u;"),
-        ("gallery_app.c", "gfx_text(6, 324, hist ? GD_HIST_SRC : GD_HIST_NOTE, DIM, BG);", ""),
+        ("gallery_app.c", "gfx_text(6, 324, hist ? (from_dec ? GD_HIST_SRC_DEC : GD_HIST_SRC) : GD_HIST_NOTE, DIM, BG);", ""),
     ]
     muts += [                                                                                                      # the version 1 path (open_v1, the hardware decoder)
         ("gallery_app.c", "REG_WR(R_LAND_BASE, GAL_LAND_BASE); REG_WR(R_LAND_CTRL, 1u);", "REG_WR(R_LAND_BASE, GAL_LAND_BASE + 2u); REG_WR(R_LAND_CTRL, 1u);"),
         ("gallery_app.c", "if (!tgy_hw_present()) return 7;", ""),
         ("gallery_app.c", "if (r == TH_HWERR) return 9;", "if (r == TH_HWERR) return 8;"),
         ("gallery_app.c", "if (r == TH_CRC || r == TH_MAGIC || r == TH_VERSION || r == TH_SHORT) return 3;", ""),
-        ("gallery_app.c", "h4[4] == 1u && h4[5] == 0u) return open_v1(show_progress);", "h4[4] == 1u && h4[5] == 7u) return open_v1(show_progress);"),
+        ("gallery_app.c", "h4[4] == 1u && h4[5] == 0u) { const int rv = open_v1(show_progress);", "h4[4] == 1u && h4[5] == 7u) { const int rv = open_v1(show_progress);"),
         ("gallery_app.c", ": tgy_hw_show(&v1f, &v1l, GAL_PLANE_BASE * 2u, v1_tick, &show);", ": tgy_hw_show(&v1f, &v1l, GAL_LAND_BASE * 2u, v1_tick, &show);"),
         ("gallery_app.c", "const uint32_t fsize = (uint32_t)h4[48] | (uint32_t)h4[49] << 8 | (uint32_t)h4[50] << 16 | (uint32_t)h4[51] << 24, base = GAL_LAND_BASE * 2u;", "const uint32_t fsize = (uint32_t)h4[48] | (uint32_t)h4[49] << 8 | (uint32_t)h4[50] << 16 | (uint32_t)h4[51] << 24, base = GAL_LAND_BASE * 2u + 2u;"),
     ]
@@ -418,7 +421,7 @@ def mutants(setdir, tail=None):
         ("gallery_app.c", "if (gx_parse_entry_h(&head, buf + k * head.entry_bytes, head.entry_bytes, &ent[k])) return 0;", "if (gx_parse_entry_h(&head, buf + k * 160u, head.entry_bytes, &ent[k])) return 0;"),
     ]
     muts += [                                                                                                      # the turned view (K7)
-        ("gallery_app.c", "rot_o = gr_turn(rot_o, (edge & KEY_Y) != 0u);", "rot_o = gr_turn(rot_o, (edge & KEY_X) != 0u);"),
+        ("gallery_app.c", ": gr_turn(rot_o, (edge & KEY_Y) != 0u); mask_i = 0u;", ": gr_turn(rot_o, (edge & KEY_X) != 0u); mask_i = 0u;"),
         ("gallery_app.c", "(rot_pan + ROT_STEP > rot_pan_max ? rot_pan_max : rot_pan + ROT_STEP)", "(rot_pan + ROT_STEP)"),
         ("gallery_app.c", "(rot_pan > ROT_STEP ? rot_pan - ROT_STEP : 0u)", "(rot_pan - ROT_STEP)"),
         ("gallery_app.c", "rot_view(); prev = REG_RD(R_INPUT) & 0xFFFFu; held = 0u; next_tick = cycles(); continue;", "prev = REG_RD(R_INPUT) & 0xFFFFu; held = 0u; next_tick = cycles(); continue;"),
@@ -431,7 +434,7 @@ def mutants(setdir, tail=None):
         ("gallery_app.c", "rot_clear(rows); rot_pan_max", "rot_pan_max"),
         ("gallery_app.c", "gr_dims(o, cw, ch, &pw, &ph);", "pw = cw; ph = ch;"),
         ("gallery_app.c", "if (rot_o == 0u) { REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16); REG_WR(R_VIEW_BASE, GAL_PLANE_BASE); } else rot_view();", "rot_view();"),
-        ("gallery_app.c", "            if (!v1_on) continue;\n            rot_o = gr_turn", "            rot_o = gr_turn"),
+        ("gallery_app.c", "            if (!v1_on) continue;\n            rot_o = (keys", "            rot_o = (keys"),
     ]
     muts += [                                                                                                      # the details pages
         ("gallery_app.c", "if (head.version == 1u && e->details_len) {", "if (0) {"),
@@ -453,11 +456,50 @@ def mutants(setdir, tail=None):
         ("gallery_app.c", "mask_black(base, 0u, x0, y0, y1); mask_black(base, x1, GT_CANVAS_W, y0, y1);\n", "mask_black(base, 0u, x0, y0, y1);\n"),
         ("gallery_app.c", "    mask_painted = 0u;\n    if (rot_o == 0u) { REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16);", "    if (rot_o == 0u) { REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16);"),
         ("gallery_app.c", "sel = n; rot_o = 0u; mask_i = 0u; mask_painted = 0u;", "sel = n; rot_o = 0u; mask_painted = 0u;"),
-        ("gallery_app.c", "rot_o = gr_turn(rot_o, (edge & KEY_Y) != 0u); mask_i = 0u;", "rot_o = gr_turn(rot_o, (edge & KEY_Y) != 0u);"),
+        ("gallery_app.c", ": gr_turn(rot_o, (edge & KEY_Y) != 0u); mask_i = 0u;", ": gr_turn(rot_o, (edge & KEY_Y) != 0u);"),
         ("gallery_app.c", "if ((rot_o != 0u || mask_i != 0u) && (edge & (KEY_A | KEY_R1))) continue;", "if (rot_o != 0u && (edge & (KEY_A | KEY_R1))) continue;"),
         ("gallery_app.c", "*x = rot_px + (xa < xb ? xa : xb);", "*x = (xa < xb ? xa : xb);"),
         ("gallery_app.c", "const uint32_t base = rot_o ? GAL_ROT_BASE : GAL_PLANE_BASE, rows = rot_o ? rot_rows : GT_CANVAS_H;", "const uint32_t base = GAL_PLANE_BASE, rows = rot_o ? rot_rows : GT_CANVAS_H;"),
         ("gallery_app.c", "gm_crop(mask_i, mask_p, rx, ry, rw, rh, &x0, &y0, &x1, &y1);", "gm_crop(mask_i, 0u, rx, ry, rw, rh, &x0, &y0, &x1, &y1);"),
+    ]
+    muts += [                                                                                                      # the colour presets
+        ("gallery_app.c", "static void lut_wait(void) { while (REG_RD(R_PIX_CTRL) & 0x100u) { } }", "static void lut_wait(void) { }"),
+        ("gallery_app.c", "        REG_WR(R_PIX_CTRL, d);  ", "        (void)d;  "),
+        ("gallery_app.c", "REG_WR(R_PIX_CTRL, d | (p != 0u ? 4u : 0u));", "REG_WR(R_PIX_CTRL, d);"),
+        ("gallery_app.c", "if (p != 0u && p != lut_loaded) {", "if (p != 0u) {"),
+        ("gallery_app.c", "if (p != 0u && p != lut_loaded) {", "if (p != 0u && lut_loaded == 0u) {"),
+        ("gallery_app.c", "for (uint32_t ch = 0; ch < 3u; ch++)", "for (uint32_t ch = 0; ch < 2u; ch++)"),
+        ("gallery_app.c", "for (uint32_t i = 0; i < 256u; i++) { lut_wait();", "for (uint32_t i = 0; i < 255u; i++) { lut_wait();"),
+        ("gallery_app.c", "const uint32_t d = gset.dither % 3u,", "const uint32_t d = 0u * gset.dither,"),
+        ("gallery_app.c", "lut_wait(); lut_loaded = p;", "lut_wait();"),
+        ("gallery_app.c", "REG_WR(R_PIX_LUT, gl_word(ch, i, gl_value(p, ch, i)))", "REG_WR(R_PIX_LUT, gl_word(0u, i, gl_value(p, ch, i)))"),
+        ("gallery_app.c", "REG_WR(R_PIX_LUT, gl_word(ch, i, gl_value(p, ch, i)))", "REG_WR(R_PIX_LUT, gl_word(ch, i, gl_value(p, 1u, i)))"),
+    ]
+    muts += [                                                                                                      # the histograms of the decoder
+        ("gallery_app.c", "(uint32_t)(fx + fw), (uint32_t)(fy + fh));", "GT_CANVAS_W, (uint32_t)(fy + fh));"),
+        ("gallery_app.c", "tgy_hw_hist_begin((uint32_t)fx, (uint32_t)fy,", "tgy_hw_hist_begin((uint32_t)fx, 0u,"),
+        ("gallery_app.c", "if (hist_hw) { tgy_hw_hist_end(); hist_counted = (r == TH_OK); }", "if (hist_hw) { hist_counted = (r == TH_OK); }"),
+        ("gallery_app.c", "if (rv == 0 && hist_counted) hist_for = i;", ""),
+        ("gallery_app.c", "if (hist_for == sel && !tgy_hw_hist_fold32(c, &n) && n != 0u)", "if (!tgy_hw_hist_fold32(c, &n) && n != 0u)"),
+        ("gallery_app.c", "(REG_RD(R_VIEW_CAPS) & 4u) != 0u;", "(REG_RD(R_VIEW_CAPS) & 2u) != 0u;"),
+        ("gallery_app.c", "hist_ok = 1; from_dec = 1; }", "hist_ok = 1; from_dec = 0; }"),
+        ("gallery_app.c", "hist_for = 0xFFFFFFFFu; hist_counted = 0u;", "hist_counted = 0u;"),
+        ("tgy_hw.c", "REG_WR(R_HIST_CTRL, 2u); hist_wait();", "REG_WR(R_HIST_CTRL, 0u); hist_wait();"),
+        ("tgy_hw.c", "static void hist_wait(void) { for (uint32_t i = 0; i < 100000u && (REG_RD(R_HIST_CTRL) & 0x100u); i++) { } }", "static void hist_wait(void) { }"),
+        ("tgy_hw.c", "REG_WR(R_HIST_RECT1, (y1 << 16) | x1);", "REG_WR(R_HIST_RECT1, (y1 << 16) | x0);"),
+        ("tgy_hw.c", "REG_WR(R_HIST_RECT0, (y0 << 16) | x0);", "REG_WR(R_HIST_RECT0, (0u << 16) | x0);"),
+        ("tgy_hw.c", "out[k][i >> 3] += v & 0xFFFFFFu;", "out[k][i >> 4] += v & 0xFFFFFFu;"),
+        ("tgy_hw.c", "REG_WR(R_HIST_IDX, (k << 8) | i);", "REG_WR(R_HIST_IDX, ((k ^ 1u) << 8) | i);"),
+        ("tgy_hw.c", "if (g_hist_on) REG_WR(R_HIST_ORG, (y0 << 16) | x0);", "if (g_hist_on) REG_WR(R_HIST_ORG, (0u << 16) | x0);"),
+        ("tgy_hw.c", "if (g_hist_on) REG_WR(R_HIST_ORG, (y0 << 16) | x0);", "if (0) REG_WR(R_HIST_ORG, (y0 << 16) | x0);"),
+        ("tgy_hw.c", "REG_WR(R_HIST_CTRL, 1u); g_hist_on = 1u;", "REG_WR(R_HIST_CTRL, 1u); g_hist_on = 0u;"),
+    ]
+    muts += [                                                                                                      # the mirror keys and the Controls rows
+        ("gallery_app.c", "rot_o = (keys & KEY_START) ? ((edge & KEY_Y) ? gr_flip(rot_o) : gr_mirror(rot_o)) : gr_turn(rot_o, (edge & KEY_Y) != 0u);", "rot_o = gr_turn(rot_o, (edge & KEY_Y) != 0u);"),
+        ("gallery_app.c", "rot_o = (keys & KEY_START) ? ((edge & KEY_Y) ? gr_flip(rot_o) : gr_mirror(rot_o)) :", "rot_o = (keys & KEY_START) ? ((edge & KEY_Y) ? gr_mirror(rot_o) : gr_mirror(rot_o)) :"),
+        ("gallery_app.c", "rot_o = (keys & KEY_START) ? ((edge & KEY_Y) ? gr_flip(rot_o) : gr_mirror(rot_o)) :", "rot_o = (keys & KEY_START) ? ((edge & KEY_Y) ? gr_flip(rot_o) : gr_flip(rot_o)) :"),
+        ("gallery_app.c", "rot_o = (keys & KEY_START) ? ((edge & KEY_Y) ? gr_flip(rot_o) : gr_mirror(rot_o)) :", "rot_o = (keys & KEY_L1) ? ((edge & KEY_Y) ? gr_flip(rot_o) : gr_mirror(rot_o)) :"),
+        ("gallery_app.c", "rot_o = (keys & KEY_START) ? ((edge & KEY_Y) ? gr_flip(rot_o) : gr_mirror(rot_o)) : gr_turn(rot_o, (edge & KEY_Y) != 0u); mask_i = 0u;", "rot_o = (keys & KEY_START) ? ((edge & KEY_Y) ? gr_flip(rot_o) : gr_mirror(rot_o)) : gr_turn(rot_o, (edge & KEY_Y) != 0u);"),
     ]
     only = sys.argv[sys.argv.index("--only") + 1] if "--only" in sys.argv else None                                   # --only TEXT: just the mutants whose original code contains TEXT (Tier B of CLAUDE.md section 4: the mutants of the code you changed)
     if only: muts = [m for m in muts if only in m[1]]; assert muts, "no mutant matches --only"

@@ -14,6 +14,7 @@
 #include "gallery_view.h"
 #include "gallery_rot.h"
 #include "gallery_mask.h"
+#include "gallery_lut.h"
 
 #define BG   th_role[TR_BG_BOTTOM]                /* the colours are the theme's roles (ui/theme.c, docs/THEME_SPEC.md) */
 #define FG   th_role[TR_TEXT_PRIMARY]
@@ -62,6 +63,7 @@ static uint32_t gi, pp;                                                         
 static void set_grid(uint32_t g) { gi = g; pp = (uint32_t)GR.cols * GR.rows; }
 
 static gx_head_t head; static gx_entry_t ent[MAX_PP];
+static uint32_t hist_for = 0xFFFFFFFFu, hist_counted;                                          /* the picture whose fit-level decode the histogram unit counted last (none after a failed open); open_v1 says it counted */
 static uint32_t sel, page, loaded_page = 0xFFFFFFFFu, n_on_page;                                    /* sel: the selected entry, an index into the library (or into the folders on the folder level) */
 static uint32_t cur_first, cur_count, level, cur_folder;                                            /* the open folder is the range [cur_first, cur_first + cur_count) of the entries; level 1 shows the folders themselves */
 #define EN(i) ent[(i) - (cur_first + page * pp)]                                                    /* the loaded page's record of entry i */
@@ -283,7 +285,15 @@ static int open_v1(int show_progress)
     if (r == TH_SHORT) return 2;
     if (r != TH_OK) return 8;
     int show = show_progress;
+    hist_for = 0xFFFFFFFFu; hist_counted = 0u;
+    const int hist_hw = (REG_RD(R_VIEW_CAPS) & 4u) != 0u;                           /* the core has the pixel effects and the histogram unit */
+    if (hist_hw) {                                                                   /* count the picture itself (not the black bars of the fit canvas) while the fit level is decoded */
+        int32_t fx = 0, fy = 0, fw = (int32_t)v1l.w, fh = (int32_t)v1l.h;
+        if (v1l.kind == 2u) gv_fit_rect(v1f.width, v1f.height, GT_CANVAS_W, GT_CANVAS_H, &fx, &fy, &fw, &fh);
+        tgy_hw_hist_begin((uint32_t)fx, (uint32_t)fy, (uint32_t)(fx + fw), (uint32_t)(fy + fh));
+    }
     r = rot_o != 0u ? rot_show(rot_o, &show) : tgy_hw_show(&v1f, &v1l, GAL_PLANE_BASE * 2u, v1_tick, &show);
+    if (hist_hw) { tgy_hw_hist_end(); hist_counted = (r == TH_OK); }
     if (r == TH_HWERR) return 9;
     if (r == TH_TIMEOUT) return 10;
     if (r != TH_OK) return 8;
@@ -300,7 +310,7 @@ static int open_picture(uint32_t i, int show_progress)
     if (show_progress) { say("OPENING", ACC); loader_bar(0u, 1u); }
     if (!slot_open_path(SLOT_PIC, path)) return 1;
     if (!read_bytes(SLOT_PIC, 0u, 4096u, h4) && !read_bytes(SLOT_PIC, 0u, 4096u, h4)) return 2;      /* one retry of a failed read: a transient card error should not cost the picture */
-    if (h4[0] == 'T' && h4[1] == 'G' && h4[2] == 'Y' && h4[3] == 0 && h4[4] == 1u && h4[5] == 0u) return open_v1(show_progress);       /* container version 1: the hardware decoder */
+    if (h4[0] == 'T' && h4[1] == 'G' && h4[2] == 'Y' && h4[3] == 0 && h4[4] == 1u && h4[5] == 0u) { const int rv = open_v1(show_progress); if (rv == 0 && hist_counted) hist_for = i; return rv; }       /* container version 1: the hardware decoder */
     v1_on = 0u;
     if (gt_parse(h4, 4096u, &pic)) return 3;
     if (!(REG_RD(R_LAND_STATUS) >> 31)) return 4;                                   /* no landing path in this bitstream */
@@ -317,7 +327,18 @@ static const char *const open_msg[] = { "", "OPEN FAILED", "HEADER READ FAILED",
 static void zoom_list(void);
 static gi_t info = { 0u, 0u, 0u, GI_NONE, 0u, 0u, 0, 0u, 0u, 0u, GI_NONE, GI_NONE, GI_NONE, GI_NONE, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u };
 static gs_vals_t gset; static uint32_t last_act;                                              /* the persisted settings; the clock of the last key or card read (a save waits for a quiet second after it) */
-static void fx_apply(void) { REG_WR(R_PIX_CTRL, gset.dither % 3u); }                                  /* the dither of the scan-out (the colour tables follow with the presets) */
+static uint32_t lut_loaded;                                                                              /* the preset the scan-out tables hold (0 = none loaded; the tables are identity at power-up) */
+static void lut_wait(void) { while (REG_RD(R_PIX_CTRL) & 0x100u) { } }                                    /* one store at a time */
+static void fx_apply(void)                                                                               /* dither and colour preset of the scan-out */
+{
+    const uint32_t d = gset.dither % 3u, p = gset.lut % GL_PRESETS;
+    if (p != 0u && p != lut_loaded) {
+        REG_WR(R_PIX_CTRL, d);                                                                           /* tables off while they are written, so no half-loaded curve shows */
+        for (uint32_t ch = 0; ch < 3u; ch++) for (uint32_t i = 0; i < 256u; i++) { lut_wait(); REG_WR(R_PIX_LUT, gl_word(ch, i, gl_value(p, ch, i))); }
+        lut_wait(); lut_loaded = p;
+    }
+    REG_WR(R_PIX_CTRL, d | (p != 0u ? 4u : 0u));
+}
 static uint32_t path_crc(uint32_t i) { const char *s = EN(i).path; uint32_t n = 0; while (s[n]) n++; return gf_crc32((const uint8_t *)s, n) & GS_M31; }
 static void remember(uint32_t i) { gset.last_idx = i; gset.last_crc = path_crc(i); }       /* the picture the next start resumes on: only one the viewer has shown */
 static void settings_tick(void) { gs_hw_service(&gset, last_act); }
@@ -799,9 +820,9 @@ static void viewer(void)
             if (!gal_view_on()) { loaded_page = 0xFFFFFFFFu; draw_page(); say("VIEWER DID NOT START", BAD); return; }
             rot_view(); prev = REG_RD(R_INPUT) & 0xFFFFu; held = 0u; next_tick = cycles(); continue;
         }
-        if (edge & (KEY_X | KEY_Y)) {                                                                                                 /* X: turn the picture counter-clockwise, Y: clockwise (version 1 pictures: the hardware decoder draws it turned) */
+        if (edge & (KEY_X | KEY_Y)) {                                                                                                 /* X: turn the picture counter-clockwise, Y: clockwise; with Start held: X mirrors left-right, Y top-bottom (version 1 pictures: the hardware decoder draws it so) */
             if (!v1_on) continue;
-            rot_o = gr_turn(rot_o, (edge & KEY_Y) != 0u); mask_i = 0u;
+            rot_o = (keys & KEY_START) ? ((edge & KEY_Y) ? gr_flip(rot_o) : gr_mirror(rot_o)) : gr_turn(rot_o, (edge & KEY_Y) != 0u); mask_i = 0u;
             const int r = view_reopen();
             if (r) { rot_o = 0u; gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); say(open_msg[r], BAD); return; }
             continue;
@@ -914,12 +935,12 @@ static void draw_info(void)
 static void draw_settings(const gsp_t *sp)
 {
     page_clear("SETTINGS");
-    const char *val[GSP_ROWS] = { gset.resume ? "ON" : "OFF", gsp_grid_names[gset.grid % GSP_GRIDS], gsp_dither_names[gset.dither % GSP_DITHERS] };
+    const char *val[GSP_ROWS] = { gset.resume ? "ON" : "OFF", gsp_grid_names[gset.grid % GSP_GRIDS], gsp_dither_names[gset.dither % GSP_DITHERS], gl_names[gset.lut % GL_PRESETS] };
     for (uint32_t i = 0; i < GSP_ROWS; i++) {
         const uint32_t y = PAGE_Y0 + i * 2u * LINE_H;
         gfx_text(6, y, gsp_labels[i], i == sp->row ? FG : DIM, BG); gfx_text(250, y, val[i], ACC, BG); if (i == sp->row) gfx_text(GFX_W - 32u, y, "<", ACC, BG);
     }
-    gfx_text(6, PAGE_Y0 + 6u * LINE_H + 4u, sp->row == GSP_RESUME ? "ON: the grid opens on the last picture." : sp->row == GSP_GRID ? "Pictures on a page: 12, 20, 24 or 48." : "Spreads the 5 and 6 bit panel steps.", DIM, BG);
+    gfx_text(6, PAGE_Y0 + 6u * LINE_H + 4u, sp->row == GSP_RESUME ? "ON: the grid opens on the last picture." : sp->row == GSP_GRID ? "Pictures on a page: 12, 20, 24 or 48." : sp->row == GSP_DITHER ? "Spreads the 5 and 6 bit panel steps." : "A colour curve for the whole viewer.", DIM, BG);
     page_foot("UP DOWN ROW   LEFT RIGHT CHANGE   B BACK", 0, 0);
 }
 static void frame_box(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t col)           /* a 1 px outline */
@@ -966,7 +987,7 @@ static void draw_indicator(const gdp_t *p)
     gfx_text(x, 2, b, DIM, BG);
     for (uint32_t i = 0; i < p->n; i++) gfx_rect(x - 6u - (uint32_t)(p->n - i) * 8u, 7, 5, 5, i == p->cur ? ACC : DIM);
 }
-static void draw_dpage(const gdp_t *p, const gd_t *d, const gd_meta_t *m, const hs_t *hist)
+static void draw_dpage(const gdp_t *p, const gd_t *d, const gd_meta_t *m, const hs_t *hist, int from_dec)
 {
     const uint32_t id = p->id[p->cur];
     page_clear(gdp_titles[id]);
@@ -985,7 +1006,7 @@ static void draw_dpage(const gdp_t *p, const gd_t *d, const gd_meta_t *m, const 
                 if (bh) gfx_rect(x + DET_BX + i * DET_BW, y + DET_HH - DET_BB - bh, DET_BW - 1u, bh, bar_col[h]);
             }
         }
-        gfx_text(6, 324, hist ? GD_HIST_SRC : GD_HIST_NOTE, DIM, BG);
+        gfx_text(6, 324, hist ? (from_dec ? GD_HIST_SRC_DEC : GD_HIST_SRC) : GD_HIST_NOTE, DIM, BG);
     }
     draw_indicator(p);
     page_foot("LEFT RIGHT PAGE   B OR SELECT BACK", 0, 0);
@@ -1003,10 +1024,14 @@ static void run_details(void)
     gd_meta_t m; m.has = 0u;
     if (head.version == 1u && e->details_len) { uint8_t db[GX_MAX_DETAILS]; if (read_bytes(SLOT_IDX, gx_details_abs(&head, e), e->details_len, db)) gd_meta_parse(db, e->details_len, &m); }
     gdp_t pg; gdp_open(&pg, &m);
-    uint32_t prev = REG_RD(R_INPUT) & 0xFFFFu; int hist_ok = -1;
+    uint32_t prev = REG_RD(R_INPUT) & 0xFFFFu; int hist_ok = -1, from_dec = 0;
     for (;;) {
-        if (pg.id[pg.cur] == GDP_HIST && hist_ok < 0) hist_ok = thumb_hist(gx_thumb_off(&head, e->thumb), &det_hist, e->width, e->height);
-        draw_dpage(&pg, &d, &m, hist_ok > 0 ? &det_hist : 0);
+        if (pg.id[pg.cur] == GDP_HIST && hist_ok < 0) {
+            uint32_t c[GD_HIST_N][HS_BINS], n = 0u;
+            if (hist_for == sel && !tgy_hw_hist_fold32(c, &n) && n != 0u) { hs_from_counts(&det_hist, c, n); hist_ok = 1; from_dec = 1; }      /* the viewer decoded this picture's fit level and the unit counted it */
+            else hist_ok = thumb_hist(gx_thumb_off(&head, e->thumb), &det_hist, e->width, e->height);
+        }
+        draw_dpage(&pg, &d, &m, hist_ok > 0 ? &det_hist : 0, from_dec);
         if (gdp_input(&pg, next_edge(&prev))) break;
     }
 }
@@ -1027,7 +1052,7 @@ static void run_pages(void)
                 draw_theme(&g, &l);
             }
         }
-        else if (r == GP_OPEN_SETTINGS) { gsp_t sp = { 0 }; draw_settings(&sp); while (!gsp_input(&sp, &gset.resume, &gset.grid, &gset.dither, next_edge(&prev))) { fx_apply(); draw_settings(&sp); } }
+        else if (r == GP_OPEN_SETTINGS) { gsp_t sp = { 0 }; draw_settings(&sp); while (!gsp_input(&sp, &gset.resume, &gset.grid, &gset.dither, &gset.lut, next_edge(&prev))) { fx_apply(); draw_settings(&sp); } }
         else if (r == GP_OPEN_CONTROLS) { gc_t c; gc_open(&c); draw_controls(&c); while (!gc_input(&c, next_edge(&prev))) draw_controls(&c); }
         else if (r == GP_OPEN_HELP) { gh_t h; gh_open(&h); draw_help(&h); while (!gh_input(&h, next_edge(&prev))) draw_help(&h); }
         else { draw_info(); for (;;) { const int k = gi_input(next_edge(&prev)); if (k == 1) break; if (k == 2) v1_pipe_off ^= 1u; draw_info(); } }

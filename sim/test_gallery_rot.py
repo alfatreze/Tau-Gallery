@@ -57,8 +57,8 @@ def evaluate(exe):
                         if X >= want.shape[1] or Y >= want.shape[0] or not np.array_equal(plane[Y * pitch + 3 * X:Y * pitch + 3 * X + 3], img[y, x]): ok = False
             check(f"{iw}x{ih} o{o}: the scatter steps put every pixel of the tiles on its place", ok)
         # the turn tables
-        cw = {int(h[1]): int(h[10]) for h in heads}; ccw = {int(h[1]): int(h[12]) for h in heads}; mir = {int(h[1]): int(h[14]) for h in heads}
-        ok = all(np.array_equal(NP[cw[o]](img), np.rot90(NP[o](img), -1)) for o in range(8)) and all(np.array_equal(NP[ccw[o]](img), np.rot90(NP[o](img), 1)) for o in range(8)) and all(np.array_equal(NP[mir[o]](img), NP[o](img)[:, ::-1]) for o in range(8))
+        cw = {int(h[1]): int(h[10]) for h in heads}; ccw = {int(h[1]): int(h[12]) for h in heads}; mir = {int(h[1]): int(h[14]) for h in heads}; flp = {int(h[1]): int(h[16]) for h in heads}
+        ok = all(np.array_equal(NP[cw[o]](img), np.rot90(NP[o](img), -1)) for o in range(8)) and all(np.array_equal(NP[ccw[o]](img), np.rot90(NP[o](img), 1)) for o in range(8)) and all(np.array_equal(NP[mir[o]](img), NP[o](img)[:, ::-1]) for o in range(8)) and all(np.array_equal(NP[flp[o]](img), NP[o](img)[::-1, :]) for o in range(8))
         check(f"{iw}x{ih}: turning clockwise, counter-clockwise and mirroring the displayed picture give the orientation numpy gives", ok)
         check(f"{iw}x{ih}: four turns are the identity", all(cw[cw[cw[cw[o]]]] == o for o in range(8)) and all(ccw[cw[o]] == o for o in range(8)))
     return fails
@@ -69,7 +69,7 @@ def mutants():
         ("the width and height exchange", "*dw = gr_swaps(o) ? ih : iw;", "*dw = iw;"), ("the x step", "return gr_a[o][0] * 3 + gr_a[o][2] * pitch;", "return gr_a[o][0] * 3 + gr_a[o][3] * pitch;"),
         ("the y step", "return gr_a[o][1] * 3 + gr_a[o][3] * pitch;", "return gr_a[o][1] * 3 + gr_a[o][2] * pitch;"), ("the tile offset uses the width for the pitch", "return Y * pitch + X * 3u;", "return Y * 3u + X * pitch;"),
         ("the turn goes the other way", "const int32_t r00 = 0, r01 = cw ? -1 : 1, r10 = cw ? 1 : -1, r11 = 0;", "const int32_t r00 = 0, r01 = cw ? 1 : -1, r10 = cw ? -1 : 1, r11 = 0;"),
-        ("the mirror is a flip top-bottom", "return gr_find(-gr_a[o][0], -gr_a[o][1], gr_a[o][2], gr_a[o][3]);", "return gr_find(gr_a[o][0], gr_a[o][1], -gr_a[o][2], -gr_a[o][3]);"), ("a swap flag for 3", "return o >= 4u;", "return o >= 5u;")]
+        ("the mirror is a flip top-bottom", "return gr_find(-gr_a[o][0], -gr_a[o][1], gr_a[o][2], gr_a[o][3]);", "return gr_find(gr_a[o][0], gr_a[o][1], -gr_a[o][2], -gr_a[o][3]);"), ("the flip is a mirror left-right", "return gr_find(gr_a[o][0], gr_a[o][1], -gr_a[o][2], -gr_a[o][3]); }", "return gr_find(-gr_a[o][0], -gr_a[o][1], gr_a[o][2], gr_a[o][3]); }"), ("the flip is a rotation by 180", "return gr_find(gr_a[o][0], gr_a[o][1], -gr_a[o][2], -gr_a[o][3]); }", "return gr_find(-gr_a[o][0], -gr_a[o][1], -gr_a[o][2], -gr_a[o][3]); }"), ("the flip keeps the orientation", "return gr_find(gr_a[o][0], gr_a[o][1], -gr_a[o][2], -gr_a[o][3]); }", "return o; }"), ("a swap flag for 3", "return o >= 4u;", "return o >= 5u;")]
     surv = 0
     for name, a, b in muts:
         assert a in src, name

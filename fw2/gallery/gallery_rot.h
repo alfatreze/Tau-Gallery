@@ -42,4 +42,5 @@ static inline uint32_t gr_turn(uint32_t o, int cw)
     return gr_find(r00 * gr_a[o][0] + r01 * gr_a[o][2], r00 * gr_a[o][1] + r01 * gr_a[o][3], r10 * gr_a[o][0] + r11 * gr_a[o][2], r10 * gr_a[o][1] + r11 * gr_a[o][3]);
 }
 static inline uint32_t gr_mirror(uint32_t o) { return gr_find(-gr_a[o][0], -gr_a[o][1], gr_a[o][2], gr_a[o][3]); }      /* mirrored left-right on the screen */
+static inline uint32_t gr_flip(uint32_t o) { return gr_find(gr_a[o][0], gr_a[o][1], -gr_a[o][2], -gr_a[o][3]); }                 /* mirrored top-bottom on the screen */
 #endif

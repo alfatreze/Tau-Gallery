@@ -60,6 +60,9 @@ static const gc_row_t gc_rows[] = {
     { "A",              "ZOOM IN (IF IT CAN)" },
     { "B",              "BACK TO THE GRID"    },
     { "SELECT",         "PICTURE DETAILS"     },
+    { "X / Y",          "TURN LEFT / RIGHT"   },
+    { "START + X / Y",  "MIRROR SIDE / TOP"   },
+    { "L1 / START",     "CROP MASK / TURN IT" },
     { "ZOOMED IN",      ""                    },
     { "D-PAD",          "PAN"                 },
     { "START",          "MAP: JUMP TO A SPOT" },
@@ -139,15 +142,16 @@ static inline int gh_input(gh_t *h, uint32_t edge)
 }
 
 /* ---- Settings: rows RESUME (the grid opens on the last picture), GRID SIZE (4 x 3, 5 x 4, 6 x 4, 8 x 6) and DITHER (off, ordered, ordered + moving). Up and Down choose the row, Left, Right and A change its value (wrapping); B goes back. ---- */
-enum { GSP_RESUME = 0, GSP_GRID, GSP_DITHER, GSP_ROWS };
+enum { GSP_RESUME = 0, GSP_GRID, GSP_DITHER, GSP_COLOUR, GSP_ROWS };
+#define GSP_LUTS 8u
 #define GSP_GRIDS 4u
 #define GSP_DITHERS 3u
 typedef struct { uint8_t row; } gsp_t;
-static const char *const gsp_labels[GSP_ROWS] = { "RESUME LAST PICTURE", "GRID SIZE", "DITHER" };
+static const char *const gsp_labels[GSP_ROWS] = { "RESUME LAST PICTURE", "GRID SIZE", "DITHER", "COLOUR" };
 static const char *const gsp_grid_names[GSP_GRIDS] = { "4 X 3", "5 X 4", "6 X 4", "8 X 6" };
 static const char *const gsp_dither_names[GSP_DITHERS] = { "OFF", "ORDERED", "MOVING" };
-/* One key edge: `resume` (0 or 1), `grid` (0..3) and `dither` (0..2) are the live values; returns 1 when the page should close. */
-static inline int gsp_input(gsp_t *s, uint32_t *resume, uint32_t *grid, uint32_t *dither, uint32_t edge)
+/* One key edge: `resume` (0 or 1), `grid` (0..3) and `dither` (0..2) and `lut` (0..7, the colour preset) are the live values; returns 1 when the page should close. */
+static inline int gsp_input(gsp_t *s, uint32_t *resume, uint32_t *grid, uint32_t *dither, uint32_t *lut, uint32_t edge)
 {
     if (edge & (GP_KEY_UP | GP_KEY_DOWN)) { s->row = (uint8_t)hl_wrap(s->row, GSP_ROWS, (edge & GP_KEY_UP) != 0); return 0; }
     if (edge & (GP_KEY_LEFT | GP_KEY_A | (1u << 3))) {                                           /* bit 3 is Right */
@@ -160,7 +164,8 @@ static inline int gsp_input(gsp_t *s, uint32_t *resume, uint32_t *grid, uint32_t
 #endif
         }
         else if (s->row == GSP_GRID) *grid = hl_wrap(*grid % GSP_GRIDS, GSP_GRIDS, dec);
-        else *dither = hl_wrap(*dither % GSP_DITHERS, GSP_DITHERS, dec);
+        else if (s->row == GSP_DITHER) *dither = hl_wrap(*dither % GSP_DITHERS, GSP_DITHERS, dec);
+        else *lut = hl_wrap(*lut % GSP_LUTS, GSP_LUTS, dec);
         return 0;
     }
     return (edge & GP_KEY_B) != 0;
@@ -288,6 +293,7 @@ static inline int gi_input(uint32_t edge) { return (edge & (GP_KEY_LEFT | GP_KEY
 #define GD_NOT_READ "NOT READ YET"
 #define GD_HIST_NOTE "NOT COMPUTED YET"                                            /* a frame without a thumbnail to count (its read failed) */
 #define GD_HIST_SRC "FROM THE THUMBNAIL"
+#define GD_HIST_SRC_DEC "COUNTED FROM THE DECODED PICTURE"
 static const char *const gd_hist_labels[GD_HIST_N] = { "LUMA", "RED", "GREEN", "BLUE" };
 typedef struct { const char *name; uint32_t index, count, size, width, height; } gd_t;          /* index is 0-based; size is the file's bytes; width and height 0 when the index does not say */
 typedef struct { const char *label; char value[28]; } gd_row_t;
@@ -403,6 +409,19 @@ static inline char *gdp_indicator(char *q, const gdp_t *p) { q = gi_u(q, (uint32
  * (77 R + 150 G + 29 B) / 256 on the 8-bit expanded channels, then / 8. A bar is as tall as its count is to the tallest bin of the same histogram (at least 1 pixel for a bin that has any). */
 #define HS_BINS 32u
 typedef struct { uint16_t bin[GD_HIST_N][HS_BINS]; uint32_t n; } hs_t;
+/* The counts of the decoder (32 bins from the 256, up to 24 bits each) into the 16 bit bins of an hs_t: every bin is shifted right by the least s that brings the largest under 65,536, and a bin that had any pixels keeps at least 1 (the bars only compare bins of one histogram). n is the real count. */
+static inline void hs_from_counts(hs_t *h, const uint32_t c[GD_HIST_N][HS_BINS], uint32_t n)
+{
+    uint32_t mx = 0u, s = 0u;
+    for (uint32_t k = 0; k < GD_HIST_N; k++) for (uint32_t i = 0; i < HS_BINS; i++) if (c[k][i] > mx) mx = c[k][i];
+#if BUG == 21
+    (void)mx;                                                                                        /* no scaling: a count above 65,535 wraps */
+#else
+    while ((mx >> s) > 65535u) s++;
+#endif
+    for (uint32_t k = 0; k < GD_HIST_N; k++) for (uint32_t i = 0; i < HS_BINS; i++) { const uint32_t v = c[k][i] >> s; h->bin[k][i] = (uint16_t)((v == 0u && c[k][i] != 0u) ? 1u : v); }
+    h->n = n;
+}
 static inline void hs_clear(hs_t *h) { for (uint32_t k = 0; k < GD_HIST_N; k++) for (uint32_t i = 0; i < HS_BINS; i++) h->bin[k][i] = 0u; h->n = 0u; }
 static inline void hs_add(hs_t *h, uint16_t px)
 {

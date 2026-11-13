@@ -100,22 +100,25 @@ int main(void)
         chk("info: B and Left close, the other keys do not (A is the pipeline switch now)", gi_input(GP_KEY_B) == 1 && gi_input(GP_KEY_LEFT) == 1 && gi_input(GP_KEY_UP) == 0 && gi_input(GP_KEY_START) == 0 && gi_input(GP_KEY_DOWN) == 0);
     }
     {
-        uint32_t rs = 1u, gr = 0u, dt = 1u; gsp_t sp = { 0 };
-        chk("settings: A turns resume off", gsp_input(&sp, &rs, &gr, &dt, GP_KEY_A) == 0 && rs == 0u && gr == 0u && dt == 1u);
-        chk("settings: Left turns it on", gsp_input(&sp, &rs, &gr, &dt, GP_KEY_LEFT) == 0 && rs == 1u);
-        chk("settings: Right turns it off", gsp_input(&sp, &rs, &gr, &dt, 1u << 3) == 0 && rs == 0u);
-        rs = 5u; gsp_input(&sp, &rs, &gr, &dt, GP_KEY_A); chk("settings: the flag stays 0 or 1 whatever it held", rs == 0u);
-        chk("settings: B closes and changes nothing", gsp_input(&sp, &rs, &gr, &dt, GP_KEY_B) == 1 && rs == 0u && gr == 0u && dt == 1u);
-        chk("settings: Start neither changes nor closes", gsp_input(&sp, &rs, &gr, &dt, GP_KEY_START) == 0 && rs == 0u);
-        chk("settings: Down moves to GRID SIZE (no value changes), Down again to DITHER, Down wraps to RESUME, Up wraps to DITHER", gsp_input(&sp, &rs, &gr, &dt, GP_KEY_DOWN) == 0 && sp.row == GSP_GRID && rs == 0u && gsp_input(&sp, &rs, &gr, &dt, GP_KEY_DOWN) == 0 && sp.row == GSP_DITHER
-            && gsp_input(&sp, &rs, &gr, &dt, GP_KEY_DOWN) == 0 && sp.row == GSP_RESUME && gsp_input(&sp, &rs, &gr, &dt, GP_KEY_UP) == 0 && sp.row == GSP_DITHER && gr == 0u && dt == 1u);
+        uint32_t rs = 1u, gr = 0u, dt = 1u, lt = 0u; gsp_t sp = { 0 };
+        chk("settings: A turns resume off", gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_A) == 0 && rs == 0u && gr == 0u && dt == 1u);
+        chk("settings: Left turns it on", gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_LEFT) == 0 && rs == 1u);
+        chk("settings: Right turns it off", gsp_input(&sp, &rs, &gr, &dt, &lt, 1u << 3) == 0 && rs == 0u);
+        rs = 5u; gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_A); chk("settings: the flag stays 0 or 1 whatever it held", rs == 0u);
+        chk("settings: B closes and changes nothing", gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_B) == 1 && rs == 0u && gr == 0u && dt == 1u);
+        chk("settings: Start neither changes nor closes", gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_START) == 0 && rs == 0u);
+        chk("settings: Down moves to GRID SIZE (no value changes), DITHER, COLOUR, Down wraps to RESUME, Up wraps to COLOUR", gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_DOWN) == 0 && sp.row == GSP_GRID && rs == 0u && gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_DOWN) == 0 && sp.row == GSP_DITHER
+            && gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_DOWN) == 0 && sp.row == GSP_COLOUR && gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_DOWN) == 0 && sp.row == GSP_RESUME && gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_UP) == 0 && sp.row == GSP_COLOUR && gr == 0u && dt == 1u && lt == 0u);
+        chk("settings: on COLOUR Right goes 1..7 and wraps to 0, Left wraps to 7; nothing else changes", gsp_input(&sp, &rs, &gr, &dt, &lt, 1u << 3) == 0 && lt == 1u && gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_A) == 0 && lt == 2u && gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_LEFT) == 0 && lt == 1u
+            && gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_LEFT) == 0 && lt == 0u && gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_LEFT) == 0 && lt == 7u && gsp_input(&sp, &rs, &gr, &dt, &lt, 1u << 3) == 0 && lt == 0u && gr == 0u && dt == 1u && rs == 0u);
+        lt = 12u; gsp_input(&sp, &rs, &gr, &dt, &lt, 1u << 3); chk("settings: a colour value out of range comes back into 0..7 (Right)", lt < 8u); lt = 12u; gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_LEFT); chk("settings: a colour value out of range comes back into 0..7 (Left)", lt < 8u); lt = 0u;
         sp.row = GSP_GRID;
-        chk("settings: on GRID SIZE Right goes 0, 1, 2, 3 and wraps to 0; Left wraps to 3", gsp_input(&sp, &rs, &gr, &dt, 1u << 3) == 0 && gr == 1u && gsp_input(&sp, &rs, &gr, &dt, GP_KEY_A) == 0 && gr == 2u && gsp_input(&sp, &rs, &gr, &dt, 1u << 3) == 0 && gr == 3u
-            && gsp_input(&sp, &rs, &gr, &dt, 1u << 3) == 0 && gr == 0u && gsp_input(&sp, &rs, &gr, &dt, GP_KEY_LEFT) == 0 && gr == 3u && rs == 0u && dt == 1u);
-        gr = 9u; gsp_input(&sp, &rs, &gr, &dt, 1u << 3); chk("settings: a grid value out of range comes back into 0..3", gr < 4u);
+        chk("settings: on GRID SIZE Right goes 0, 1, 2, 3 and wraps to 0; Left wraps to 3", gsp_input(&sp, &rs, &gr, &dt, &lt, 1u << 3) == 0 && gr == 1u && gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_A) == 0 && gr == 2u && gsp_input(&sp, &rs, &gr, &dt, &lt, 1u << 3) == 0 && gr == 3u
+            && gsp_input(&sp, &rs, &gr, &dt, &lt, 1u << 3) == 0 && gr == 0u && gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_LEFT) == 0 && gr == 3u && rs == 0u && dt == 1u);
+        gr = 9u; gsp_input(&sp, &rs, &gr, &dt, &lt, 1u << 3); chk("settings: a grid value out of range comes back into 0..3", gr < 4u);
         sp.row = GSP_DITHER; gr = 2u;
-        chk("settings: on DITHER Right goes 1, 2, 0 (off), Left goes back; the grid stays", gsp_input(&sp, &rs, &gr, &dt, 1u << 3) == 0 && dt == 2u && gsp_input(&sp, &rs, &gr, &dt, 1u << 3) == 0 && dt == 0u && gsp_input(&sp, &rs, &gr, &dt, GP_KEY_LEFT) == 0 && dt == 2u && gr == 2u);
-        dt = 7u; gsp_input(&sp, &rs, &gr, &dt, 1u << 3); chk("settings: a dither value out of range comes back into 0..2", dt < 3u);
+        chk("settings: on DITHER Right goes 1, 2, 0 (off), Left goes back; the grid stays", gsp_input(&sp, &rs, &gr, &dt, &lt, 1u << 3) == 0 && dt == 2u && gsp_input(&sp, &rs, &gr, &dt, &lt, 1u << 3) == 0 && dt == 0u && gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_LEFT) == 0 && dt == 2u && gr == 2u);
+        dt = 7u; gsp_input(&sp, &rs, &gr, &dt, &lt, 1u << 3); chk("settings: a dither value out of range comes back into 0..2", dt < 3u);
         chk("settings: the names of the choices", !strcmp(gsp_grid_names[0], "4 X 3") && !strcmp(gsp_grid_names[3], "8 X 6") && !strcmp(gsp_dither_names[0], "OFF") && !strcmp(gsp_dither_names[2], "MOVING"));
     }
     {
@@ -209,6 +212,14 @@ int main(void)
             chk("histogram: each of the 65,536 pixel values lands in one bin per histogram (red and blue their 5 bits, green its top 5, luma within a bin of the weighted sum)", okb);
             hs_clear(&h); hs_add(&h, 0xFFFFu); hs_add(&h, 0x0000u); hs_add(&h, 0xF800u); hs_add(&h, 0x07E0u); hs_add(&h, 0x001Fu);
             chk("histogram: white is the last luma bin and black the first; pure red counts in the last red bin and none in green or blue", h.bin[0][31] >= 1u && h.bin[0][0] >= 1u && h.bin[1][31] == 2u && h.bin[1][0] == 3u && h.bin[2][31] == 2u && h.bin[3][31] == 2u && h.n == 5u);
+            { static uint32_t c[4][32]; memset(c, 0, sizeof c);
+              c[0][3] = 70000u; c[1][5] = 1u; c[2][7] = 140000u; c[3][9] = 3u; c[3][10] = 65535u; hs_from_counts(&h, c, 213539u);
+              chk("histogram: decoder counts above 65,535 are shifted together (the largest, in green, is 140,000: 70,000 is still too big, so shift 2), so luma 17,500, green 35,000, and the pixel count is kept", h.bin[0][3] == 17500u && h.bin[2][7] == 35000u && h.n == 213539u);
+              chk("histogram: a bin that has pixels keeps at least 1 after the shift (red 1 and blue 3 become 1), 65,535 becomes 16,383", h.bin[1][5] == 1u && h.bin[3][9] == 1u && h.bin[3][10] == 16383u && h.bin[0][4] == 0u);
+              memset(c, 0, sizeof c); c[0][0] = 65535u; c[3][31] = 7u; hs_from_counts(&h, c, 65542u);
+              chk("histogram: counts that fit in 16 bits are not changed (no shift at 65,535)", h.bin[0][0] == 65535u && h.bin[3][31] == 7u && h.n == 65542u);
+              memset(c, 0, sizeof c); c[0][1] = 65536u; hs_from_counts(&h, c, 65536u);
+              chk("histogram: 65,536 in the luma histogram alone already shifts (the largest of ALL four histograms counts)", h.bin[0][1] == 32768u); }
             hs_clear(&h); hs_add(&h, 0xF800u); chk("histogram: pure red is bright in red only: red bin 31, green bin 0, blue bin 0, a luma bin between 8 and 10 (0.30 of 255)", h.bin[1][31] == 1u && h.bin[2][0] == 1u && h.bin[3][0] == 1u && (h.bin[0][9] == 1u || h.bin[0][8] == 1u));
             hs_clear(&h); hs_add(&h, 0x07E0u); chk("histogram: pure green has the largest luma weight: luma bin 18 or 19 (0.59 of 255)", h.bin[0][18] == 1u || h.bin[0][19] == 1u);
             hs_clear(&h); hs_add(&h, 0x001Fu); chk("histogram: pure blue has the smallest luma weight: luma bin 3 or 4 (0.11 of 255)", h.bin[0][3] == 1u || h.bin[0][4] == 1u);

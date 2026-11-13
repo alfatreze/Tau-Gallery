@@ -117,11 +117,34 @@ int tgy_tile_loc(const tgy_level_t *l, uint32_t tx, uint32_t ty, uint32_t *off, 
 static struct { uint32_t on; int32_t stx, sty; } g_sc;                              /* the scatter mode of the next tile starts (K7): off after reset */
 void tgy_hw_scatter(int on, int32_t stx, int32_t sty) { g_sc.on = on ? 1u : 0u; g_sc.stx = stx; g_sc.sty = sty; }
 
+static uint32_t g_hist_on;                                                          /* the histogram counts the tiles that start now (K4) */
+static void hist_wait(void) { for (uint32_t i = 0; i < 100000u && (REG_RD(R_HIST_CTRL) & 0x100u); i++) { } }
+void tgy_hw_hist_begin(uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1)
+{
+    REG_WR(R_HIST_CTRL, 2u); hist_wait();                                            /* clear (counting off while it sweeps) */
+    REG_WR(R_HIST_RECT0, (y0 << 16) | x0); REG_WR(R_HIST_RECT1, (y1 << 16) | x1);
+    REG_WR(R_HIST_CTRL, 1u); g_hist_on = 1u;
+}
+void tgy_hw_hist_end(void) { REG_WR(R_HIST_CTRL, 0u); g_hist_on = 0u; }
+int tgy_hw_hist_fold32(uint32_t out[4][32], uint32_t *n)
+{
+    for (uint32_t k = 0; k < 4u; k++) for (uint32_t b = 0; b < 32u; b++) out[k][b] = 0u;
+    for (uint32_t k = 0; k < 4u; k++)
+        for (uint32_t i = 0; i < 256u; i++) {
+            REG_WR(R_HIST_IDX, (k << 8) | i); uint32_t v = REG_RD(R_HIST_DATA), t = 0;
+            while ((v >> 31) && t++ < 100000u) v = REG_RD(R_HIST_DATA);
+            if (v >> 31) return 1;                                                   /* never answered */
+            out[k][i >> 3] += v & 0xFFFFFFu;
+        }
+    *n = REG_RD(R_HIST_N) & 0xFFFFFFu;
+    return 0;
+}
 int tgy_hw_start_from(const tgy_file_t *f, const tgy_level_t *l, uint32_t tx, uint32_t ty, uint32_t dst, uint32_t pitch, uint32_t src)
 {
     uint32_t foff, len; int r = tgy_tile_loc(l, tx, ty, &foff, &len); if (r != TH_OK) return r;
     r = tgy_hw_tables(f, l); if (r != TH_OK) return r;
     const uint32_t x0 = tx * TH_TILE, y0 = ty * TH_TILE, tw = (l->w - x0 < TH_TILE) ? l->w - x0 : TH_TILE, th = (l->h - y0 < TH_TILE) ? l->h - y0 : TH_TILE;
+    if (g_hist_on) REG_WR(R_HIST_ORG, (y0 << 16) | x0);                              /* where this tile's pixel (0, 0) is, for the window test */
     REG_WR(R_TGY_SRC, src); REG_WR(R_TGY_LEN, len); REG_WR(R_TGY_DST, dst); REG_WR(R_TGY_PITCH, pitch);
     if (g_sc.on) { REG_WR(R_TGY_STX, (uint32_t)g_sc.stx & 0x3FFFFu); REG_WR(R_TGY_STY, (uint32_t)g_sc.sty & 0x3FFFFu); }
     REG_WR(R_TGY_GEOM, (g_sc.on ? (1u << 18) : 0u) | ((uint32_t)l->fmt << 16) | (tw << 8) | th); REG_WR(R_TGY_QY, f->base + f->tables_off + 2u + 128u * l->qy); REG_WR(R_TGY_QC, f->base + f->tables_off + 2u + 128u * l->qc);

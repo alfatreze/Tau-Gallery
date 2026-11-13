@@ -92,6 +92,13 @@
 #define R_TGY_STX    0x80000248u        /* K7 (core rev 30): signed byte step from one pixel of a source row to the next, 18 bit (scatter mode, GEOM bit 18) */
 #define R_TGY_STY    0x8000024Cu        /* the signed byte step from one source row to the next, 18 bit */
 #define R_TGY_CYCLES 0x80000244u        /* SDRAM-clock cycles of the last tile (valid after done) */
+#define R_HIST_CTRL  0x80000260u        /* K4 histograms (core rev 30): write [0] count on, [1] clear (about 256 decoder clocks); read [8] busy, [0] count on */
+#define R_HIST_RECT0 0x80000264u        /* window start {y0[25:16], x0[9:0]} (inclusive, in the canvas coordinates the ORG gives) */
+#define R_HIST_RECT1 0x80000268u        /* window end {y1, x1} (exclusive) */
+#define R_HIST_ORG   0x8000026Cu        /* {y, x}: the coordinates of the next tile's pixel (0, 0); set while the decoder is idle */
+#define R_HIST_IDX   0x80000270u        /* write {histogram[9:8] 0 luma 1 red 2 green 3 blue, bin[7:0]}: starts a read */
+#define R_HIST_DATA  0x80000274u        /* read [31] busy, [23:0] the bin */
+#define R_HIST_N     0x80000278u        /* read [23:0] pixels counted as of the last read */
 #define R_SDA_SEL    0x800001D4u        /* per-port SDRAM statistics window (tau_sdr_stat_win.sv): write {port[1:0], stat[2:0]} (stat 0 requests, 1 words, 2 busy cycles, 3 worst wait, 4 urgent over the bound, 5 bad requests; port 0 scan-out, 1 engine, 2 CPU) -- ignored while pending; read [31] built in, [8] a snapshot is pending, [4:0] the selection */
 #define R_SDA_VAL    0x800001D8u        /* read: the snapshot of the selected counter, stable until the next select; valid once R_SDA_SEL bit 8 is 0 */
 #define R_DBUF_CPU   0x80000118u        /* Helios H2: bit 0 = the buffer plain RECT/CHAR/COPY commands target (rows of the visible frame only; the off-screen stash rows are shared); read bit 31 = built in */
