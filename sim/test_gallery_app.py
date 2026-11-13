@@ -71,6 +71,23 @@ def make_v1_set(d):
         data_, thumb_, size_ = tgy_make.canvas_container(d / f"src{i}.jpg", prep_, jobs=1); add(i, data_, thumb_, size_, nm)
     order = sorted(range(len(ents)), key=lambda k: ents[k]["path"]); (d / "tau-library.tdb").write_bytes(tgy.pack_index([ents[k] for k in order], [ths[k] for k in order]))
 
+def lib1_thumb(i): return b"".join(((i * 37 + r * 5 + c * 3 + (i * r) % 11) & 0xFFFF).to_bytes(2, "little") for r in range(96) for c in range(96))
+def make_libbig_set(d, n=60):
+    """A version 1 library of ONE folder of 60 pictures: no folder level, three pages at 20 a page."""
+    ents = [dict(path=f"Assets/tau_gallery/common/photos/l{i:02d}.tgy", name=f"Img {i:02d}", size=1000 + i, width=640, height=480) for i in range(n)]
+    (d / "tau-library.tdb").write_bytes(tgy.pack_index_v1(ents, [lib1_thumb(i) for i in range(n)]))
+
+def make_lib1_set(d):
+    """A version 1 library of 36 pictures in three folders (Alpha 20, Beta 3, Gamma 13): 96 x 96 thumbnails of their own pattern, and picture files for the three of Beta (the viewer scenario)."""
+    ents, ths = [], []
+    for i in range(36):
+        f = 0 if i < 20 else 1 if i < 23 else 2
+        ents.append(dict(path=f"Assets/tau_gallery/common/photos/l{i:02d}.tgy", name=f"Img {i:02d}", size=1000 + i, width=640, height=480, folder=f))
+        ths.append(lib1_thumb(i))
+    (d / "tau-library.tdb").write_bytes(tgy.pack_index_v1(ents, ths, [dict(name="Alpha"), dict(name="Beta"), dict(name="Gamma")]))
+    for i in (20, 21, 22):
+        im = Image.new("RGB", (640, 480), ((i * 5) % 256, (i * 9) % 256, 120)); canvas, rect, thumb, size = tgy.render(im); (d / f"l{i:02d}.tgy").write_bytes(tgy.pack_tgy(canvas, rect, thumb, size))
+
 def make_set(d, n=18):
     ents, ths = [], []
     for i in range(n):
@@ -102,7 +119,7 @@ def build(workdir, fw=None):
     return True
 
 SCENARIOS = ("resume5", "resume17", "badcrc", "toohigh", "off", "layout0", "ocean_light", "badlook", "details")     # boot scenarios: the saved state, the grid must open on picture 6 or 18, or on picture 1 when it is not the same picture / resume is off / the file is not ours
-BIGSET = None; ZSET = None; V1SET = None
+BIGSET = None; ZSET = None; V1SET = None; L1SET = None; LBSET = None
 def run(workdir, setdir):
     r = subprocess.run([str(workdir / "t"), str(setdir)], capture_output=True, text=True, timeout=600)
     rc, out = r.returncode, r.stdout
@@ -120,6 +137,21 @@ def run(workdir, setdir):
         r = subprocess.run([str(workdir / "t"), str(V1SET), sc], capture_output=True, text=True, timeout=900)
         if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
         else: out += "\n" + r.stdout
+    global L1SET
+    if L1SET is None: L1SET = Path(tempfile.mkdtemp()); make_lib1_set(L1SET)
+    for sc in ("lib1", "lib1resume", "lib1resumeA", "lib1resumeC"):
+        r = subprocess.run([str(workdir / "t"), str(L1SET), sc], capture_output=True, text=True, timeout=900)
+        if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
+    r = subprocess.run([str(workdir / "t"), str(L1SET), "lib1light"], capture_output=True, text=True, timeout=900)
+    if r.returncode: rc = 1; out += "\nFAIL scenario lib1light\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
+    for sc in ("lib1g1", "lib1g2", "lib1g3"):
+        r = subprocess.run([str(workdir / "t"), str(L1SET), sc], capture_output=True, text=True, timeout=900)
+        if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
+    global LBSET
+    if LBSET is None: LBSET = Path(tempfile.mkdtemp()); make_libbig_set(LBSET)
+    for sc in ("libbig0", "libbig1", "libbig2", "libbig3", "libbigset"):
+        r = subprocess.run([str(workdir / "t"), str(LBSET), sc], capture_output=True, text=True, timeout=900)
+        if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
     for sc in ("big", "bigresume250", "bigresume299"):
         r = subprocess.run([str(workdir / "t"), str(BIGSET), sc], capture_output=True, text=True, timeout=900)
         if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
@@ -132,10 +164,10 @@ def mutants(setdir, tail=None):
             ("gallery_app.c", "const uint32_t total = (pic.canvas_len + 4095u) & ~4095u;", "const uint32_t total = pic.canvas_len;"),
             ("gallery_app.c", "if (REG_RD(R_LAND_OVF) != 0u ||", "if ("),
             ("gallery_app.c", "|| REG_RD(R_LAND_WORDS) != total / 4u) return 6;", ") return 6;"),
-            ("gallery_app.c", "GX0 2u", "GX0 4u") if False else ("gallery_app.c", "#define GX0 2u", "#define GX0 4u"),
-            ("gallery_app.c", "#define GYS 76u", "#define GYS 75u"),
+            ("gallery_app.c", "GX0 2u", "GX0 4u") if False else ("gallery_app.c", "{ 4, 4, 96, 72, 2, 100, 0, 76, 2, 0, 0xFF }", "{ 4, 4, 96, 72, 4, 100, 0, 76, 2, 0, 0xFF }"),
+            ("gallery_app.c", "{ 4, 4, 96, 72, 2, 100, 0, 76, 2, 0, 0xFF }", "{ 4, 4, 96, 72, 2, 100, 0, 75, 2, 0, 0xFF }"),
             ("gallery_app.c", "const uint32_t rel = a - off, row = rel / 192u, col = (rel % 192u) / 2u;", "const uint32_t rel = a - off, row = rel / 192u, col = (rel % 192u) / 2u + 1u;"),
-            ("gallery_app.c", "if (a < off || a >= off + GX_THUMB_BYTES) continue;", "if (a < off) continue;"),
+            ("gallery_app.c", "if (a < off || a >= off + tb) continue;", "if (a < off) continue;"),
             ("gallery_app.c", "path[0] = '/';", "path[0] = 'x';"),
             ("gallery_app.c", "if (edge & KEY_B) { gal_view_off();", "if (edge & KEY_B) { "),
             ("gallery_app.c", "if (!v1_on || h4[18] != 1u) return;", "if (!v1_on) return;"),                                                                          # a file with an orientation tag would zoom
@@ -184,20 +216,20 @@ def mutants(setdir, tail=None):
             ("gallery_app.c", "info.zt_sc = pcopy ? (pst[2] - pst[1]) / u : 0u;", "info.zt_sc = (pst[2] - pst[1]) / u;"),                                                  # the needed-list time is counted as copy as well
             ("gallery_app.c", "info.zt_ss = (t5 - pst[3]) / u;", "info.zt_ss = (t5 - pst[2]) / u;"),                                                                        # the show part includes the job
             ("gallery_app.c", "        if (zl.layout == 2u) pst[3] = cycles();                                            /* the tile (card read and decode) is done */", ""),             # the job end is never stamped
-            ("gallery_app.c", "else if (edge & KEY_SELECT) { run_details(); draw_page();", "else if (0) { run_details(); draw_page();"),                                  # details page: no key on the grid
-            ("gallery_app.c", "else if (edge & KEY_SELECT) { run_details(); draw_page();", "else if (edge & KEY_SELECT) { run_details();"),                          # the grid is not redrawn after it
+            ("gallery_app.c", "else if ((edge & KEY_SELECT) && level == 0u) { run_details(); draw_page();", "else if (0) { run_details(); draw_page();"),                                  # details page: no key on the grid
+            ("gallery_app.c", "else if ((edge & KEY_SELECT) && level == 0u) { run_details(); draw_page();", "else if ((edge & KEY_SELECT) && level == 0u) { run_details();"),                          # the grid is not redrawn after it
             ("gallery_app.c", "if ((edge & KEY_SELECT) && !(edge & (KEY_LEFT | KEY_RIGHT))) {", "if (0) {"),                                                          # details page: no key in the picture view
             ("gallery_app.c", "if ((edge & KEY_SELECT) && !(edge & (KEY_LEFT | KEY_RIGHT))) {", "if (edge & KEY_SELECT) {"),                                         # Select + Right opens the page instead of stepping on
             ("gallery_app.c", "gal_view_off(); run_details();", "run_details();"),                                                                                 # the page is drawn under the live picture view
             ("gallery_app.c", "if (!gal_view_on()) { loaded_page = 0xFFFFFFFFu; draw_page(); say(\"VIEWER DID NOT START\", BAD); return; }\n            prev = REG_RD(R_INPUT) & 0xFFFFu; held = 0u;", "prev = REG_RD(R_INPUT) & 0xFFFFu; held = 0u;"),                # the view is not switched on again
-            ("gallery_app.c", "const gx_entry_t *e = &ent[sel - page * PER_PAGE]; const gd_t d", "const gx_entry_t *e = &ent[0]; const gd_t d"),                        # the page of the first picture, not the selected one
-            ("gallery_app.c", "(sel + 1u) % head.count : (sel + head.count - 1u) % head.count;", "(sel + 1u) % head.count : (sel + head.count - 1u);"),
+            ("gallery_app.c", "const gx_entry_t *e = &EN(sel); const gd_t d", "const gx_entry_t *e = &ent[0]; const gd_t d"),                        # the page of the first picture, not the selected one
+            ("gallery_app.c", "(rel + cur_count - 1u) % cur_count, n =", "(rel + cur_count - 1u), n ="),
             ("gallery_app.c", "if (np != page) { page = np; if (!load_page())", "if (np != page) { if (!load_page())"),
-            ("gallery_app.c", "else if (edge & KEY_R1) { select_to(sel + PER_PAGE < head.count ? sel + PER_PAGE : head.count - 1u); }", "else if (edge & KEY_R1) { select_to(sel + PER_PAGE < head.count ? sel + PER_PAGE : sel); }"),
-            ("gallery_app.c", "gfx_text(6, 338, ent[sel - page * PER_PAGE].name, FG, BG);", "gfx_text(6, 338, ent[0].name, FG, BG);"),
+            ("gallery_app.c", "select_to(cur_first + (rel + pp < cur_count ? rel + pp : cur_count - 1u)); }", "select_to(cur_first + (rel + pp < cur_count ? rel + pp : rel)); }"),
+            ("gallery_app.c", "gfx_text(6, 338, EN(sel).name, FG, BG);", "gfx_text(6, 338, ent[0].name, FG, BG);"),
             ("gallery_app.c", "if (!gal_view_on()) { say(\"VIEWER DID NOT START\", BAD); return; }", "gal_view_on();"),
             ("gallery_app.c", "if (r) { say(open_msg[r], BAD); return; }\n    if (!gal_view_on())", "if (r) { say(open_msg[r], BAD); }\n    if (!gal_view_on())"),
-            ("gallery_app.c", "{ run_pages(); draw_page(); prev =", "{ run_pages(); prev ="),
+            ("gallery_app.c", "{ run_pages(); apply_grid(); draw_page(); prev =", "{ run_pages(); apply_grid(); prev ="),
             ("gallery_app.c", "if (r == GP_OPEN_CONTROLS) { gc_t c;", "if (r == GP_OPEN_HELP) { gc_t c;"),
             ("gallery_app.c", "static void page_clear(const char *title) { gfx_rect(0, 0, GFX_W, GFX_H, BG);", "static void page_clear(const char *title) { "),
             ("gallery_app.c", "draw_menu(&m);\n    }\n}", "}\n}"),
@@ -209,9 +241,9 @@ def mutants(setdir, tail=None):
             ("gallery_app.c", "info.core_version = REG_RD(R_VERSION);", "info.core_version = 0u;"),
             ("gallery_app.c", "const int r = open_timed(sel, 1);", "const int r = open_picture(sel, 1);"),
             ("gallery_app.c", "gset.last_idx = i; gset.last_crc = path_crc(i); }", "gset.last_idx = i; }"),
-            ("gallery_app.c", "gs_resume_index(&gset, head.count, path_crc(gset.last_idx));", "gset.last_idx;"),
+            ("gallery_app.c", "gs_resume_index(&gset, head.count, path_crc(gset.last_idx)) : 0u;", "gset.last_idx : 0u;"),
             ("gallery_app.c", "        settings_tick();\n        const uint32_t dkeys", "        const uint32_t dkeys"),
-            ("gallery_app.c", "if (r == GP_OPEN_SETTINGS) { draw_settings(); while (!gsp_input(&gset.resume, next_edge(&prev))) draw_settings(); }", "if (r == GP_OPEN_SETTINGS) { draw_settings(); while (!gsp_input(&gset.resume, next_edge(&prev))) draw_settings(); gset.resume = 1u; }"),
+            ("gallery_app.c", "else if (r == GP_OPEN_SETTINGS) { gsp_t sp = { 0 }; draw_settings(&sp); while (!gsp_input(&sp, &gset.resume, &gset.grid, &gset.dither, next_edge(&prev))) { fx_apply(); draw_settings(&sp); } }", "else if (r == GP_OPEN_SETTINGS) { gsp_t sp = { 0 }; draw_settings(&sp); while (!gsp_input(&sp, &gset.resume, &gset.grid, &gset.dither, next_edge(&prev))) { fx_apply(); draw_settings(&sp); } gset.resume = 1u; }"),
             ("gallery_settings.c", "if (gs_publish_due(cycles(), last_activity, CLK_HZ, 1)) publish(v);", "publish(v);"),
             ("gallery_settings.c", "if (m & (1u << k)) set_wr(k, w[k]); }", "set_wr(k, w[k]); }"),
             ("gallery_settings.c", "gs_stats.layout = (w[GS_W_LAYOUT] >> 27) & 15u; gs_stats.loads++;", "gs_stats.layout = 0u; gs_stats.loads++;"),
@@ -222,9 +254,9 @@ def mutants(setdir, tail=None):
             ("gallery_app.c", "    theme_init();\n", ""),
             ("gallery_app.c", "if (k == GT_CHANGED) { theme_set(l.theme, l.pol, l.pal);", "if (k == GT_CHANGED) { "),
             ("gallery_app.c", "if (r == GP_OPEN_THEME) {", "if (r == GP_OPEN_HELP) {"),
-            ("gallery_app.c", "const uint32_t np = n / PER_PAGE;\n    if (np != page) { sel = n;", "const uint32_t np = n / (PER_PAGE + 1u);\n    if (np != page) { sel = n;"),
-            ("gallery_app.c", "n_on_page = head.count - first < PER_PAGE ? head.count - first : PER_PAGE;", "n_on_page = PER_PAGE;"),
-            ("gallery_app.c", "else if (edge & KEY_L1) { select_to(sel >= PER_PAGE ? sel - PER_PAGE : 0u); }", "else if (edge & KEY_L1) { select_to(sel >= PER_PAGE ? sel - PER_PAGE : sel); }"),
+            ("gallery_app.c", "const uint32_t np = (n - cur_first) / pp;\n    if (np != page) { sel = n;", "const uint32_t np = (n - cur_first) / (pp + 1u);\n    if (np != page) { sel = n;"),
+            ("gallery_app.c", "n_on_page = left < pp ? left : pp;", "n_on_page = pp;"),
+            ("gallery_app.c", "else if (edge & KEY_L1) { const uint32_t rel = sel - cur_first; select_to(cur_first + (rel >= pp ? rel - pp : 0u)); }", "else if (edge & KEY_L1) { const uint32_t rel = sel - cur_first; select_to(cur_first + (rel >= pp ? rel - pp : rel)); }"),
             ("gallery_app.c", "if (land_canvas(&pic, total, show_progress) && land_canvas(&pic, total, show_progress)) return 5;", "if (land_canvas(&pic, total, show_progress)) return 5;"),
             ("gallery_app.c", "if (land_canvas(&pic, total, show_progress) && land_canvas(&pic, total, show_progress)) return 5;", "if (land_canvas(&pic, total, show_progress) && land_canvas(&pic, total, show_progress) && land_canvas(&pic, total, show_progress)) return 5;"),
             ("gallery_app.c", "if (!read_bytes(SLOT_PIC, 0u, 4096u, h4) && !read_bytes(SLOT_PIC, 0u, 4096u, h4)) return 2;", "if (!read_bytes(SLOT_PIC, 0u, 4096u, h4)) return 2;"),
@@ -301,7 +333,7 @@ def mutants(setdir, tail=None):
             ("gallery_app.c", "const int32_t px = side ? rx + rw - GV_RECT_T : rx;", "const int32_t px = side ? rx + rw - GV_RECT_T - 2 : rx;"),
             ("gallery_app.c", "const int32_t row = e < 2 ? ry + e : ry + rh - 4 + e;", "const int32_t row = e < 2 ? ry + e : ry + rh - 3 + e;"),
             ("gallery_app.c", "info.flip_ms = (cycles() - t_rc_t0) / (CLK_HZ / 1000u);", "info.flip_ms = 0u;"),
-            ("gallery_fmt.c", "return h->entries_off + i * GX_ENTRY_BYTES;" if False else "uint32_t gx_thumb_off(const gx_head_t *h, uint32_t thumb) { return h->atlas_off + thumb * GX_THUMB_BYTES; }", "uint32_t gx_thumb_off(const gx_head_t *h, uint32_t thumb) { return h->atlas_off + thumb * (GX_THUMB_BYTES - 2u); }")]
+            ("gallery_fmt.c", "return h->entries_off + i * GX_ENTRY_BYTES;" if False else "uint32_t gx_thumb_off(const gx_head_t *h, uint32_t thumb) { return h->atlas_off + thumb * h->thumb_bytes; }", "uint32_t gx_thumb_off(const gx_head_t *h, uint32_t thumb) { return h->atlas_off + thumb * (h->thumb_bytes - 2u); }")]
     muts += [                                                                                                      # pan frames follow the time (version 1) and the grid's held keys
         ("gallery_app.c", "while (late >= ZOOM_FRAME && tick < ZOOM_CATCHUP) {", "while (0) {"),
         ("gallery_app.c", "#define ZOOM_CATCHUP 4 ", "#define ZOOM_CATCHUP 1 "),
@@ -342,12 +374,11 @@ def mutants(setdir, tail=None):
         ("gallery_app.c", "gfx_rect(x + DET_BX + i * DET_BW, y + DET_HH - DET_BB - bh, DET_BW - 1u, bh, bar_col[h]);", "gfx_rect(x + DET_BX + i * DET_BW, y + DET_HH - DET_BB - bh, DET_BW, bh, bar_col[h]);"),
         ("gallery_app.c", "{ 0xFFFFu, 0xF800u, 0x07E0u, 0x001Fu }", "{ 0xFFFFu, 0x07E0u, 0xF800u, 0x001Fu }"),
         ("gallery_app.c", "const uint32_t m = hs_max(hist, h);", "const uint32_t m = hs_max(hist, 0u);"),
-        ("gallery_app.c", "gh_clear(h);" if False else "    hs_clear(h); const hs_rect_t rc = hs_rect(pw, ph);", "    const hs_rect_t rc = hs_rect(pw, ph);"),
-        ("gallery_app.c", "if (a < off || a >= off + GX_THUMB_BYTES) continue;\n            const uint32_t v = w[i];", "if (a >= off + GX_THUMB_BYTES) continue;\n            const uint32_t v = w[i];"),
+        ("gallery_app.c", "gh_clear(h);" if False else "    hs_clear(h); const hs_rect_t rc = head.version == 1u ? (hs_rect_t){ 0u, 0u, HS_TW, 96u } : hs_rect(pw, ph);", "    const hs_rect_t rc = head.version == 1u ? (hs_rect_t){ 0u, 0u, HS_TW, 96u } : hs_rect(pw, ph);"),
         ("gallery_app.c", "if (!hist) { gfx_text(x + 6u, y + 34u, GD_HIST_NOTE, DIM, BG); continue; }", ""),
         ("gallery_app.c", "if (hs_inside(&rc, row, col)) hs_add(h, (uint16_t)(v & 0xFFFFu));", "hs_add(h, (uint16_t)(v & 0xFFFFu));"),
         ("gallery_app.c", "if (hs_inside(&rc, row, col + 1u)) hs_add(h, (uint16_t)(v >> 16));", "if (hs_inside(&rc, row, col)) hs_add(h, (uint16_t)(v >> 16));"),
-        ("gallery_app.c", "const hs_rect_t rc = hs_rect(pw, ph);", "const hs_rect_t rc = hs_rect(ph, pw);"),
+        ("gallery_app.c", ": hs_rect(pw, ph);", ": hs_rect(ph, pw);"),
         ("gallery_app.c", "thumb_hist(gx_thumb_off(&head, e->thumb), &det_hist, e->width, e->height)", "thumb_hist(gx_thumb_off(&head, e->thumb), &det_hist, 0u, 0u)"),
         ("gallery_app.c", "row = px / HS_TW, col = px % HS_TW;", "row = px / HS_TW, col = (px % HS_TW) + 1u;"),
         ("gallery_app.c", "gfx_text(6, 324, hist ? GD_HIST_SRC : GD_HIST_NOTE, DIM, BG);", ""),
@@ -361,8 +392,34 @@ def mutants(setdir, tail=None):
         ("gallery_app.c", "r = tgy_hw_show(&v1f, &v1l, GAL_PLANE_BASE * 2u, v1_tick, &show);", "r = tgy_hw_show(&v1f, &v1l, GAL_LAND_BASE * 2u, v1_tick, &show);"),
         ("gallery_app.c", "const uint32_t fsize = (uint32_t)h4[48] | (uint32_t)h4[49] << 8 | (uint32_t)h4[50] << 16 | (uint32_t)h4[51] << 24, base = GAL_LAND_BASE * 2u;", "const uint32_t fsize = (uint32_t)h4[48] | (uint32_t)h4[49] << 8 | (uint32_t)h4[50] << 16 | (uint32_t)h4[51] << 24, base = GAL_LAND_BASE * 2u + 2u;"),
     ]
+    muts += [                                                                                                      # Gallery 1.0: folders, grid sizes, rounded corners, selection ring, resume in a folder
+        ("gallery_app.c", "ent[k].thumb = f.cover;", "ent[k].thumb = f.first + 1u;"),
+        ("gallery_app.c", "if (GR.rad && level == 0u) gfx_corners(x, y, GR.cw, GR.ch, GR.rad, BG);", "if (0) gfx_corners(x, y, GR.cw, GR.ch, GR.rad, BG);"),
+        ("gallery_app.c", "gfx_corners(x, y, GR.cw, GR.ch, GR.rad, BG);\n        }\n    }", "}\n    }"),
+        ("gallery_app.c", "if (GR.rad) { gfx_corners(x, y, w, h, GR.rad, c); if (c != BG) gfx_corners(x - t, y - t, w + 2u * t, h + 2u * t, GR.rad + t, BG); }", "if (GR.rad) { if (c != BG) gfx_corners(x - t, y - t, w + 2u * t, h + 2u * t, GR.rad + t, BG); }"),
+        ("gallery_app.c", "if (GR.rad) { gfx_corners(x, y, w, h, GR.rad, c); if (c != BG) gfx_corners(x - t, y - t, w + 2u * t, h + 2u * t, GR.rad + t, BG); }", "if (GR.rad) { gfx_corners(x, y, w, h, GR.rad, c); }"),
+        ("gallery_app.c", "#define STASH_Y 384u", "#define STASH_Y 100u"),
+        ("gallery_app.c", "{ 5, 4, 72, 72, 6, 78, 4, 76, 2, 8, 0 }", "{ 5, 4, 72, 72, 6, 78, 4, 76, 2, 8, 1 }"),
+        ("gallery_app.c", "{ 6, 4, 64, 64, 2, 66, 10, 74, 2, 6, 1 }", "{ 6, 4, 64, 64, 2, 66, 10, 74, 2, 6, 2 }"),
+        ("gallery_app.c", "{ 8, 6, 48, 48, 1, 49, 3, 51, 1, 4, 2 }", "{ 8, 6, 48, 48, 1, 49, 3, 51, 2, 4, 2 }"),
+        ("gallery_app.c", "gfx_dsblit(STASH_X, STASH_Y, x, y, 96u, 96u, GR.ratio, GR.ratio);", "gfx_dsblit(STASH_X, STASH_Y, x, y, 96u, 96u, GR.ratio, 0u);"),
+        ("gallery_app.c", "if (i < f->first) hi = mid; else if (i >= f->first + f->count) lo = mid + 1u; else { *k = mid; return 1; }", "if (i < f->first) lo = mid + 1u; else if (i >= f->first + f->count) lo = mid + 1u; else { *k = mid; return 1; }"),
+        ("gallery_app.c", "if (i < f->first) hi = mid; else if (i >= f->first + f->count) lo = mid + 1u; else { *k = mid; return 1; }", "if (i < f->first) hi = mid; else if (i >= f->first + f->count) hi = mid; else { *k = mid; return 1; }"),
+        ("gallery_app.c", "static uint32_t grid_setting(void) { return gset.grid & 3u; }", "static uint32_t grid_setting(void) { return 0u; }"),
+        ("gallery_app.c", "if (level != 0u || head.version == 0u || gi == grid_setting()) return;", "return;"),
+        ("gallery_app.c", "set_grid(grid_setting()); page = (sel - cur_first) / pp; loaded_page = 0xFFFFFFFFu;", "set_grid(grid_setting()); page = 0u; loaded_page = 0xFFFFFFFFu;"),
+        ("gallery_app.c", "else if (edge & KEY_B) { if (level == 0u && head.folder_count > 1u) { enter_folders(); draw_page(); } rep_key = 0u; }", "else if (0) { }"),
+        ("gallery_app.c", "if (head.folder_count > 1u) enter_folders(); else enter_folder(&f, 0u);", "enter_folder(&f, 0u);"),
+        ("gallery_app.c", "sel = cur_folder; page = sel / pp; loaded_page = 0xFFFFFFFFu;", "sel = 0u; page = 0u; loaded_page = 0xFFFFFFFFu;"),
+        ("gallery_app.c", "level = 0u; cur_first = f->first; cur_count = f->count; cur_folder = k;", "level = 0u; cur_first = f->first; cur_count = f->count; cur_folder = 0u;"),
+        ("gallery_app.c", "gfx_rect(x, y + GR.ch - 16u, GR.cw, 16u, dark_bg()); gfx_text(x + 2u, y + GR.ch - 16u, b, FG, dark_bg());", "gfx_text(x + 2u, y + GR.ch - 16u, b, FG, dark_bg());"),
+        ("gallery_app.c", "*q++ = ' '; q = put_u(q, n); *q = 0;", "*q = 0;"),
+        ("gallery_app.c", "if (gx_parse_entry_h(&head, buf + k * head.entry_bytes, head.entry_bytes, &ent[k])) return 0;", "if (gx_parse_entry_h(&head, buf + k * 160u, head.entry_bytes, &ent[k])) return 0;"),
+    ]
     only = sys.argv[sys.argv.index("--only") + 1] if "--only" in sys.argv else None                                   # --only TEXT: just the mutants whose original code contains TEXT (Tier B of CLAUDE.md section 4: the mutants of the code you changed)
     if only: muts = [m for m in muts if only in m[1]]; assert muts, "no mutant matches --only"
+    if "--idx" in sys.argv:                                                                                       # --idx 6,7,58: just these mutants (by their position in the list)
+        ids = [int(x) for x in sys.argv[sys.argv.index("--idx") + 1].split(",")]; muts = [muts[i] for i in ids]
     if tail: muts = muts[-tail:]                                                                                # --v1-mutants: only the version 1 path's
     bad = 0
     for i, (f, a, b) in enumerate(muts):
@@ -375,7 +432,7 @@ def mutants(setdir, tail=None):
 
 if __name__ == "__main__":
     setdir = Path(tempfile.mkdtemp()); make_set(setdir)
-    if "--mutants" in sys.argv or "--only" in sys.argv: sys.exit(1 if mutants(setdir) else 0)
+    if "--mutants" in sys.argv or "--only" in sys.argv or "--idx" in sys.argv: sys.exit(1 if mutants(setdir) else 0)
     if "--v1-mutants" in sys.argv: sys.exit(1 if mutants(setdir, int(sys.argv[sys.argv.index("--v1-mutants") + 1]) if len(sys.argv) > sys.argv.index("--v1-mutants") + 1 else 7) else 0)
     w = Path(tempfile.mkdtemp())
     if not build(w): sys.exit(1)

@@ -87,6 +87,8 @@
 #define R_TGY_GEOM   0x80000238u        /* [17:16] format (0 grey, 2 4:2:0), [15:8] width, [7:0] height of the tile in luma samples */
 #define R_TGY_QY     0x8000023Cu        /* SDRAM byte address of the Y quantisation table (64 u16, zigzag, even) */
 #define R_TGY_QC     0x80000240u        /* the same for Cb and Cr */
+#define R_PIX_CTRL   0x80000250u        /* Gallery 1.0 pixel effects (core rev 30): write [1:0] dither (0 off, 1 ordered, 2 ordered + moving), [2] colour tables on; read [8] a table load is under way, [2:0] as written */
+#define R_PIX_LUT    0x80000254u        /* write {channel[17:16] (0 R, 1 G, 2 B), index[15:8], value[7:0]}; one store at a time (poll R_PIX_CTRL bit 8) */
 #define R_TGY_STX    0x80000248u        /* K7 (core rev 30): signed byte step from one pixel of a source row to the next, 18 bit (scatter mode, GEOM bit 18) */
 #define R_TGY_STY    0x8000024Cu        /* the signed byte step from one source row to the next, 18 bit */
 #define R_TGY_CYCLES 0x80000244u        /* SDRAM-clock cycles of the last tile (valid after done) */

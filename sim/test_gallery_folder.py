@@ -32,7 +32,7 @@ def make_folder(src, n):
 
 def run_conv(conv, src, out):
     t0 = time.time(); r0 = resource.getrusage(resource.RUSAGE_CHILDREN)
-    r = subprocess.run([sys.executable, str(conv), str(src), str(out)], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, str(conv), str(src), str(out), "--index-format", "v0"], capture_output=True, text=True)      # the version 0 (flat, 96 x 72) index: this test is the regression of that format; version 1 is tested in sim/test_tgy_convert_v1.py
     dt = time.time() - t0; peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss / (1024 * 1024)      # macOS reports bytes
     ev = []
     for l in r.stdout.splitlines():

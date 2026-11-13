@@ -37,4 +37,28 @@ with tempfile.TemporaryDirectory() as t:
     (card / oldp[1]).unlink()
     try: M.merge(old, pkg(["c.tgy"]), "-v1", "", card); check("old index with a missing file refused", False)
     except SystemExit: check("old index with a missing file refused", True)
+# ---- version 1: an old library with folders, a version 0 package (and the other way round)
+def thumb1(k): return bytes([k]) * tgy.THUMB1_BYTES
+with tempfile.TemporaryDirectory() as t:
+    t = Path(t); card = t / "card"; (card / "Assets/tau_gallery/common/photos").mkdir(parents=True)
+    oldp = ["Assets/tau_gallery/common/photos/a.tgy", "Assets/tau_gallery/common/photos/m.tgy", "Assets/tau_gallery/common/photos/z.tgy"]
+    for p in oldp: (card / p).write_bytes(b"old")
+    ents = [dict(ent(oldp[0], "a"), folder=0, taken=111, details={"camera": "Cam A", "iso": 200}), dict(ent(oldp[1], "m"), folder=1), dict(ent(oldp[2], "z"), folder=1, details={"format": "PNG"})]
+    old = card / "Assets/tau_gallery/common/tau-library.tdb"; old.write_bytes(tgy.pack_index_v1(ents, [thumb1(1), thumb1(2), thumb1(3)], [dict(name="Trip"), dict(name="Home")]))
+    pk = t / "pkg"; (pk / "photos").mkdir(parents=True); (pk / "photos/n.tgy").write_bytes(b"new")
+    (pk / "tau-library.tdb").write_bytes(tgy.pack_index([ent("Assets/tau_gallery/common/photos/n.tgy", "n")], [thumb(7)]))
+    check("v1 old + v0 package: counts", M.merge(old, pk, "-v1", " (v1)", card) == (3, 1, 4))
+    full = tgy.parse_index_full((pk / "tau-library.tdb").read_bytes())
+    check("v1 old + v0 package: a version 1 index, folders in name order (ALL PICTURES, Home, Trip)", full["version"] == 1 and [f["name"] for f in full["folders"]] == ["ALL PICTURES", "Home", "Trip"] and [f["count"] for f in full["folders"]] == [1, 2, 1])
+    byname = {e["name"]: e for e in full["entries"]}
+    check("the old pictures keep thumbnails, details and taken time", byname["a"]["thumb"] == thumb1(1) and byname["a"]["details"] == {"camera": "Cam A", "iso": 200} and byname["a"]["taken"] == 111 and byname["z"]["details"] == {"format": "PNG"})
+    check("the version 0 package picture is in ALL PICTURES with its thumbnail padded to a square", byname["n (v1)"]["folder"] == 0 and byname["n (v1)"]["thumb"] == tgy.thumb72_to_square(thumb(7)))
+    # a version 0 old library with a version 1 package
+    card2 = t / "card2"; (card2 / "Assets/tau_gallery/common/photos").mkdir(parents=True); (card2 / oldp[0]).write_bytes(b"old")
+    old2 = card2 / "Assets/tau_gallery/common/tau-library.tdb"; old2.write_bytes(tgy.pack_index([ent(oldp[0], "a")], [thumb(4)]))
+    pk2 = t / "pkg2"; (pk2 / "photos").mkdir(parents=True); (pk2 / "photos/q.tgy").write_bytes(b"new")
+    (pk2 / "tau-library.tdb").write_bytes(tgy.pack_index_v1([dict(ent("Assets/tau_gallery/common/photos/q.tgy", "q"), folder=0, taken=5)], [thumb1(9)], [dict(name="Zoo")]))
+    check("v0 old + v1 package: counts", M.merge(old2, pk2, "-v1", "", card2) == (1, 1, 2))
+    f2 = tgy.parse_index_full((pk2 / "tau-library.tdb").read_bytes()); b2 = {e["name"]: e for e in f2["entries"]}
+    check("v0 old + v1 package: folders ALL PICTURES and Zoo, the old thumbnail padded, the package's untouched, its taken time kept", [f["name"] for f in f2["folders"]] == ["ALL PICTURES", "Zoo"] and b2["a"]["thumb"] == tgy.thumb72_to_square(thumb(4)) and b2["q"]["thumb"] == thumb1(9) and b2["q"]["taken"] == 5)
 print("MERGE_INDEX TEST", "PASSED" if not fails else "FAILED %d" % fails); sys.exit(1 if fails else 0)

@@ -256,6 +256,7 @@ static const char *const open_msg[] = { "", "OPEN FAILED", "HEADER READ FAILED",
 static void zoom_list(void);
 static gi_t info = { 0u, 0u, 0u, GI_NONE, 0u, 0u, 0, 0u, 0u, 0u, GI_NONE, GI_NONE, GI_NONE, GI_NONE, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u };
 static gs_vals_t gset; static uint32_t last_act;                                              /* the persisted settings; the clock of the last key or card read (a save waits for a quiet second after it) */
+static void fx_apply(void) { REG_WR(R_PIX_CTRL, gset.dither % 3u); }                                  /* the dither of the scan-out (the colour tables follow with the presets) */
 static uint32_t path_crc(uint32_t i) { const char *s = EN(i).path; uint32_t n = 0; while (s[n]) n++; return gf_crc32((const uint8_t *)s, n) & GS_M31; }
 static void remember(uint32_t i) { gset.last_idx = i; gset.last_crc = path_crc(i); }       /* the picture the next start resumes on: only one the viewer has shown */
 static void settings_tick(void) { gs_hw_service(&gset, last_act); }
@@ -813,12 +814,16 @@ static void draw_info(void)
     for (uint32_t i = 0; i < GI_ROWS; i++) { gfx_text(6, PAGE_Y0 + i * INFO_LINE_H, r[i].label, DIM, BG); gfx_text(150, PAGE_Y0 + i * INFO_LINE_H, r[i].value, i == 5u && info.err ? BAD : FG, BG); }
     page_foot("B BACK   A TOGGLE ZOOM PIPELINE", 0, 0);
 }
-static void draw_settings(void)
+static void draw_settings(const gsp_t *sp)
 {
     page_clear("SETTINGS");
-    gfx_text(6, PAGE_Y0, "RESUME LAST PICTURE", FG, BG); gfx_text(250, PAGE_Y0, gset.resume ? "ON" : "OFF", ACC, BG);
-    gfx_text(6, PAGE_Y0 + 2u * LINE_H, "ON: the grid opens on the last", DIM, BG); gfx_text(6, PAGE_Y0 + 3u * LINE_H - 2u, "picture you looked at.", DIM, BG);
-    page_foot("LEFT RIGHT CHANGE   B BACK", 0, 0);
+    const char *val[GSP_ROWS] = { gset.resume ? "ON" : "OFF", gsp_grid_names[gset.grid % GSP_GRIDS], gsp_dither_names[gset.dither % GSP_DITHERS] };
+    for (uint32_t i = 0; i < GSP_ROWS; i++) {
+        const uint32_t y = PAGE_Y0 + i * 2u * LINE_H;
+        gfx_text(6, y, gsp_labels[i], i == sp->row ? FG : DIM, BG); gfx_text(250, y, val[i], ACC, BG); if (i == sp->row) gfx_text(GFX_W - 32u, y, "<", ACC, BG);
+    }
+    gfx_text(6, PAGE_Y0 + 6u * LINE_H + 4u, sp->row == GSP_RESUME ? "ON: the grid opens on the last picture." : sp->row == GSP_GRID ? "Pictures on a page: 12, 20, 24 or 48." : "Spreads the 5 and 6 bit panel steps.", DIM, BG);
+    page_foot("UP DOWN ROW   LEFT RIGHT CHANGE   B BACK", 0, 0);
 }
 static void frame_box(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t col)           /* a 1 px outline */
 {
@@ -904,7 +909,7 @@ static void run_pages(void)
                 draw_theme(&g, &l);
             }
         }
-        else if (r == GP_OPEN_SETTINGS) { draw_settings(); while (!gsp_input(&gset.resume, next_edge(&prev))) draw_settings(); }
+        else if (r == GP_OPEN_SETTINGS) { gsp_t sp = { 0 }; draw_settings(&sp); while (!gsp_input(&sp, &gset.resume, &gset.grid, &gset.dither, next_edge(&prev))) { fx_apply(); draw_settings(&sp); } }
         else if (r == GP_OPEN_CONTROLS) { gc_t c; gc_open(&c); draw_controls(&c); while (!gc_input(&c, next_edge(&prev))) draw_controls(&c); }
         else if (r == GP_OPEN_HELP) { gh_t h; gh_open(&h); draw_help(&h); while (!gh_input(&h, next_edge(&prev))) draw_help(&h); }
         else { draw_info(); for (;;) { const int k = gi_input(next_edge(&prev)); if (k == 1) break; if (k == 2) v1_pipe_off ^= 1u; draw_info(); } }
@@ -918,7 +923,12 @@ static int folder_rec(uint32_t k, gx_folder_t *f)
     uint8_t b[GX1_FOLDER_BYTES];
     return read_bytes(SLOT_IDX, gx_folder_off(&head, k), GX1_FOLDER_BYTES, b) && !gx_parse_folder(&head, b, sizeof b, f);
 }
-static uint32_t grid_setting(void) { return 0u; }                                                  /* the Settings choice of the grid size (0..3) */
+static uint32_t grid_setting(void) { return gset.grid & 3u; }                                       /* the Settings choice of the grid size (0..3) */
+static void apply_grid(void)                                                                      /* after the Settings page: the grid size may have changed; the same entry stays selected */
+{
+    if (level != 0u || head.version == 0u || gi == grid_setting()) return;
+    set_grid(grid_setting()); page = (sel - cur_first) / pp; loaded_page = 0xFFFFFFFFu;
+}
 static void enter_folder(const gx_folder_t *f, uint32_t k)                                         /* the pictures of folder k: its range, the chosen grid */
 {
     level = 0u; cur_first = f->first; cur_count = f->count; cur_folder = k; set_grid(head.version == 0u ? 4u : grid_setting());
@@ -952,7 +962,7 @@ int main(void)
       if (rc == 100) { say("NO INDEX: TAU-LIBRARY.TDB NOT READ", BAD); for (;;) { } }
       if (rc) { char b[40], *q = put_s(b, "INDEX NOT USABLE E"); q = put_u(q, (uint32_t)rc); *q = 0; say(b, BAD); for (;;) { } }
       if (head.count == 0u) { say("NO PICTURES IN THE INDEX", BAD); for (;;) { } } }
-    gs_hw_load(&gset); last_act = cycles();
+    gs_hw_load(&gset); last_act = cycles(); fx_apply();
     cur_first = 0u; cur_count = head.count; cur_folder = 0u; level = 0u; set_grid(head.version == 0u ? 4u : grid_setting());
     if (head.version == 1u) {                                                                      /* the first folder, or the folder level when there are several */
         gx_folder_t f; if (!folder_rec(0u, &f)) { say("FOLDER TABLE READ FAILED", BAD); for (;;) { } }
@@ -996,7 +1006,7 @@ int main(void)
             rep_key = 0u;
         }
         else if (edge & KEY_B) { if (level == 0u && head.folder_count > 1u) { enter_folders(); draw_page(); } rep_key = 0u; }
-        else if (edge & KEY_START) { run_pages(); draw_page(); prev = REG_RD(R_INPUT) & 0xFFFFu; rep_key = 0u; }
+        else if (edge & KEY_START) { run_pages(); apply_grid(); draw_page(); prev = REG_RD(R_INPUT) & 0xFFFFu; rep_key = 0u; }
         else if ((edge & KEY_SELECT) && level == 0u) { run_details(); draw_page(); prev = REG_RD(R_INPUT) & 0xFFFFu; rep_key = 0u; }
     }
 }

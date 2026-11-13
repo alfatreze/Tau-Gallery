@@ -217,6 +217,11 @@ def pack_index(entries, thumbs):
     return bytes(buf)
 
 def parse_index(data):
+    """The entries of an index of either version (dicts with path, name, size, width, height, thumb; a version 1 entry also has folder, taken and details). A version 1 thumbnail is 96 x 96, a version 0 one 96 x 72."""
+    if len(data) >= 6 and data[:4] == IDX_MAGIC and struct.unpack_from("<H", data, 4)[0] == 1: return parse_index_full(data)["entries"]
+    return parse_index_v0(data)
+
+def parse_index_v0(data):
     if len(data) < IDX_HEADER or data[:4] != IDX_MAGIC: raise ValueError("not a TGIX file")
     (_, ver, hsz, n, esz, eoff, aoff, tw, th, _) = struct.unpack_from("<4sHHIIIIHHI", data, 0)
     if ver != IDX_VERSION or hsz != IDX_HEADER or esz != IDX_ENTRY or (tw, th) != (THUMB_W, THUMB_H): raise ValueError("unknown TGIX version")

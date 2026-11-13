@@ -44,27 +44,39 @@ def main(argv=None):
     ap.add_argument("--card-layout", action="store_true", help="write OUT as the card's tree: the pictures in OUT/<card-dir>, the index in the folder above it")
     ap.add_argument("--jobs", type=int, default=0, help="v1: processes that code the tiles (0: automatic, the machine's cores up to 8; 1: one). The file is the same whatever the number; a dense 100 megapixel photo takes about 18 minutes on one process")
     ap.add_argument("--merge", action="store_true", help="keep the pictures the output library already has; a picture with the same name is replaced")
+    ap.add_argument("--index-format", choices=("v1", "v0"), default="v1", help="v1: the library index of Tau Gallery 1.0 (folders, details, 96 x 96 square thumbnails; docs/features/TGIX_V1_SPEC.md); v0: the old flat index with 96 x 72 thumbnails, for a gallery core and firmware before 1.0")
+    ap.add_argument("--sort", choices=("name", "taken", "converted"), default="name", help="v1: the order of the pictures inside a folder: by file name, by the date taken (the EXIF date; pictures without one last), or as converted (the pictures a merge kept first)")
     a = ap.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"): sys.stdout.reconfigure(line_buffering=True)        # an event reaches a reader the moment it is printed, not when the run ends (the app shows progress from them)
     from PIL import Image
     if a.src.is_file():
         if a.src.suffix.lower() not in EXT: print(json.dumps({"event": "error", "error": "not a picture this tool reads: " + a.src.name})); return 2
-        files = [a.src]
-    elif a.src.is_dir(): files = sorted(p for p in a.src.iterdir() if p.suffix.lower() in EXT and p.is_file())
+        jobs = [(a.src, None)]
+    elif a.src.is_dir():
+        top = sorted(p for p in a.src.iterdir() if p.suffix.lower() in EXT and p.is_file())
+        subs = [(d, sorted(p for p in d.iterdir() if p.suffix.lower() in EXT and p.is_file())) for d in sorted(q for q in a.src.iterdir() if q.is_dir() and not q.name.startswith("."))]
+        subs = [(d, fl) for d, fl in subs if fl]                                                          # one level of folders: a subfolder with pictures is a folder of the library
+        if a.index_format == "v1" and subs: jobs = [(p, d.name) for d, fl in subs for p in fl] + [(p, a.src.name or tgy.ALL_PICTURES) for p in top]
+        else: jobs = [(p, None) for p in top]                                                             # no subfolders (or the flat v0 index): one folder, ALL PICTURES
     else: print(json.dumps({"event": "error", "error": "no such file or folder: " + str(a.src)})); return 2
     card_dir = a.card_dir.strip("/")
     photos = a.out / card_dir if a.card_layout else a.out                                              # where the .tgy files go
     index_dir = a.out / str(Path(card_dir).parent) if a.card_layout else a.out                         # and the index (the data slot's file)
     photos.mkdir(parents=True, exist_ok=True); index_dir.mkdir(parents=True, exist_ok=True)
-    entries, thumbs, used, skipped = [], [], set(), 0
+    v1 = a.index_format == "v1"
+    items, used, skipped = [], set(), 0                                                                # items: one dict per picture of the new library (path, name, size, width, height, folder, taken, details, thumb)
     old = {}                                                                                           # --merge: the library already there, by picture file name
     if a.merge and (index_dir / a.index_name).is_file():
         try:
-            for e in tgy.parse_index((index_dir / a.index_name).read_bytes()):
-                if (photos / Path(e["path"]).name).is_file(): old[Path(e["path"]).name.lower()] = e         # a picture whose file is gone is dropped from the index
+            full = tgy.parse_index_full((index_dir / a.index_name).read_bytes())
+            if full["version"] == 1 and not v1: raise ValueError("the old index is version 1 and --index-format v0 cannot hold folders")
+            for e in full["entries"]:
+                if not (photos / Path(e["path"]).name).is_file(): continue                                 # a picture whose file is gone is dropped from the index
+                fname = full["folders"][e["folder"]]["name"] if full["version"] == 1 else tgy.ALL_PICTURES
+                old[Path(e["path"]).name.lower()] = dict(e, folder_name=fname, thumb=e["thumb"] if full["version"] == 1 else tgy.thumb72_to_square(e["thumb"]) if v1 else e["thumb"], order=len(old))
         except ValueError as e: print(json.dumps({"event": "warning", "error": "the old index is not readable and is rebuilt without it: " + str(e)}))
-    print(json.dumps({"event": "plan", "files": len(files), "kept": len(old)}))
-    for p in files:
+    print(json.dumps({"event": "plan", "files": len(jobs), "kept": len(old)}))
+    for p, folder in jobs:
         base = ascii_stem(p.stem); stem = base; n = 1
         while stem.lower() in used: n += 1; stem = f"{base}_{n}"
         shown = p.stem if n == 1 else f"{p.stem}_{n}"                  # the display name keeps the original characters (Latin-1) and the same suffix
@@ -72,21 +84,31 @@ def main(argv=None):
         if len(path.encode("utf-8")) >= tgy.PATH_BYTES:              # never cut a name (M1 decision 7): the file is skipped, said so, and the rest of the folder still converts
             print(json.dumps({"event": "skip", "file": p.name, "error": f"the card path is {len(path.encode('utf-8'))} bytes, the limit is {tgy.PATH_BYTES - 1}: shorten the file name or the card folder"})); skipped += 1; continue
         try:
-            prep = tgy.prepare(Image.open(p)); canvas, rect, thumb, size = tgy.render_prepared(prep, upscale=a.upscale)
+            im = Image.open(p); fmt = (im.format or "").upper(); details = tgy.exif_details(im, fmt) if v1 else {}      # the EXIF and the format, before the orientation is applied
+            prep = tgy.prepare(im); canvas, rect, thumb, size = tgy.render_prepared(prep, upscale=a.upscale)
             levels = tgy.zoom_levels(prep) if (a.levels and a.format == "v0") else []
+            sq = tgy.square_thumb(prep) if v1 else None
         except Exception as e:                                       # a file that is not a readable picture is skipped, and said so
             print(json.dumps({"event": "skip", "file": p.name, "error": str(e)})); skipped += 1; continue
         used.add(stem.lower())
         if a.format == "v1": data, thumb, size = tgy_make.canvas_container(p, prep, a.quality, a.fit_quality, a.upscale, jobs=a.jobs)
         else: data = tgy.pack_tgy(canvas, rect, thumb, size, levels)
         write_atomic(photos / (stem + ".tgy"), data); old.pop((stem + ".tgy").lower(), None)           # (a kept picture of the same name is replaced)
-        entries.append(dict(path=path, name=name_of(shown), size=len(data), width=size[0], height=size[1])); thumbs.append(thumb)
-        print(json.dumps({"event": "converted", "file": p.name, "tgy": stem + ".tgy", "size": len(data), "width": size[0], "height": size[1], "rect": rect, "levels": [[l["w"], l["h"], "raster"] if isinstance(l, dict) else [l[0], l[1], "tiles"] for l in levels]}))
-    if old:                                                                                            # the kept pictures and the new ones, in name order
-        both = sorted([(e["path"].lower(), e, e["thumb"]) for e in old.values()] + [(e["path"].lower(), e, th) for e, th in zip(entries, thumbs)], key=lambda x: x[0])
-        entries = [dict(path=e["path"], name=e["name"], size=e["size"], width=e["width"], height=e["height"]) for _, e, _ in both]; thumbs = [th for _, _, th in both]
-    write_atomic(index_dir / a.index_name, tgy.pack_index(entries, thumbs))
-    print(json.dumps({"event": "done", "pictures": len(entries), "skipped": skipped, "converted": len(entries) - len(old), "out": str(a.out)}))
+        items.append(dict(path=path, name=name_of(shown), size=len(data), width=size[0], height=size[1], folder_name=folder or tgy.ALL_PICTURES, taken=tgy.taken_seconds(details.get("taken")), details=details, thumb=sq if v1 else thumb, order=len(old) + len(items)))
+        print(json.dumps({"event": "converted", "file": p.name, "tgy": stem + ".tgy", "size": len(data), "width": size[0], "height": size[1], "rect": rect, "folder": items[-1]["folder_name"], "levels": [[l["w"], l["h"], "raster"] if isinstance(l, dict) else [l[0], l[1], "tiles"] for l in levels]}))
+    allitems = list(old.values()) + items
+    if v1:
+        fnames = sorted({it["folder_name"] for it in allitems}, key=lambda x: x.lower())                  # the folders in name order; the entries of a folder in the chosen order
+        key = {"name": lambda it: (it["name"].lower(), it["path"].lower()), "taken": lambda it: (it["taken"] == 0, it["taken"], it["path"].lower()), "converted": lambda it: it["order"]}[a.sort]
+        ordered = [it for f in fnames for it in sorted((x for x in allitems if x["folder_name"] == f), key=key)]
+        folders = [dict(name=f.encode("latin-1", "replace").decode("latin-1")[:tgy.FOLDER_NAME - 1]) for f in fnames]
+        entries = [dict(path=it["path"], name=it["name"], size=it["size"], width=it["width"], height=it["height"], folder=fnames.index(it["folder_name"]), taken=it.get("taken", 0), details=it.get("details", {})) for it in ordered]
+        write_atomic(index_dir / a.index_name, tgy.pack_index_v1(entries, [it["thumb"] for it in ordered], folders or None, {"name": tgy.SORT_NAME, "taken": tgy.SORT_TAKEN, "converted": tgy.SORT_CONVERTED}[a.sort]))
+        nf = len(folders) or 1
+    else:
+        ordered = sorted(allitems, key=lambda it: it["path"].lower()) if old else allitems                # a merge: the kept pictures and the new ones in path order; a plain run keeps the conversion order (the source file names, sorted)
+        write_atomic(index_dir / a.index_name, tgy.pack_index([dict(path=it["path"], name=it["name"], size=it["size"], width=it["width"], height=it["height"]) for it in ordered], [it["thumb"] for it in ordered])); nf = 1
+    print(json.dumps({"event": "done", "pictures": len(ordered), "skipped": skipped, "converted": len(items), "folders": nf, "out": str(a.out)}))
     return 0
 
 if __name__ == "__main__":

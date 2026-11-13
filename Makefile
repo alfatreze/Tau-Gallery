@@ -965,6 +965,10 @@ test-gallery-quick:
 	$(PYTHON) sim/test_gallery_settings.py
 	$(PYTHON) sim/test_gallery_folder.py
 	$(PYTHON) sim/test_tgy_hw.py
+	$(PYTHON) sim/test_tgix_v1.py
+	$(PYTHON) sim/test_gallery_rot.py
+	$(PYTHON) sim/test_tgy_convert_v1.py
+	$(PYTHON) sim/test_merge_index.py
 	$(PYTHON) sim/test_install_dev_core.py
 test-gallery-app:
 	$(PYTHON) sim/test_gallery_app.py

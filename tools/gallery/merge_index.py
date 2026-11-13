@@ -9,7 +9,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent)); import tgy
 
 def merge(old_tdb, pkg_common, suffix="-v1", label=" (v1)", card_root=None):
-    old = tgy.parse_index(Path(old_tdb).read_bytes()); pk = Path(pkg_common); new = tgy.parse_index((pk / "tau-library.tdb").read_bytes())
+    """Adds the package's pictures to the card's library. Both version 0: the result is version 0 (flat, 96 x 72 thumbnails) as before. If either index is version 1 the result is version 1: folders by name (a version 0
+    index is the folder ALL PICTURES, its thumbnails padded to 96 x 96 with black bars), the entries of a folder sorted by path, details and taken times kept."""
+    of = tgy.parse_index_full(Path(old_tdb).read_bytes()); pk = Path(pkg_common); nf = tgy.parse_index_full((pk / "tau-library.tdb").read_bytes()); old, new = of["entries"], nf["entries"]
     if card_root is not None:
         gone = [e["path"] for e in old if not (Path(card_root) / e["path"]).is_file()]
         if gone: raise SystemExit("the old index lists %d files that are not on the card, e.g. %s" % (len(gone), gone[0]))
@@ -20,8 +22,16 @@ def merge(old_tdb, pkg_common, suffix="-v1", label=" (v1)", card_root=None):
         if src.is_file(): src.rename(dst)
         elif not dst.is_file(): raise SystemExit("package picture missing: %s" % src)
         out.append(dict(e, path=np_, name=(e["name"] + label)[:tgy.NAME_BYTES - 1]))
-    allents = sorted(old + out, key=lambda e: e["path"])
-    (pk / "tau-library.tdb").write_bytes(tgy.pack_index(allents, [e["thumb"] for e in allents]))
+    if of["version"] == 0 and nf["version"] == 0:
+        allents = sorted(old + out, key=lambda e: e["path"])
+        (pk / "tau-library.tdb").write_bytes(tgy.pack_index(allents, [e["thumb"] for e in allents]))
+        return len(old), len(out), len(allents)
+    def lift(entries, full):                                                                           # entries with their folder name and a 96 x 96 thumbnail
+        return [dict(e, folder_name=full["folders"][e["folder"]]["name"] if full["version"] == 1 else tgy.ALL_PICTURES, thumb=e["thumb"] if full["version"] == 1 else tgy.thumb72_to_square(e["thumb"])) for e in entries]
+    allents = lift(old, of) + lift(out, nf)
+    fnames = sorted({e["folder_name"] for e in allents}, key=lambda x: x.lower()); ordered = [e for f in fnames for e in sorted((x for x in allents if x["folder_name"] == f), key=lambda e: e["path"])]
+    entries = [dict(path=e["path"], name=e["name"], size=e["size"], width=e["width"], height=e["height"], folder=fnames.index(e["folder_name"]), taken=e.get("taken", 0), details=e.get("details", {})) for e in ordered]
+    (pk / "tau-library.tdb").write_bytes(tgy.pack_index_v1(entries, [e["thumb"] for e in ordered], [dict(name=f) for f in fnames], max(of["sort"], nf["sort"]) if of["version"] == 1 or nf["version"] == 1 else 0))
     return len(old), len(out), len(allents)
 
 if __name__ == "__main__":

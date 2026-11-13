@@ -19,7 +19,7 @@ static uint16_t fb[512u * 1024u];                  /* the UI framebuffer, halfwo
 static uint32_t clk, irq_pend, vid_req, vid_bus, vid_sw, vid_due, vbase, vstride, land_base, land_words, land_ovf, input_n;
 static int force_ovf, force_short, viewer_dead, fail_pic_reads, pass_pic_reads; static uint32_t v1_starts_before, land_unaligned, zt_n_212, rwd_241;
 static int zb_ok_phase = 0; static int32_t map_cx, map_cy, map_rx1, map_rw2, map_x0, map_y0, map_rx0, map_ry0, map_ex, map_ey, map_rw1;
-static uint32_t rc_lead_n, rc_lead_bad; static struct { uint32_t src, len, dst, pitch, geom, qy, qc, status, polls, cycles; uint16_t ty[64], tc[64]; int tables_ok; uint32_t starts, loads; int corrupt_next; int pending; uint32_t p_src, p_len, p_dst, p_pitch, p_geom; } tg;
+static uint32_t rc_lead_n, rc_lead_bad; static struct { uint32_t src, len, dst, pitch, geom, qy, qc, status, polls, cycles; uint16_t ty[64], tc[64]; int tables_ok; uint32_t starts, loads; int corrupt_next; int pending; uint32_t p_src, p_len, p_dst, p_pitch, p_geom; int32_t stx, sty, p_stx, p_sty; } tg;
 static uint32_t reads_while_decoding;
 static uint32_t rc_prev, rc_starts, rc_retarget; static int32_t rc_bx, rc_by;
 static void ldr_lead_probe(void);
@@ -34,7 +34,7 @@ static uint32_t next_input(void);
 static uint32_t tgy_rd(uint32_t a); static void tgy_wr(uint32_t a, uint32_t v); static int tgy_present = 1;       /* the model of the hardware TGY decoder (registers 0x220-0x244), after the firmware sources */
 static uint32_t rd(uint32_t a)
 {
-    if (a >= 0x80000220u && a <= 0x80000244u) return tgy_rd(a);
+    if (a >= 0x80000220u && a <= 0x8000024Cu) return tgy_rd(a);
     switch (a) {
     case 0x80000084u: return 0;
     case 0x800001ECu: return (vid_sw << 16) | (vid_req << 2) | vid_bus;
@@ -54,7 +54,7 @@ static uint32_t rd(uint32_t a)
 static uint32_t cyc_rd(void) { clk += clk_step; tick(); return clk; }
 static void wr(uint32_t a, uint32_t v)
 {
-    if (a >= 0x80000220u && a <= 0x80000244u) { tgy_wr(a, v); return; }
+    if (a >= 0x80000220u && a <= 0x8000024Cu) { tgy_wr(a, v); return; }
     switch (a) {
     case 0x80000114u: text_mode = v & 1u; break;
     case 0x8000006Cu: setidx = v; break;
@@ -112,7 +112,7 @@ int gfx_mb_write_buf(uint32_t a, uint32_t d) { if (a + 1u >= sizeof fb / 2u) ret
 void gfx_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint16_t c) { for (uint32_t j = y; j < y + h && j < 1024u; j++) for (uint32_t i = x; i < x + w && i < 512u; i++) fb[j * 512u + i] = c; }
 static char texts[64][64]; static int ntext;
 /* Talos ops of core rev 30, modelled: OP_CORNERS paints the cut of each corner (a circle of radius r) in bg; OP_DSBLIT scales DOWN from the stash, every output pixel the rounded average of a 2 x 2 source box at floor(i * den / num). */
-static uint32_t corner_ops, dsblit_ops;
+static uint32_t corner_ops, dsblit_ops, dsblit_bad;                                                             /* dsblit_bad: a scale whose source is not in the shared stash rows (360 and below): the second UI buffer would read another picture */
 void gfx_corners(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t r, uint16_t bg)
 {
     corner_ops++;
@@ -125,7 +125,7 @@ void gfx_corners(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t r, uin
 void gfx_dsblit(uint32_t sx, uint32_t sy, uint32_t dx, uint32_t dy, uint32_t w, uint32_t h, uint32_t rx, uint32_t ry)
 {
     static const uint32_t NUM[4] = { 3, 2, 1, 1 }, DEN[4] = { 4, 3, 2, 3 };
-    dsblit_ops++;
+    dsblit_ops++; if (sy < 360u) dsblit_bad++;
     const uint32_t nx = NUM[rx & 3u], dxn = DEN[rx & 3u], ny = NUM[ry & 3u], dyn = DEN[ry & 3u], ow = w * nx / dxn, oh = h * ny / dyn;
     for (uint32_t j = 0; j < oh; j++) for (uint32_t i = 0; i < ow; i++) {
         const uint32_t x0 = i * dxn / nx, y0 = j * dyn / ny; uint32_t r5 = 0, g6 = 0, b5 = 0;
@@ -193,15 +193,20 @@ static uint32_t next_input(void)
 static tgy_dec_t tg_dec; static tgy_planes_t tg_planes;
 static uint8_t mbyte(uint32_t a) { return (uint8_t)(mem[a / 2u] >> (8u * (a & 1u))); }
 static void msetb(uint32_t a, uint8_t v) { const uint32_t h = a / 2u, b = a & 1u; mem[h] = (uint16_t)((mem[h] & ~(0xFFu << (8u * b))) | (uint32_t)v << (8u * b)); }
-typedef struct { uint32_t dst, pitch, w; } tg_emit_t;
-static void tg_emit(void *c, unsigned row, const uint8_t *rgb) { tg_emit_t *e = c; for (uint32_t i = 0; i < e->w * 3u; i++) msetb(e->dst + row * e->pitch + i, rgb[i]); }
+typedef struct { uint32_t dst, pitch, w, scat; int32_t stx, sty; } tg_emit_t;
+static void tg_emit(void *c, unsigned row, const uint8_t *rgb)
+{
+    tg_emit_t *e = c;
+    if (e->scat) { for (uint32_t x = 0; x < e->w; x++) for (uint32_t k = 0; k < 3u; k++) msetb((uint32_t)((int64_t)e->dst + (int64_t)x * e->stx + (int64_t)row * e->sty) + k, rgb[3u * x + k]); return; }        /* K7: every pixel at dst + x * stx + y * sty */
+    for (uint32_t i = 0; i < e->w * 3u; i++) msetb(e->dst + row * e->pitch + i, rgb[i]);
+}
 static void tg_complete(void)                                                                                      /* the decoder finishes: fetch the stream from memory as it is NOW, decode, write the rows, set done or err */
 {
     const unsigned fmt = (tg.p_geom >> 16) & 3u, w = (tg.p_geom >> 8) & 255u, h = tg.p_geom & 255u; uint8_t rows[3] = {0}, cols[3] = {0}; static uint8_t sbuf[1u << 20];
     if (fmt == 2u) { rows[0] = (uint8_t)(2u * ((h + 15u) / 16u)); cols[0] = (uint8_t)(2u * ((w + 15u) / 16u)); rows[1] = rows[2] = (uint8_t)((h + 15u) / 16u); cols[1] = cols[2] = (uint8_t)((w + 15u) / 16u); }
     else { rows[0] = rows[1] = rows[2] = (uint8_t)((h + 7u) / 8u); cols[0] = cols[1] = cols[2] = (uint8_t)((w + 7u) / 8u); }
     for (uint32_t i = 0; i < tg.p_len && i < sizeof sbuf; i++) sbuf[i] = mbyte(tg.p_src + i);
-    tg_emit_t e = { tg.p_dst, tg.p_pitch, w };
+    tg_emit_t e = { tg.p_dst, tg.p_pitch, w, (tg.p_geom >> 18) & 1u, tg.p_stx, tg.p_sty };
     const int err = (fmt == 1u || !w || !h || w > 128u || h > 128u) ? 1 : tgy_tile_rgb(&tg_dec, &tg_planes, sbuf, tg.p_len, fmt, rows, cols, w, h, tg.ty, tg.tc, tg_emit, &e);
     tg.status = (tg.status & ~0x6u) | (err ? 4u : 2u) | (err ? (1u << 8) : 0u); tg.pending = 0; tg.cycles = 62u * tg.p_len + 20000u;                          /* the DMA budget of the RTL test: 62 SDRAM clocks a byte */
 }
@@ -219,7 +224,7 @@ static void tgy_wr(uint32_t a, uint32_t v)
     if (!tgy_present) return;
     switch (a) {
     case 0x80000228u: tg.src = v & 0x3FFFFFFu; break; case 0x8000022Cu: tg.len = v & 0xFFFFFu; break; case 0x80000230u: tg.dst = v & 0x3FFFFFFu; break; case 0x80000234u: tg.pitch = v & 0xFFFFu; break;
-    case 0x80000238u: tg.geom = v & 0x3FFFFu; break; case 0x8000023Cu: tg.qy = v & 0x3FFFFFFu; break; case 0x80000240u: tg.qc = v & 0x3FFFFFFu; break;
+    case 0x80000238u: tg.geom = v & 0x7FFFFu; break; case 0x80000248u: tg.stx = (int32_t)(v << 14) >> 14; break; case 0x8000024Cu: tg.sty = (int32_t)(v << 14) >> 14; break; case 0x8000023Cu: tg.qy = v & 0x3FFFFFFu; break; case 0x80000240u: tg.qc = v & 0x3FFFFFFu; break;
     case 0x80000220u:
         if (v & 8u) tg.status &= ~0x16u;
         if ((v & 3u) && tg.polls > 0) { tg.status |= 0x10u; break; }
@@ -231,7 +236,7 @@ static void tgy_wr(uint32_t a, uint32_t v)
             if (fmt == 2u) { rows[0] = (uint8_t)(2u * ((h + 15u) / 16u)); cols[0] = (uint8_t)(2u * ((w + 15u) / 16u)); rows[1] = rows[2] = (uint8_t)((h + 15u) / 16u); cols[1] = cols[2] = (uint8_t)((w + 15u) / 16u); }
             else { rows[0] = rows[1] = rows[2] = (uint8_t)((h + 7u) / 8u); cols[0] = cols[1] = cols[2] = (uint8_t)((w + 7u) / 8u); }
             (void)rows; (void)cols; (void)sbuf; (void)w; (void)h; (void)fmt;
-            tg.pending = 1; tg.p_src = tg.src; tg.p_len = tg.len; tg.p_dst = tg.dst; tg.p_pitch = tg.pitch; tg.p_geom = tg.geom; tg.starts++; tg.polls = 3;       /* the decode happens when the busy polls run out: the stream is read THEN, so a stream that is overwritten while the decoder runs decodes wrong (as the DMA would read it) */
+            tg.pending = 1; tg.p_src = tg.src; tg.p_len = tg.len; tg.p_dst = tg.dst; tg.p_pitch = tg.pitch; tg.p_geom = tg.geom; tg.p_stx = tg.stx; tg.p_sty = tg.sty; tg.starts++; tg.polls = 3;       /* the decode happens when the busy polls run out: the stream is read THEN, so a stream that is overwritten while the decoder runs decodes wrong (as the DMA would read it) */
         }
         break;
     default: break;
@@ -396,6 +401,98 @@ static int count_text(const char *s) { int n = 0; for (int i = 0; i < 64; i++) i
 static int said(const char *s) { for (int i = 0; i < 64; i++) if (strstr(texts[i], s)) return 1; return 0; }
 static const char *last_text(void) { return texts[(ntext + 63) % 64]; }
 static void clear_texts(void) { memset(texts, 0, sizeof texts); ntext = 0; }
+
+/* ---- the version 1 library scenario (folders, grid sizes, rounded corners, selection ring): the checks use their own copy of the geometry (spec numbers), not the firmware's table ---- */
+static int lib1_on; static uint32_t gsel;                                                                                   /* the grid under test */
+static const uint8_t *thumb1_of(uint32_t i) { const uint32_t atlas = (uint32_t)idx_data[24] | (uint32_t)idx_data[25] << 8 | (uint32_t)idx_data[26] << 16; return idx_data + atlas + i * 18432u; }
+typedef struct { uint32_t cols, rows, cw, x0, dx, y0, dy, rad, ratio; } lg_t;                                  /* ratio: 0 = 1:1, 1 = 3:4, 2 = 2:3, 3 = 1:2 */
+static const lg_t LG[4] = { { 4, 3, 96, 3, 99, 6, 102, 8, 0 }, { 5, 4, 72, 6, 78, 4, 76, 8, 1 }, { 6, 4, 64, 2, 66, 10, 74, 6, 2 }, { 8, 6, 48, 1, 49, 3, 51, 4, 3 } };
+static int cut_pixel(uint32_t r, uint32_t c, uint32_t w, uint32_t h, uint32_t rad)                             /* is pixel (r, c) of a w x h cell in a corner cut of radius rad (the circle model of the stub) */
+{
+    for (uint32_t cy = 0; cy < 2u; cy++) for (uint32_t cx = 0; cx < 2u; cx++) {
+        const uint32_t dy = cy ? h - 1u - r : r, k = cx ? w - 1u - c : c;
+        if (dy < rad) { const double dd = (double)rad - (double)dy - 0.5; const uint32_t in = (uint32_t)floor(sqrt((double)rad * rad - dd * dd) + 0.5), cut = rad > in ? rad - in : 0u; if (k < cut) return 1; }
+    }
+    return 0;
+}
+static uint16_t box_avg(const uint8_t *t, uint32_t sx, uint32_t sy)                                              /* the down-scale op: the rounded average of the 2 x 2 source box at (sx, sy) of a 96 x 96 thumbnail */
+{
+    uint32_t r5 = 0, g6 = 0, b5 = 0;
+    for (uint32_t q = 0; q < 4u; q++) { const uint32_t o = ((sy + (q >> 1)) * 96u + sx + (q & 1u)) * 2u; const uint16_t p = (uint16_t)(t[o] | t[o + 1] << 8); r5 += p >> 11; g6 += (p >> 5) & 63u; b5 += p & 31u; }
+    return (uint16_t)((((r5 + 2u) >> 2) << 11) | (((g6 + 2u) >> 2) << 5) | ((b5 + 2u) >> 2));
+}
+/* cell k of grid g shows thumbnail `t` (strip: a folder tile, its bottom 16 rows are the name strip and are not compared); the corners are the background colour */
+static int lib1_cell_ok(uint32_t g, uint32_t k, const uint8_t *t, int strip)
+{
+    const lg_t *L = &LG[g]; const uint32_t x = L->x0 + (k % L->cols) * L->dx, y = 22u + L->y0 + (k / L->cols) * L->dy, rows = strip ? L->cw - 16u : L->cw;
+    static const uint32_t NUM[4] = { 1, 3, 2, 1 }, DEN[4] = { 1, 4, 3, 2 };
+    for (uint32_t r = 0; r < rows; r++) for (uint32_t c = 0; c < L->cw; c++) {
+        const uint16_t got = fb[(y + r) * 512u + x + c];
+        if (cut_pixel(r, c, L->cw, L->cw, L->rad)) { if (got != th_role[TR_BG_BOTTOM] && got != th_role[TR_ACCENT]) return 0; continue; }
+        uint16_t want;
+        if (L->ratio == 0u) { const uint32_t o = (r * 96u + c) * 2u; want = (uint16_t)(t[o] | t[o + 1] << 8); }
+        else want = box_avg(t, c * DEN[L->ratio] / NUM[L->ratio], r * DEN[L->ratio] / NUM[L->ratio]);
+        if (got != want) return 0;
+    }
+    return 1;
+}
+static int lib1_page_ok(uint32_t g, uint32_t first, uint32_t n) { for (uint32_t k = 0; k < n; k++) if (!lib1_cell_ok(g, k, thumb1_of(first + k), 0)) return 0; return 1; }
+/* the ring of the selected cell: the pixel left of its middle is the accent colour, the cell's own corner notch too (when rounded) and the ring's outer corner is the background; every other cell has background there */
+static int lib1_ring_ok(uint32_t g, uint32_t cells, uint32_t sel_k)
+{
+    const lg_t *L = &LG[g]; const uint32_t t = g == 3u ? 1u : 2u, w = L->cw;
+    const uint32_t sx = L->x0 + (sel_k % L->cols) * L->dx, sy = 22u + L->y0 + (sel_k / L->cols) * L->dy;         /* the selected cell */
+    /* the expected colour of a pixel NEXT TO a cell: the accent colour when it is in the selected cell's frame (the box grown by t, rounded outside by rad + t), else the background */
+    #define RING_WANT(X, Y) (((int)(X) >= (int)sx - (int)t && (int)(X) < (int)(sx + w + t) && (int)(Y) >= (int)sy - (int)t && (int)(Y) < (int)(sy + w + t) && !((int)(X) >= (int)sx && (int)(X) < (int)(sx + w) && (int)(Y) >= (int)sy && (int)(Y) < (int)(sy + w)) \
+        && !(L->rad && cut_pixel((Y) - sy + t, (X) - sx + t, w + 2u * t, w + 2u * t, L->rad + t))) ? th_role[TR_ACCENT] : th_role[TR_BG_BOTTOM])
+    for (uint32_t k = 0; k < cells; k++) {
+        const uint32_t x = L->x0 + (k % L->cols) * L->dx, y = 22u + L->y0 + (k / L->cols) * L->dy;
+        if (fb[(y + w / 2u) * 512u + x - 1u] != RING_WANT(x - 1u, y + w / 2u) || fb[(y - 1u) * 512u + x + w / 2u] != RING_WANT(x + w / 2u, y - 1u)
+            || fb[(y + w / 2u) * 512u + x + w] != RING_WANT(x + w, y + w / 2u) || fb[(y + w) * 512u + x + w / 2u] != RING_WANT(x + w / 2u, y + w)) return 0;
+        { uint32_t a = 0; for (; a < L->rad; a++) { const double d = ((double)L->rad - a - 0.5) * 1.41421356; if (d > L->rad + 0.3 && d < L->rad + t - 0.3) break; }       /* a pixel on the diagonal of the corner inside the thumbnail's notch yet inside the ring's outer circle: accent when selected, else background */
+          if (a < L->rad && fb[(y + a) * 512u + x + a] != (k == sel_k ? th_role[TR_ACCENT] : th_role[TR_BG_BOTTOM])) return 0; }
+        if (k == sel_k && fb[(y - t) * 512u + x - t] != th_role[TR_BG_BOTTOM]) return 0;                          /* the frame is rounded outside */
+    }
+    #undef RING_WANT
+    return 1;
+}
+static void lib1_cp(int n)
+{
+    char w[32];
+    if (getenv("LIB1_DEBUG")) { printf("cp %d: level %u gi %u first %u count %u sel %u page %u nop %u last '%s' c0 %d c1 %d c2 %d ring0 %d ring1 %d pageok %d\n", n, level, gi, cur_first, cur_count, sel, page, n_on_page, last_text(), lib1_cell_ok(0, 0, thumb1_of(0), 1), lib1_cell_ok(0, 1, thumb1_of(20), 1), lib1_cell_ok(0, 2, thumb1_of(23), 1), lib1_ring_ok(0, 3, 0), lib1_ring_ok(0, 3, 1), lib1_page_ok(0, cur_first + page * pp, n_on_page)); }
+    switch (n) {
+    case 400: chk(400, level == 1u && gi == 0u && cur_count == 3u && sel == 0u && !strcmp(last_text(), "1/3") && lib1_cell_ok(0, 0, thumb1_of(0), 1) && lib1_cell_ok(0, 1, thumb1_of(20), 1) && lib1_cell_ok(0, 2, thumb1_of(23), 1) && lib1_ring_ok(0, 3, 0)
+              && said("Alpha 20") && said("Beta 3") && said("Gamma 13")); break;                                             /* the folder level: the covers, the names and counts in the strips, the ring on the first */
+    case 401: chk(401, sel == 1u && !strcmp(last_text(), "2/3") && lib1_ring_ok(0, 3, 1)); break;                          /* Right: the ring moves to the second folder (no page redraw: the covers stay) */
+    case 402: chk(402, level == 0u && cur_first == 20u && cur_count == 3u && sel == 20u && !strcmp(last_text(), "1/3") && lib1_page_ok(0, 20, 3) && lib1_ring_ok(0, 3, 0) && said("Img 20")); break;   /* A: the pictures of the second folder, three of them, in the 4 x 3 grid */
+    case 403: chk(403, level == 1u && sel == 1u && !strcmp(last_text(), "2/3") && lib1_cell_ok(0, 2, thumb1_of(23), 1) && lib1_ring_ok(0, 3, 1)); break;      /* B: back on the folder level with the folder we left selected */
+    case 404: chk(404, level == 0u && cur_first == 0u && cur_count == 20u && n_on_page == 12u && !strcmp(last_text(), "1/20") && lib1_page_ok(0, 0, 12) && lib1_ring_ok(0, 12, 0)); break;   /* Left, A: the first folder, 12 on a page */
+    case 405: chk(405, page == 1u && n_on_page == 8u && sel == 12u && !strcmp(last_text(), "13/20") && lib1_page_ok(0, 12, 8) && lib1_ring_ok(0, 8, 0)); break;       /* R1: the next page of the folder */
+    case 406: chk(406, sel == 19u && !strcmp(last_text(), "20/20") && lib1_page_ok(0, 12, 8) && lib1_ring_ok(0, 8, 7)); break;          /* R1 again: the last picture of the folder (not of the library) */
+    case 407: chk(407, sel == 0u && page == 0u && !strcmp(last_text(), "1/20") && lib1_page_ok(0, 0, 12)); break;                   /* Right on a new press at the last picture wraps to the first of the folder */
+    case 408: chk(408, level == 1u && sel == 0u && !strcmp(last_text(), "1/3")); break;                                              /* B */
+    case 409: chk(409, sel == 2u && !strcmp(last_text(), "3/3")); break;                                                             /* Left on a new press at the first folder wraps to the last */
+    case 410: chk(410, level == 0u && cur_first == 23u && cur_count == 13u && n_on_page == 12u && sel == 23u && !strcmp(last_text(), "1/13") && lib1_page_ok(0, 23, 12)); break;      /* A: the third folder, 13 pictures: 12 and 1 */
+    case 411: chk(411, sel == 20u && strstr(last_open, "l20.tgy") && vid_bus == 1u); break;                                          /* in the viewer on the first picture of the second folder */
+    case 412: chk(412, sel == 22u && strstr(last_open, "l22.tgy")); break;                                                           /* Left in the viewer wraps INSIDE the folder: the last picture of the folder, not the one before the first of the library */
+    case 413: chk(413, sel == 20u && strstr(last_open, "l20.tgy")); break;                                                           /* Right wraps back */
+    case 414: chk(414, vid_bus == 0u && level == 0u && sel == 21u && !strcmp(last_text(), "2/3") && lib1_page_ok(0, 20, 3) && lib1_ring_ok(0, 3, 1)); break;      /* B: the folder's grid with the picture shown last selected */
+    case 430: case 440: { const uint32_t per = LG[gsel].cols * LG[gsel].rows, tot = n == 430 ? 20u : 60u, nn = per < tot ? per : tot; char f[16]; snprintf(f, sizeof f, "1/%u", tot);
+              chk(n, level == 0u && gi == gsel && pp == per && cur_count == tot && n_on_page == nn && !strcmp(last_text(), f) && lib1_page_ok(gsel, cur_first, nn) && lib1_ring_ok(gsel, nn, 0) && corner_ops > 0u && dsblit_ops == (gsel ? nn : 0u) && dsblit_bad == 0u); break; }   /* the grid of the setting: every cell scaled by the engine (or as it is), rounded, the ring on the first */
+    case 431: { const uint32_t cols = LG[gsel].cols, per = cols * LG[gsel].rows, nn = per < 20u ? per : 20u; char f[16]; snprintf(f, sizeof f, "%u/20", cols + 1u); chk(431, sel == cols && !strcmp(last_text(), f) && lib1_ring_ok(gsel, nn, cols)); break; }   /* Down: one row (cols entries) on */
+    case 432: { const uint32_t cols = LG[gsel].cols, per = cols * LG[gsel].rows, nn = per < 20u ? per : 20u; chk(432, sel == cols + 1u && lib1_ring_ok(gsel, nn, cols + 1u)); break; }
+    case 441: { const uint32_t per = LG[gsel].cols * LG[gsel].rows, n2 = 60u - per < per ? 60u - per : per; chk(441, page == 1u && sel == per && n_on_page == n2 && lib1_page_ok(gsel, per, n2) && lib1_ring_ok(gsel, n2, 0)); break; }   /* R1: the next page of the single folder */
+    case 442: { const uint32_t per = LG[gsel].cols * LG[gsel].rows, want = 2u * per < 60u ? 2u * per : 59u; chk(442, sel == want && page == want / per); break; }
+    case 450: { uint32_t sx, sy; sx = LG[0].x0; sy = 22u + LG[0].y0; const uint16_t dk = (uint16_t)((th_role[TR_BG_BOTTOM] >> 1) & 0x7BEFu);
+              chk(450, level == 1u && th_role[TR_BG_BOTTOM] != 0u && dk != th_role[TR_BG_BOTTOM] && lib1_cell_ok(0, 0, thumb1_of(0), 1) && fb[(sy + 90u) * 512u + sx + 90u] == dk && fb[(sy + 79u) * 512u + sx + 90u] != dk); break; }   /* a folder tile in the light theme: the name strip is darker than the background and the cover above it is not */
+    case 451: { const uint32_t per = LG[1].cols * LG[1].rows; chk(451, level == 0u && gi == 1u && pp == per && sel == 48u && page == 2u && n_on_page == 20u && lib1_page_ok(1, 40, 20) && lib1_ring_ok(1, 20, 8) && !strcmp(last_text(), "49/60")); break; }   /* the grid size changed in Settings (4 x 3 to 5 x 4): the same picture stays selected, on its page of the new grid */
+    case 421: chk(421, level == 0u && cur_first == 0u && cur_count == 20u && sel == 5u && !strcmp(last_text(), "6/20") && lib1_page_ok(0, 0, 12)); break;                  /* resume on a picture of the FIRST folder */
+    case 422: chk(422, level == 0u && cur_first == 23u && cur_count == 13u && sel == 30u && page == 0u && !strcmp(last_text(), "8/13") && lib1_page_ok(0, 23, 12)); break;      /* resume on a picture of the LAST folder */
+    case 420: chk(420, level == 0u && cur_first == 20u && cur_count == 3u && sel == 21u && !strcmp(last_text(), "2/3") && lib1_page_ok(0, 20, 3)); break;      /* the resume scenario: boots inside the folder of the saved picture, on it */
+    default: (void)w; break;
+    }
+}
+
 static int view_matches(const char *fname, int32_t *ox, int32_t *oy)                              /* what the scan-out would show (from the base and stride registers) equals the raster zoom level of the file, pixel for pixel */
 {
     char f[600]; snprintf(f, sizeof f, "%s/%s", dir, fname); uint32_t n; uint8_t *d = slurp(f, &n); if (!d) return 0;
@@ -438,9 +535,12 @@ static int big_grid_ok(void)                                                    
     return page == pg && !strcmp(last_text(), w) && thumbs_on_screen(first, n) && fb[fy * 512u + fx] == th_role[TR_ACCENT];
 }
 static void clear_texts(void);
+static void lib1_cp(int n);
 static void checkpoint(int n)
 {
     char want[64]; char path[200];
+    if (lib1_on) { lib1_cp(n); return; }
+    if (getenv("APP_DEBUG") && n == 35) printf("cp35: thumbs %d px %04x bg %04x level %u gi %u sel %u page %u count %u last '%s'\n", thumbs_on_screen(0, count < 16u ? count : 16u), fb[100u * 512u + 399u], th_role[TR_BG_BOTTOM], level, gi, sel, page, count, last_text());
     switch (n) {
     case 200: chk(200, plane_is_rgb("v00.rgb") && tg.starts == 42u && tg.loads == 1u && !said("ERROR") && !said("DAMAGED")); clear_texts(); break;                          /* a version 1 picture opened from the grid: the plane is its decode, 42 tiles, one table load */
     case 201: chk(201, plane_is_rgb("v01.rgb") && tg.starts == 84u && tg.loads == 2u); break;                                                                                 /* the next picture (a 500 x 300 one-level file): another table load for another file at the same base */
@@ -548,7 +648,7 @@ static void checkpoint(int n)
     case 22: chk(30, said("INFO") && said("4D50331B") && said("800 X 720") && said("NONE YET") && said("LAST ERROR") && said("L1 LOADED 1 SAVED 0")); snprintf(want, sizeof want, "%u", count); chk(31, said(want)); clear_texts(); break;    /* Info before any picture was opened */
     case 23: chk(32, said("4D50331B") && count_text("NONE YET") == 11 && said(" MS") && said("432128 WORDS, 0 LOST")); chk(33, said("NONE") && !said("FAILED")); chk(44, said("L1 LOADED 1 SAVED 1")); chk(125, ldr_opens > 0u && ldr_chunks > 0u && ldr_first_ok && ldr_mono && ldr_max >= 100u && ldr_max < 160u); clear_texts(); break;   /* Info after viewing pictures: the last landing */
     case 24: chk(34, said("OPEN FAILED") && said("0 WORDS, 0 LOST")); clear_texts(); break;                                                                          /* Info after a failed open: the error, and no landing counts carried over */
-    case 25: chk(35, said("RESUME LAST PICTURE") && said("ON") && !said("OFF")); clear_texts(); break;                                                                    /* Settings page, resume on (the default) */
+    case 25: chk(35, said("RESUME LAST PICTURE") && said("ON") && !said("OFF") && said("GRID SIZE") && said("4 X 3") && said("DITHER") && said("ORDERED")); clear_texts(); break;                                                                    /* Settings page, resume on (the default) */
     case 26: chk(36, said("OFF") && (setw[2] & 1u) == 0u && set_writes == 0); clear_texts(); break;                                                                   /* toggled off: shown, but not yet written */
     case 27: chk(37, (setw[2] & 1u) == 0u && set_writes == 0); clk += 2u * CLK_HZ; break;                                                                             /* back in the grid, a key a moment ago: nothing published yet; now a quiet 2 s */
     case 28: chk(38, setw[2] == 0x4000005Fu && setw[0] == (1u << 27) && setw[1] == 0x40000001u && set_writes == 1); break;                                              /* published: only word 2 changed */
@@ -665,7 +765,7 @@ int main(int argc, char **argv)
     snprintf(dir, sizeof dir, "%s", argv[1]); char f[600]; snprintf(f, sizeof f, "%s/tau-library.tdb", dir);
     idx_data = slurp(f, &idx_len); if (!idx_data) return 2;
     count = (uint32_t)idx_data[8] | (uint32_t)idx_data[9] << 8;
-    setw[0] = 1u << 27; setw[1] = 0x40000001u; setw[2] = 0x4000005Eu; setw[5] = 0x40000000u; setw[6] = 0x40000000u;      /* the package's defaults of the inherited variables: layout 1, appearance, word 2 with bit 0 clear (resume on), the player's marks in words 5 and 6 */
+    setw[0] = 1u << 27; setw[1] = 0x40000001u; setw[2] = 0x4000005Eu; setw[5] = 0x40000000u; setw[6] = 0x40000000u; setw[8] = 0u;      /* the package's defaults of the inherited variables: layout 1, appearance, word 2 with bit 0 clear (resume on), the player's marks in words 5 and 6 */
     if (argc > 2 && !strcmp(argv[2], "zoom")) {                                                      /* the zoom (option A): pan, clamp, loading behind, the loop rules */
         static uint32_t S4[32768]; int k = 0;
 #define HOLD(key, n) do { for (int _i = 0; _i < (n); _i++) S4[k++] = (key); } while (0)
@@ -717,6 +817,41 @@ int main(int argc, char **argv)
         S4[k++] = KEY_B; S4[k++] = 0; S4[k++] = KEY_B; S4[k++] = 0; HOLD(0, 12);
         S4[k++] = KEY_START; S4[k++] = 0; S4[k++] = KEY_DOWN; S4[k++] = 0; S4[k++] = KEY_DOWN; S4[k++] = 0; S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 3); S4[k++] = CP(128); S4[k++] = END;
         nscript = k; memcpy(script, S4, (size_t)k * sizeof S4[0]);
+        if (!setjmp(done)) gallery_app_main();
+        printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
+    }
+    if (argc > 2 && !strcmp(argv[2], "lib1light")) {                                                           /* the folder level in the light theme (its background is not 0, so the darkened strip shows) */
+        lib1_on = 1; setw[1] = 0x40000000u | 2u | (1u << 5) | (1u << 11);
+        const uint32_t SL[] = { CP(450), END }; nscript = 2; memcpy(script, SL, sizeof SL);
+        if (!setjmp(done)) gallery_app_main();
+        printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
+    }
+    if (argc > 2 && !strcmp(argv[2], "libbigset")) {                                                           /* one folder of 60: select entry 48 (page 5 of 12), change the grid size in Settings, back in the grid */
+        lib1_on = 1;
+        const uint32_t SS[] = { KEY_R1, 0, KEY_R1, 0, KEY_R1, 0, KEY_R1, 0, KEY_START, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_A, 0, KEY_DOWN, 0, KEY_RIGHT, 0, KEY_B, 0, KEY_B, 0, CP(451), END };
+        nscript = (int)(sizeof SS / sizeof SS[0]); memcpy(script, SS, sizeof SS);
+        if (!setjmp(done)) gallery_app_main();
+        printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
+    }
+    if (argc > 2 && (!strncmp(argv[2], "lib1g", 5) || !strncmp(argv[2], "libbig", 6))) {                      /* a grid size of the setting (1..3) on the three-folder library (opened into the first folder) and on a library of one folder of 60 */
+        lib1_on = 1; const int big = !strncmp(argv[2], "libbig", 6); gsel = (uint32_t)atoi(argv[2] + (big ? 6 : 5));
+        setw[8] = gsel;                                                                                             /* the grid under test, dither raw 0 = ordered */
+        if (big) { const uint32_t SB[] = { CP(440), KEY_R1, 0, CP(441), KEY_R1, 0, CP(442), END }; nscript = (int)(sizeof SB / sizeof SB[0]); memcpy(script, SB, sizeof SB); }
+        else { const uint32_t SG[] = { KEY_A, 0, CP(430), KEY_DOWN, 0, CP(431), KEY_RIGHT, 0, CP(432), END }; nscript = (int)(sizeof SG / sizeof SG[0]); memcpy(script, SG, sizeof SG); }
+        if (!setjmp(done)) gallery_app_main();
+        printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
+    }
+    if (argc > 2 && (!strcmp(argv[2], "lib1") || !strncmp(argv[2], "lib1resume", 10))) {                      /* a version 1 library of three folders (20, 3 and 13 pictures) */
+        lib1_on = 1;
+        if (!strncmp(argv[2], "lib1resume", 10)) {
+            const uint32_t ri = !strcmp(argv[2], "lib1resumeA") ? 5u : !strcmp(argv[2], "lib1resumeC") ? 30u : 21u; char rp[80]; snprintf(rp, sizeof rp, "Assets/tau_gallery/common/photos/l%02u.tgy", ri);
+            setw[6] = ri; setw[5] = gf_crc32((const uint8_t *)rp, (uint32_t)strlen(rp)) & 0x7FFFFFFFu;
+            const uint32_t SR[] = { CP(ri == 5u ? 421 : ri == 30u ? 422 : 420), END }; nscript = 2; memcpy(script, SR, sizeof SR);
+        } else {
+            const uint32_t S1[] = { CP(400), KEY_RIGHT, 0, CP(401), KEY_A, 0, CP(402), KEY_B, 0, CP(403), KEY_LEFT, 0, KEY_A, 0, CP(404), KEY_R1, 0, CP(405), KEY_R1, 0, CP(406), KEY_RIGHT, 0, CP(407), KEY_B, 0, CP(408),
+                                    KEY_LEFT, 0, CP(409), KEY_A, 0, CP(410), KEY_B, 0, KEY_LEFT, 0, KEY_A, 0, KEY_A, 0, 0, 0, CP(411), KEY_LEFT, 0, 0, 0, CP(412), KEY_RIGHT, 0, 0, 0, CP(413), KEY_RIGHT, 0, 0, 0, KEY_B, 0, CP(414), END };
+            nscript = (int)(sizeof S1 / sizeof S1[0]); memcpy(script, S1, sizeof S1);
+        }
         if (!setjmp(done)) gallery_app_main();
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
     }

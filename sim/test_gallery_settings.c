@@ -8,7 +8,7 @@ int main(void)
 {
     uint32_t w[GS_WORDS]; memset(w, 0, sizeof w);
     gs_vals_t d = gs_defaults();
-    chk("defaults: resume on, picture 0, no crc, theme 0 dark, accent 1", d.resume == 1u && d.last_idx == 0u && d.last_crc == 0u && d.theme == 0u && d.pol == 0u && d.pal == 1u);
+    chk("defaults: resume on, picture 0, no crc, theme 0 dark, accent 1, grid 0, ordered dither, no colour preset", d.resume == 1u && d.last_idx == 0u && d.last_crc == 0u && d.theme == 0u && d.pol == 0u && d.pal == 1u && d.grid == 0u && d.dither == 1u && d.lut == 0u);
     gs_vals_t v = gs_unpack(w);
     chk("a word set of layout 0 gives the defaults, not its own bits", v.resume == 1u && v.last_idx == 0u);
     w[GS_W_LAYOUT] = 1u << 27; w[GS_W_RESUME] = 1u; w[GS_W_INDEX] = 7u; w[GS_W_CRC] = 0x1234u;
@@ -28,23 +28,34 @@ int main(void)
     w[GS_W_INDEX] = 0xFFFFFFFFu; w[GS_W_CRC] = 0xFFFFFFFFu; v = gs_unpack(w);
     chk("the 31-bit fields ignore bit 31", v.last_idx == GS_M31 && v.last_crc == GS_M31);
 
+    w[GS_W_LAYOUT] = 1u << 27; w[GS_W_FX] = 0x40000000u | 3u | (1u << 2) | (5u << 4); v = gs_unpack(w);
+    chk("word 8 fields: grid 3, dither stored 1 = moving (2), colour preset 5 (bit 30, the mark, is not read)", v.grid == 3u && v.dither == 2u && v.lut == 5u);
+    w[GS_W_FX] = 0u; v = gs_unpack(w); chk("the package default 0 of the word means grid 0, ordered dither, no preset", v.grid == 0u && v.dither == 1u && v.lut == 0u);
+    w[GS_W_FX] = 2u << 2; v = gs_unpack(w); chk("dither stored 2 means off (0)", v.dither == 0u);
+    w[GS_W_FX] = 0x40000000u | (3u << 2); v = gs_unpack(w); chk("a dither value this build does not have (3) falls back to ordered", v.dither == 1u);
+    w[GS_W_FX] = 0xFFFFFF80u | 2u; v = gs_unpack(w); chk("only bits 0 to 6 of word 8 are read", v.grid == 2u && v.dither == 1u && v.lut == 0u);
+    w[GS_W_FX] = 0u; w[GS_W_LAYOUT] = 2u << 27; v = gs_unpack(w); chk("another layout gives the default look settings", v.grid == 0u && v.dither == 1u);
     memset(w, 0, sizeof w); w[1] = 0x7000F000u; w[GS_W_LAYOUT] = 0x80000123u; w[GS_W_RESUME] = 0xA0u; w[GS_W_CRC] = 0x80000000u; w[GS_W_INDEX] = 0x80000000u;
-    gs_vals_t nv = { 0u, 0x7FFFFFFFu, 0x7FFFFFFFu, 63u, 1u, 31u };
+    gs_vals_t nv = { 0u, 0x7FFFFFFFu, 0x7FFFFFFFu, 63u, 1u, 31u, 2u, 2u, 5u }; w[GS_W_FX] = 0x80000000u | (1u << 30) | (0x3u << 8);
     const uint32_t m = gs_pack(w, &nv);
     chk("pack: layout version set, bit 31 and the low bits of word 0 stay", w[GS_W_LAYOUT] == (0x80000123u | (1u << 27)));
     chk("pack: resume off sets bit 0 and leaves the other bits of word 2", w[GS_W_RESUME] == 0xA1u);
     chk("pack: the 31-bit fields are set and bit 31 stays", w[GS_W_CRC] == 0xFFFFFFFFu && w[GS_W_INDEX] == 0xFFFFFFFFu);
     chk("pack: word 1 takes accent, theme and polarity and keeps bits 12 to 31 (the font bits, the mark)", w[1] == (0x7000F000u & ~0xFFFu | 31u | (63u << 5) | (1u << 11)));
-    chk("pack: the mask names exactly the words that changed", m == ((1u << GS_W_LAYOUT) | (1u << GS_W_LOOK) | (1u << GS_W_RESUME) | (1u << GS_W_CRC) | (1u << GS_W_INDEX)));
+    chk("pack: word 8 takes grid, dither (stored as (dither + 2) % 3: moving 2 is stored 1) and the colour preset and keeps bit 31, bit 30 and the other low bits", w[GS_W_FX] == (0x80000000u | (1u << 30) | (0x3u << 8) | 2u | (1u << 2) | (5u << 4)));
+    chk("pack: the mask names exactly the words that changed", m == ((1u << GS_W_LAYOUT) | (1u << GS_W_LOOK) | (1u << GS_W_RESUME) | (1u << GS_W_CRC) | (1u << GS_W_INDEX) | (1u << GS_W_FX)));
     gs_vals_t r = gs_unpack(w);
-    chk("pack then unpack round trip at the extremes", r.resume == 0u && r.last_idx == GS_M31 && r.last_crc == GS_M31 && r.theme == 63u && r.pol == 1u && r.pal == 31u);
+    chk("pack then unpack round trip at the extremes", r.resume == 0u && r.last_idx == GS_M31 && r.last_crc == GS_M31 && r.theme == 63u && r.pol == 1u && r.pal == 31u && r.grid == 2u && r.dither == 2u && r.lut == 5u);
     chk("packing the same values again changes nothing", gs_pack(w, &nv) == 0u);
     nv.pol = 0u; chk("turning the polarity off changes only word 1 and keeps the other bits", gs_pack(w, &nv) == (1u << GS_W_LOOK) && w[1] == (0x7000F000u & ~0xFFFu | 31u | (63u << 5)));
     nv.last_idx = 5u; chk("changing only the index changes only word 6", gs_pack(w, &nv) == (1u << GS_W_INDEX));
     nv.resume = 1u; chk("turning resume on clears bit 0 again", gs_pack(w, &nv) == (1u << GS_W_RESUME) && (w[GS_W_RESUME] & 1u) == 0u && w[GS_W_RESUME] == 0xA0u);
-    int uniq = sizeof gs_write_order == 5 && gs_write_order[4] == GS_W_LAYOUT;
-    for (unsigned i = 0; i < 5; i++) for (unsigned j = i + 1; j < 5; j++) if (gs_write_order[i] == gs_write_order[j]) uniq = 0;
-    chk("write order: the five words once each, word 0 last", uniq);
+    nv.grid = 3u; chk("changing only the grid size changes only word 7", gs_pack(w, &nv) == (1u << GS_W_FX));
+    nv.dither = 0u; chk("changing only the dither changes only word 7", gs_pack(w, &nv) == (1u << GS_W_FX));
+    nv.lut = 0u; chk("changing only the colour preset changes only word 7", gs_pack(w, &nv) == (1u << GS_W_FX) && (w[GS_W_FX] & 0x7Fu) == (3u | (2u << 2)));
+    int uniq = sizeof gs_write_order == 6 && gs_write_order[5] == GS_W_LAYOUT;
+    for (unsigned i = 0; i < 6; i++) for (unsigned j = i + 1; j < 6; j++) if (gs_write_order[i] == gs_write_order[j]) uniq = 0;
+    chk("write order: the six words once each, word 0 last", uniq);
 
     gs_vals_t s = { 1u, 4u, 0x55u };
     chk("resume: the saved picture is chosen when index and crc fit", gs_resume_index(&s, 18u, 0x55u) == 4u);
@@ -56,7 +67,7 @@ int main(void)
 
     { gs_vals_t a = gs_defaults(), b = gs_defaults(); chk("gs_same: equal values", gs_same(&a, &b));
       b.theme = 1u; chk("gs_same: a theme change is seen", !gs_same(&a, &b)); b = a; b.pol = 1u; chk("gs_same: a polarity change is seen", !gs_same(&a, &b)); b = a; b.pal = 2u; chk("gs_same: an accent change is seen", !gs_same(&a, &b));
-      b = a; b.last_idx = 1u; chk("gs_same: an index change is seen", !gs_same(&a, &b)); b = a; b.last_crc = 1u; chk("gs_same: a crc change is seen", !gs_same(&a, &b)); b = a; b.resume = 0u; chk("gs_same: a resume change is seen", !gs_same(&a, &b)); }
+      b = a; b.last_idx = 1u; chk("gs_same: an index change is seen", !gs_same(&a, &b)); b = a; b.last_crc = 1u; chk("gs_same: a crc change is seen", !gs_same(&a, &b)); b = a; b.grid = 1u; chk("gs_same: a grid change is seen", !gs_same(&a, &b)); b = a; b.dither = 0u; chk("gs_same: a dither change is seen", !gs_same(&a, &b)); b = a; b.lut = 1u; chk("gs_same: a colour preset change is seen", !gs_same(&a, &b)); b = a; b.resume = 0u; chk("gs_same: a resume change is seen", !gs_same(&a, &b)); }
     const uint32_t hz = 66666667u;
     chk("publish: not before a quiet second", !gs_publish_due(1000u + hz - 1u, 1000u, hz, 1));
     chk("publish: after a quiet second", gs_publish_due(1000u + hz, 1000u, hz, 1));

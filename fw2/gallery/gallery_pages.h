@@ -137,16 +137,29 @@ static inline int gh_input(gh_t *h, uint32_t edge)
     return (edge & (GP_KEY_LEFT | GP_KEY_B)) != 0;
 }
 
-/* ---- Settings: one setting in this slice, RESUME (the grid opens on the last picture). Left, Right and A change the value; B goes back to the menu. ---- */
-/* One key edge: `resume` is the live flag (0 or 1); returns 1 when the page should close. */
-static inline int gsp_input(uint32_t *resume, uint32_t edge)
+/* ---- Settings: rows RESUME (the grid opens on the last picture), GRID SIZE (4 x 3, 5 x 4, 6 x 4, 8 x 6) and DITHER (off, ordered, ordered + moving). Up and Down choose the row, Left, Right and A change its value (wrapping); B goes back. ---- */
+enum { GSP_RESUME = 0, GSP_GRID, GSP_DITHER, GSP_ROWS };
+#define GSP_GRIDS 4u
+#define GSP_DITHERS 3u
+typedef struct { uint8_t row; } gsp_t;
+static const char *const gsp_labels[GSP_ROWS] = { "RESUME LAST PICTURE", "GRID SIZE", "DITHER" };
+static const char *const gsp_grid_names[GSP_GRIDS] = { "4 X 3", "5 X 4", "6 X 4", "8 X 6" };
+static const char *const gsp_dither_names[GSP_DITHERS] = { "OFF", "ORDERED", "MOVING" };
+/* One key edge: `resume` (0 or 1), `grid` (0..3) and `dither` (0..2) are the live values; returns 1 when the page should close. */
+static inline int gsp_input(gsp_t *s, uint32_t *resume, uint32_t *grid, uint32_t *dither, uint32_t edge)
 {
+    if (edge & (GP_KEY_UP | GP_KEY_DOWN)) { s->row = (uint8_t)hl_wrap(s->row, GSP_ROWS, (edge & GP_KEY_UP) != 0); return 0; }
     if (edge & (GP_KEY_LEFT | GP_KEY_A | (1u << 3))) {                                           /* bit 3 is Right */
+        const int dec = (edge & GP_KEY_LEFT) != 0;
+        if (s->row == GSP_RESUME) {
 #if BUG == 7
-        (void)resume;                                                                            /* nothing changes */
+            (void)resume;                                                                        /* nothing changes */
 #else
-        *resume = (*resume & 1u) ^ 1u;
+            *resume = (*resume & 1u) ^ 1u;
 #endif
+        }
+        else if (s->row == GSP_GRID) *grid = hl_wrap(*grid % GSP_GRIDS, GSP_GRIDS, dec);
+        else *dither = hl_wrap(*dither % GSP_DITHERS, GSP_DITHERS, dec);
         return 0;
     }
     return (edge & GP_KEY_B) != 0;
