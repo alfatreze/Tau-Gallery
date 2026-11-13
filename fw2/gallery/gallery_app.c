@@ -882,7 +882,7 @@ int main(void)
     gfx_rect(0, 0, GFX_W, GFX_H, BG);
     platform_probe();
     gfx_text(6, 2, "TAU GALLERY", ACC, BG);
-    { static uint8_t h[4096]; int rc = 100;
+    { uint8_t *h = v1z_idx; int rc = 100;                                                       /* the boot-time read of the index head borrows the zoom index buffer (32 KB, unused until a zoom opens): 4 KB of RAM less, which the 128 KB link needs */
       if (read_bytes(SLOT_IDX, 0u, 4096u, h)) rc = gx_parse_head(h, GX_HEAD_BYTES, &head);
       if (rc == 100) { say("NO INDEX: TAU-LIBRARY.TDB NOT READ", BAD); for (;;) { } }
       if (rc) { char b[40], *q = put_s(b, "INDEX NOT USABLE E"); q = put_u(q, (uint32_t)rc); *q = 0; say(b, BAD); for (;;) { } }
