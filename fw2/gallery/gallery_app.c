@@ -18,13 +18,10 @@
 #define DIM  th_role[TR_TEXT_SECONDARY]
 #define ACC  th_role[TR_ACCENT]
 #define BAD  th_role[TR_ERROR]
-#define COLS 4u
-#define ROWS 4u
-#define PER_PAGE (COLS * ROWS)
-#define GX0 2u
-#define GXS 100u
-#define GY0 22u
-#define GYS 76u
+#define GY0 22u                                  /* the top of the grid area (below the title line) */
+#define STASH_X 400u                             /* the stash (shared rows 384 and below, columns 400..511): a 96 x 96 thumbnail waits here to be scaled down by the draw engine */
+#define STASH_Y 384u
+#define MAX_PP 48u                               /* the most entries on a page (the 8 x 6 grid) */
 #define SLOT_PIC 2u
 #define SLOT_IDX 5u
 #define GAL_ZOOM_BASE 0x400000u                  /* the zoom plane (a raster zoom level at its own stride), SDRAM halfword address 8 MiB */
@@ -54,47 +51,77 @@ static int read_bytes(uint32_t slot, uint32_t off, uint32_t len, uint8_t *dst)
     return 1;
 }
 
-static gx_head_t head; static gx_entry_t ent[PER_PAGE];
-static uint32_t sel, page, loaded_page = 0xFFFFFFFFu, n_on_page;
+/* The grid sizes of Tau Gallery 1.0 (docs/handoffs/SESSION_HANDOFF_2026-11-13_GALLERY_1_0_FIRMWARE.md): cols x rows of cw x ch cells at x0 + col * dx, GY0 + y0 + row * dy; ring = the selection frame's width; rad = the
+ * corner radius; ratio = the draw engine's down-scale code (0 = 3:4, 1 = 2:3, 2 = 1:2) of the 96 x 96 thumbnail, 0xFF = drawn as it is. The last row is the version 0 index: 96 x 72 thumbnails, square corners. */
+typedef struct { uint8_t cols, rows, cw, ch, x0, dx, y0, dy, ring, rad, ratio; } grid_t;
+static const grid_t GRIDS[5] = { { 4, 3, 96, 96, 3, 99, 6, 102, 2, 8, 0xFF }, { 5, 4, 72, 72, 6, 78, 4, 76, 2, 8, 0 }, { 6, 4, 64, 64, 2, 66, 10, 74, 2, 6, 1 }, { 8, 6, 48, 48, 1, 49, 3, 51, 1, 4, 2 }, { 4, 4, 96, 72, 2, 100, 0, 76, 2, 0, 0xFF } };
+static uint32_t gi, pp;                                                                             /* the grid in use and its entries a page */
+#define GR GRIDS[gi]
+static void set_grid(uint32_t g) { gi = g; pp = (uint32_t)GR.cols * GR.rows; }
+
+static gx_head_t head; static gx_entry_t ent[MAX_PP];
+static uint32_t sel, page, loaded_page = 0xFFFFFFFFu, n_on_page;                                    /* sel: the selected entry, an index into the library (or into the folders on the folder level) */
+static uint32_t cur_first, cur_count, level, cur_folder;                                            /* the open folder is the range [cur_first, cur_first + cur_count) of the entries; level 1 shows the folders themselves */
+#define EN(i) ent[(i) - (cur_first + page * pp)]                                                    /* the loaded page's record of entry i */
+static uint8_t v1z_idx[32768u]; static uint32_t v1z_idx_ok;                                         /* the zoom's tile index; also the buffer of the index pages and the folder table while no picture is open */
 
 static void say(const char *s, uint16_t color) { gfx_rect(0, 336, GFX_W, 24, BG); gfx_text(6, 338, s, color, BG); }
-static void cell_xy(uint32_t k, uint32_t *x, uint32_t *y) { *x = GX0 + (k % COLS) * GXS; *y = GY0 + (k / COLS) * GYS; }
+static void cell_xy(uint32_t k, uint32_t *x, uint32_t *y) { *x = GR.x0 + (k % GR.cols) * GR.dx; *y = GY0 + GR.y0 + (k / GR.cols) * GR.dy; }
+/* The selection frame: four strips outside the cell; the cell's four corner notches take the frame colour and the outside of the frame is rounded, so the frame follows the thumbnail's rounded corners without
+ * redrawing the thumbnail. off (on = 0) paints the same places in the background. */
 static void frame(uint32_t k, uint16_t c)
 {
-    uint32_t x, y; cell_xy(k, &x, &y);
-    gfx_rect(x - 2u, y - 2u, 100u, 2u, c); gfx_rect(x - 2u, y + 72u, 100u, 2u, c); gfx_rect(x - 2u, y, 2u, 72u, c); gfx_rect(x + 96u, y, 2u, 72u, c);
+    uint32_t x, y; cell_xy(k, &x, &y); const uint32_t t = GR.ring, w = GR.cw, h = GR.ch;
+    gfx_rect(x - t, y - t, w + 2u * t, t, c); gfx_rect(x - t, y + h, w + 2u * t, t, c); gfx_rect(x - t, y, t, h, c); gfx_rect(x + w, y, t, h, c);
+    if (GR.rad) { gfx_corners(x, y, w, h, GR.rad, c); if (c != BG) gfx_corners(x - t, y - t, w + 2u * t, h + 2u * t, GR.rad + t, BG); }
 }
 
-/* One thumbnail: its 13,824 bytes are read in 4 KB pieces and written into the framebuffer two pixels at a time (the mailbox), 96 pixels = 192 bytes a row. */
+/* One thumbnail: its bytes (13,824 for 96 x 72, 18,432 for 96 x 96) are read in 4 KB pieces and written into the framebuffer two pixels at a time (the mailbox), 96 pixels = 192 bytes a row. A grid with a down-scale ratio
+ * writes it to the stash instead and has the draw engine scale it into the cell; the corners are rounded last (the engine runs the commands in order). */
 static int draw_thumb(uint32_t x, uint32_t y, uint32_t off)
 {
-    for (uint32_t pos = off & ~4095u; pos < off + GX_THUMB_BYTES; pos += 4096u) {
+    const uint32_t tb = head.thumb_bytes, ds = GR.ratio != 0xFFu, bx = ds ? STASH_X : x, by = ds ? STASH_Y : y;
+    if (ds) gfx_fence();                                                                              /* the previous thumbnail's scaling has read the stash */
+    for (uint32_t pos = off & ~4095u; pos < off + tb; pos += 4096u) {
         if (!slot_read_blocking(SLOT_IDX, pos, (uint32_t)(uintptr_t)_tag_start, 4096u, CLK_HZ)) return 0;
         const volatile uint32_t *w = GAL_TAGWIN;
         for (uint32_t i = 0; i < 1024u; i++) {
             const uint32_t a = pos + 4u * i;
-            if (a < off || a >= off + GX_THUMB_BYTES) continue;
+            if (a < off || a >= off + tb) continue;
             const uint32_t rel = a - off, row = rel / 192u, col = (rel % 192u) / 2u;
-            gfx_mb_write_buf((y + row) * GFX_STRIDE + x + col, w[i]);
+            gfx_mb_write_buf((by + row) * GFX_STRIDE + bx + col, w[i]);
         }
     }
+    if (ds) gfx_dsblit(STASH_X, STASH_Y, x, y, 96u, 96u, GR.ratio, GR.ratio);
+    if (GR.rad && level == 0u) gfx_corners(x, y, GR.cw, GR.ch, GR.rad, BG);
     return 1;
 }
 
+static void copy_name(char *d, const char *src, uint32_t max) { uint32_t i = 0; while (i < max && src[i]) { d[i] = src[i]; i++; } d[i] = 0; }
+/* The entries (or, on the folder level, the folder records) of the page into ent[]. The index bytes go through v1z_idx (free while the grid is shown). */
 static int load_page(void)
 {
-    const uint32_t first = page * PER_PAGE; n_on_page = head.count - first < PER_PAGE ? head.count - first : PER_PAGE;
-    static uint8_t buf[PER_PAGE * GX_ENTRY_BYTES];
-    if (!read_bytes(SLOT_IDX, gx_entry_off(&head, first), n_on_page * GX_ENTRY_BYTES, buf)) return 0;
-    for (uint32_t k = 0; k < n_on_page; k++) if (gx_parse_entry(buf + k * GX_ENTRY_BYTES, GX_ENTRY_BYTES, &ent[k])) return 0;
+    const uint32_t first = cur_first + page * pp, left = cur_first + cur_count - first; n_on_page = left < pp ? left : pp;
+    uint8_t *buf = v1z_idx; v1z_idx_ok = 0u;
+    if (level == 1u) {
+        if (!read_bytes(SLOT_IDX, gx_folder_off(&head, first), n_on_page * GX1_FOLDER_BYTES, buf)) return 0;
+        for (uint32_t k = 0; k < n_on_page; k++) {
+            gx_folder_t f; if (gx_parse_folder(&head, buf + k * GX1_FOLDER_BYTES, GX1_FOLDER_BYTES, &f)) return 0;
+            copy_name(ent[k].name, f.name, GX_NAME_MAX); ent[k].path[0] = 0; ent[k].thumb = f.cover; ent[k].size = f.count; ent[k].width = ent[k].height = 0u; ent[k].details_len = 0u; ent[k].taken = 0u;
+        }
+    } else {
+        if (!read_bytes(SLOT_IDX, gx_entry_off(&head, first), n_on_page * head.entry_bytes, buf)) return 0;
+        for (uint32_t k = 0; k < n_on_page; k++) if (gx_parse_entry_h(&head, buf + k * head.entry_bytes, head.entry_bytes, &ent[k])) return 0;
+    }
     loaded_page = page; return 1;
 }
 
+static uint16_t dark_bg(void) { return (uint16_t)((BG >> 1) & 0x7BEFu); }
 static void footer(void)
 {
-    char b[48], *q = put_s(b, ""); q = put_u(q, sel + 1u); q = put_s(q, "/"); q = put_u(q, head.count); *q = 0;
+    char b[48], *q = put_s(b, ""); q = put_u(q, sel - cur_first + 1u); q = put_s(q, "/"); q = put_u(q, cur_count); *q = 0;
     gfx_rect(0, 336, GFX_W, 24, BG);
-    gfx_text(6, 338, ent[sel - page * PER_PAGE].name, FG, BG);
+    gfx_text(6, 338, EN(sel).name, FG, BG);
     gfx_text(GFX_W - 16u - gfx_text_width(b), 338, b, DIM, BG);   /* gfx_text drops a glyph cell that starts within 16 px of the right edge: a 6 px margin lost the last digit */
 }
 
@@ -106,16 +133,23 @@ static void draw_page(void)
     for (uint32_t k = 0; k < n_on_page; k++) {
         uint32_t x, y; cell_xy(k, &x, &y);
         if (!draw_thumb(x, y, gx_thumb_off(&head, ent[k].thumb))) { say("THUMBNAIL READ FAILED", BAD); return; }
+        if (level == 1u) {                                                                           /* a folder tile: the cover with a darkened strip at the foot carrying the name and the number of pictures */
+            char b[16], *q = b; uint32_t n = ent[k].size, d = 1u; for (uint32_t v = n; v >= 10u; v /= 10u) d++;
+            const uint32_t room = 11u - d; for (uint32_t i = 0; i < room && ent[k].name[i]; i++) *q++ = ent[k].name[i];
+            *q++ = ' '; q = put_u(q, n); *q = 0;
+            gfx_rect(x, y + GR.ch - 16u, GR.cw, 16u, dark_bg()); gfx_text(x + 2u, y + GR.ch - 16u, b, FG, dark_bg());
+            gfx_corners(x, y, GR.cw, GR.ch, GR.rad, BG);
+        }
     }
-    frame(sel - page * PER_PAGE, ACC); footer();
+    frame(sel - (cur_first + page * pp), ACC); footer();
 }
 
 static void select_to(uint32_t n)
 {
-    if (n >= head.count) return;
-    const uint32_t np = n / PER_PAGE;
+    if (n < cur_first || n >= cur_first + cur_count) return;
+    const uint32_t np = (n - cur_first) / pp;
     if (np != page) { sel = n; page = np; draw_page(); return; }
-    frame(sel - page * PER_PAGE, BG); sel = n; frame(sel - page * PER_PAGE, ACC); footer();
+    frame(sel - (cur_first + page * pp), BG); sel = n; frame(sel - (cur_first + page * pp), ACC); footer();
 }
 
 /* Lands the picture's fit canvas in the viewer plane. Returns 0 when it is there, else a code for the status line. */
@@ -201,7 +235,7 @@ static int open_v1(int show_progress)
 static int open_picture(uint32_t i, int show_progress)
 {
     char path[GX_PATH_MAX + 2u]; path[0] = '/';
-    { const char *s = ent[i - page * PER_PAGE].path; uint32_t n = 0; while (s[n] && n < GX_PATH_MAX) { path[1u + n] = s[n]; n++; } path[1u + n] = 0; }
+    { const char *s = EN(i).path; uint32_t n = 0; while (s[n] && n < GX_PATH_MAX) { path[1u + n] = s[n]; n++; } path[1u + n] = 0; }
     if (show_progress) { say("OPENING", ACC); loader_bar(0u, 1u); }
     if (!slot_open_path(SLOT_PIC, path)) return 1;
     if (!read_bytes(SLOT_PIC, 0u, 4096u, h4) && !read_bytes(SLOT_PIC, 0u, 4096u, h4)) return 2;      /* one retry of a failed read: a transient card error should not cost the picture */
@@ -222,7 +256,7 @@ static const char *const open_msg[] = { "", "OPEN FAILED", "HEADER READ FAILED",
 static void zoom_list(void);
 static gi_t info = { 0u, 0u, 0u, GI_NONE, 0u, 0u, 0, 0u, 0u, 0u, GI_NONE, GI_NONE, GI_NONE, GI_NONE, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u };
 static gs_vals_t gset; static uint32_t last_act;                                              /* the persisted settings; the clock of the last key or card read (a save waits for a quiet second after it) */
-static uint32_t path_crc(uint32_t i) { const char *s = ent[i - page * PER_PAGE].path; uint32_t n = 0; while (s[n]) n++; return gf_crc32((const uint8_t *)s, n) & GS_M31; }
+static uint32_t path_crc(uint32_t i) { const char *s = EN(i).path; uint32_t n = 0; while (s[n]) n++; return gf_crc32((const uint8_t *)s, n) & GS_M31; }
 static void remember(uint32_t i) { gset.last_idx = i; gset.last_crc = path_crc(i); }       /* the picture the next start resumes on: only one the viewer has shown */
 static void settings_tick(void) { gs_hw_service(&gset, last_act); }
 static int open_timed(uint32_t i, int show_progress)
@@ -260,7 +294,7 @@ static void res_clear(uint32_t w) { for (uint32_t i = 0; i < GV_WIN_TX * GV_WIN_
 #define SDRAM_HZ 100000000u                      /* the decoder's cycle counter runs on the SDRAM clock */
 #define V1Z_STREAM_MAX 122880u                   /* a stream longer than this (a tile of noise at the highest quality is about 60 KB) is not decoded */
 #define V1Z_IDX_MAX 32768u                       /* the full level's tile index: 12 bytes a tile, 2,730 tiles (a 44 megapixel picture) */
-static tgy_file_t v1fz; static tgy_level_t v1z; static uint8_t v1z_idx[V1Z_IDX_MAX]; static uint32_t v1z_idx_ok, v1z_cap = V1Z_IDX_MAX, v1z_smax = V1Z_STREAM_MAX;      /* v1z_cap: the index size accepted (a variable so the host test can lower it) */
+static tgy_file_t v1fz; static tgy_level_t v1z; static uint32_t v1z_cap = V1Z_IDX_MAX, v1z_smax = V1Z_STREAM_MAX;      /* v1z_cap: the index size accepted (a variable so the host test can lower it) */
 /* An index that does not fit the buffer (more than 2,730 tiles) stays on the card: its checksum is checked once in pieces, and each tile's 12 byte entry is read through a small block cache over the same buffer (v1c_n blocks of v1c_bs bytes,
  * least recently used out; variables so the host test can make them tiny). The index is row by row, so the entries a window needs are a few blocks. Above V1Z_VERIFY_MAX the checksum is not checked (reading it would take seconds):
  * an entry that is out of range is refused when it is used, as a damaged stream is stopped by the decoder. */
@@ -699,8 +733,8 @@ static void viewer(void)
         if (edge & KEY_R1) { if (zn > 0u) { zoom_goto(0); held = 0u; next_tick = cycles(); } continue; }                                /* R1: the first stop */
         if (edge & KEY_B) { gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); return; }
         if (edge & (KEY_LEFT | KEY_RIGHT)) {
-            const uint32_t n = (edge & KEY_RIGHT) ? (sel + 1u) % head.count : (sel + head.count - 1u) % head.count;
-            const uint32_t np = n / PER_PAGE;
+            const uint32_t rel = sel - cur_first, nrel = (edge & KEY_RIGHT) ? (rel + 1u) % cur_count : (rel + cur_count - 1u) % cur_count, n = cur_first + nrel;      /* the next picture of the folder, wrapping inside it */
+            const uint32_t np = nrel / pp;
             if (np != page) { page = np; if (!load_page()) { gal_view_off(); draw_page(); return; } }
             sel = n;
             const int r = open_timed(sel, 0);
@@ -801,13 +835,13 @@ static void frame_box(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t c
 static hs_t det_hist;
 static int thumb_hist(uint32_t off, hs_t *h, uint32_t pw, uint32_t ph)       /* pw, ph: the picture's size from the index; only the picture's rectangle of the thumbnail is counted, not its black bars */
 {
-    hs_clear(h); const hs_rect_t rc = hs_rect(pw, ph);
-    for (uint32_t pos = off & ~4095u; pos < off + GX_THUMB_BYTES; pos += 4096u) {
+    hs_clear(h); const hs_rect_t rc = head.version == 1u ? (hs_rect_t){ 0u, 0u, HS_TW, 96u } : hs_rect(pw, ph);      /* a version 1 thumbnail is the picture cropped to the square: every pixel is the picture's */
+    for (uint32_t pos = off & ~4095u; pos < off + head.thumb_bytes; pos += 4096u) {
         if (!slot_read_blocking(SLOT_IDX, pos, (uint32_t)(uintptr_t)_tag_start, 4096u, CLK_HZ)) return 0;
         const volatile uint32_t *w = GAL_TAGWIN;
         for (uint32_t i = 0; i < 1024u; i++) {
             const uint32_t a = pos + 4u * i;
-            if (a < off || a >= off + GX_THUMB_BYTES) continue;
+            if (a < off || a >= off + head.thumb_bytes) continue;
             const uint32_t v = w[i], px = (a - off) / 2u, row = px / HS_TW, col = px % HS_TW;                   /* the word's two pixels are in the same row (96 is even and a thumbnail starts on a word) */
             if (hs_inside(&rc, row, col)) hs_add(h, (uint16_t)(v & 0xFFFFu));
             if (hs_inside(&rc, row, col + 1u)) hs_add(h, (uint16_t)(v >> 16));
@@ -849,7 +883,7 @@ static uint32_t next_edge(uint32_t *prev)
 /* The details page of the selected picture; returns when B or Select closes it. The caller redraws what was under it. */
 static void run_details(void)
 {
-    const gx_entry_t *e = &ent[sel - page * PER_PAGE]; const gd_t d = { e->name, sel, head.count, e->size, e->width, e->height };
+    const gx_entry_t *e = &EN(sel); const gd_t d = { e->name, sel - cur_first, cur_count, e->size, e->width, e->height };
     uint32_t prev = REG_RD(R_INPUT) & 0xFFFFu; draw_details(&d, thumb_hist(gx_thumb_off(&head, e->thumb), &det_hist, e->width, e->height) ? &det_hist : 0);
     while (!gd_input(next_edge(&prev))) { }
 }
@@ -878,6 +912,34 @@ static void run_pages(void)
     }
 }
 
+/* ---- the folders (version 1 index): the folder level and the pictures of one folder ---- */
+static int folder_rec(uint32_t k, gx_folder_t *f)
+{
+    uint8_t b[GX1_FOLDER_BYTES];
+    return read_bytes(SLOT_IDX, gx_folder_off(&head, k), GX1_FOLDER_BYTES, b) && !gx_parse_folder(&head, b, sizeof b, f);
+}
+static uint32_t grid_setting(void) { return 0u; }                                                  /* the Settings choice of the grid size (0..3) */
+static void enter_folder(const gx_folder_t *f, uint32_t k)                                         /* the pictures of folder k: its range, the chosen grid */
+{
+    level = 0u; cur_first = f->first; cur_count = f->count; cur_folder = k; set_grid(head.version == 0u ? 4u : grid_setting());
+    sel = cur_first; page = 0u; loaded_page = 0xFFFFFFFFu;
+}
+static void enter_folders(void)                                                                    /* the folder level: 4 x 3 tiles, the folder we came from selected */
+{
+    level = 1u; cur_first = 0u; cur_count = head.folder_count; set_grid(0u);
+    sel = cur_folder; page = sel / pp; loaded_page = 0xFFFFFFFFu;
+}
+static int find_folder(uint32_t i, gx_folder_t *f, uint32_t *k)                                    /* the folder holding entry i: a binary search of the folder table (at most 8 small reads) */
+{
+    uint32_t lo = 0u, hi = head.folder_count;
+    while (lo < hi) {
+        const uint32_t mid = (lo + hi) / 2u;
+        if (!folder_rec(mid, f)) return 0;
+        if (i < f->first) hi = mid; else if (i >= f->first + f->count) lo = mid + 1u; else { *k = mid; return 1; }
+    }
+    return 0;
+}
+
 int main(void)
 {
     if (!platform_version_ok()) platform_halt_pattern();
@@ -886,16 +948,29 @@ int main(void)
     platform_probe();
     gfx_text(6, 2, "TAU GALLERY", ACC, BG);
     { uint8_t *h = v1z_idx; int rc = 100;                                                       /* the boot-time read of the index head borrows the zoom index buffer (32 KB, unused until a zoom opens): 4 KB of RAM less, which the 128 KB link needs */
-      if (read_bytes(SLOT_IDX, 0u, 4096u, h)) rc = gx_parse_head(h, GX_HEAD_BYTES, &head);
+      if (read_bytes(SLOT_IDX, 0u, 4096u, h)) rc = gx_parse_head(h, 4096u, &head);
       if (rc == 100) { say("NO INDEX: TAU-LIBRARY.TDB NOT READ", BAD); for (;;) { } }
       if (rc) { char b[40], *q = put_s(b, "INDEX NOT USABLE E"); q = put_u(q, (uint32_t)rc); *q = 0; say(b, BAD); for (;;) { } }
       if (head.count == 0u) { say("NO PICTURES IN THE INDEX", BAD); for (;;) { } } }
     gs_hw_load(&gset); last_act = cycles();
+    cur_first = 0u; cur_count = head.count; cur_folder = 0u; level = 0u; set_grid(head.version == 0u ? 4u : grid_setting());
+    if (head.version == 1u) {                                                                      /* the first folder, or the folder level when there are several */
+        gx_folder_t f; if (!folder_rec(0u, &f)) { say("FOLDER TABLE READ FAILED", BAD); for (;;) { } }
+        if (head.folder_count > 1u) enter_folders(); else enter_folder(&f, 0u);
+    }
     theme_set(gset.theme, gset.pol, gset.pal); gset.theme = th_theme; gset.pol = th_pol; gset.pal = th_pal;      /* the saved look (a value this build does not have falls back to the default) */
-    if (gset.resume && gset.last_idx < head.count) {                                           /* resume: only when it is the same picture (index and path CRC) */
-        page = gset.last_idx / PER_PAGE;
-        if (load_page()) { const uint32_t i = gs_resume_index(&gset, head.count, path_crc(gset.last_idx)); sel = i; page = i / PER_PAGE; }
-        else page = 0u;
+    if (gset.resume && gset.last_idx < head.count) {                                           /* resume: only when it is the same picture (index and path CRC); a folder library resumes inside the picture's folder */
+        gx_folder_t f; uint32_t k = 0u; int ok = 1;
+        if (head.version == 1u) ok = find_folder(gset.last_idx, &f, &k);
+        if (ok) {
+            const uint32_t sv_level = level, sv_first = cur_first, sv_count = cur_count, sv_folder = cur_folder, sv_sel = sel, sv_page = page, sv_gi = gi;
+            if (head.version == 1u) enter_folder(&f, k);
+            page = (gset.last_idx - cur_first) / pp;
+            const int loaded = load_page();
+            const uint32_t i = loaded ? gs_resume_index(&gset, head.count, path_crc(gset.last_idx)) : 0u;
+            if (loaded && (i != 0u || (gset.last_idx == 0u && path_crc(0u) == gset.last_crc))) { sel = i; page = (i - cur_first) / pp; }
+            else { level = sv_level; cur_first = sv_first; cur_count = sv_count; cur_folder = sv_folder; sel = sv_sel; page = sv_page; set_grid(sv_gi); loaded_page = 0xFFFFFFFFu; }
+        }
     }
     draw_page();
     uint32_t prev = 0, rep_key = 0u, rep_next = 0u;                                            /* a held direction key repeats: after REP_DELAY, then every REP_RATE */
@@ -909,14 +984,19 @@ int main(void)
         if (dk) {
             if (dk & KEY_LEFT) dk = KEY_LEFT; else if (dk & KEY_RIGHT) dk = KEY_RIGHT; else if (dk & KEY_UP) dk = KEY_UP; else dk = KEY_DOWN;
             if (fresh) rep_key = dk;
-            const uint32_t n = gv_grid_step(sel, head.count, COLS, dk == KEY_LEFT ? 0u : dk == KEY_RIGHT ? 1u : dk == KEY_UP ? 2u : 3u, fresh);
+            const uint32_t n = cur_first + gv_grid_step(sel - cur_first, cur_count, GR.cols, dk == KEY_LEFT ? 0u : dk == KEY_RIGHT ? 1u : dk == KEY_UP ? 2u : 3u, fresh);
             if (n != sel) select_to(n);
             rep_next = cycles() + (fresh ? REP_DELAY : REP_RATE);                              /* from the end of the move: a page change takes its time, the repeat waits for it */
         }
-        else if (edge & KEY_L1) { select_to(sel >= PER_PAGE ? sel - PER_PAGE : 0u); }
-        else if (edge & KEY_R1) { select_to(sel + PER_PAGE < head.count ? sel + PER_PAGE : head.count - 1u); }
-        else if (edge & KEY_A) { open_from_grid(); rep_key = 0u; }
+        else if (edge & KEY_L1) { const uint32_t rel = sel - cur_first; select_to(cur_first + (rel >= pp ? rel - pp : 0u)); }
+        else if (edge & KEY_R1) { const uint32_t rel = sel - cur_first; select_to(cur_first + (rel + pp < cur_count ? rel + pp : cur_count - 1u)); }
+        else if (edge & KEY_A) {
+            if (level == 1u) { gx_folder_t f; if (folder_rec(sel, &f)) { enter_folder(&f, sel); draw_page(); } else say("FOLDER READ FAILED", BAD); }
+            else open_from_grid();
+            rep_key = 0u;
+        }
+        else if (edge & KEY_B) { if (level == 0u && head.folder_count > 1u) { enter_folders(); draw_page(); } rep_key = 0u; }
         else if (edge & KEY_START) { run_pages(); draw_page(); prev = REG_RD(R_INPUT) & 0xFFFFu; rep_key = 0u; }
-        else if (edge & KEY_SELECT) { run_details(); draw_page(); prev = REG_RD(R_INPUT) & 0xFFFFu; rep_key = 0u; }
+        else if ((edge & KEY_SELECT) && level == 0u) { run_details(); draw_page(); prev = REG_RD(R_INPUT) & 0xFFFFu; rep_key = 0u; }
     }
 }

@@ -111,6 +111,28 @@ int gfx_mb_read(uint32_t a, uint32_t *o) { *o = (uint32_t)mem[a] | (uint32_t)mem
 int gfx_mb_write_buf(uint32_t a, uint32_t d) { if (a + 1u >= sizeof fb / 2u) return -1; fb[a] = (uint16_t)d; fb[a + 1u] = (uint16_t)(d >> 16); return 0; }
 void gfx_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint16_t c) { for (uint32_t j = y; j < y + h && j < 1024u; j++) for (uint32_t i = x; i < x + w && i < 512u; i++) fb[j * 512u + i] = c; }
 static char texts[64][64]; static int ntext;
+/* Talos ops of core rev 30, modelled: OP_CORNERS paints the cut of each corner (a circle of radius r) in bg; OP_DSBLIT scales DOWN from the stash, every output pixel the rounded average of a 2 x 2 source box at floor(i * den / num). */
+static uint32_t corner_ops, dsblit_ops;
+void gfx_corners(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t r, uint16_t bg)
+{
+    corner_ops++;
+    if (r > 15u) r = 15u;
+    for (uint32_t dy = 0; dy < r && dy < h; dy++) {
+        const double dd = (double)r - (double)dy - 0.5; const uint32_t in = (uint32_t)floor(sqrt((double)r * r - dd * dd) + 0.5), cut = r > in ? r - in : 0u;
+        for (uint32_t k = 0; k < cut && k < w; k++) { fb[(y + dy) * 512u + x + k] = bg; fb[(y + dy) * 512u + x + w - 1u - k] = bg; fb[(y + h - 1u - dy) * 512u + x + k] = bg; fb[(y + h - 1u - dy) * 512u + x + w - 1u - k] = bg; }
+    }
+}
+void gfx_dsblit(uint32_t sx, uint32_t sy, uint32_t dx, uint32_t dy, uint32_t w, uint32_t h, uint32_t rx, uint32_t ry)
+{
+    static const uint32_t NUM[4] = { 3, 2, 1, 1 }, DEN[4] = { 4, 3, 2, 3 };
+    dsblit_ops++;
+    const uint32_t nx = NUM[rx & 3u], dxn = DEN[rx & 3u], ny = NUM[ry & 3u], dyn = DEN[ry & 3u], ow = w * nx / dxn, oh = h * ny / dyn;
+    for (uint32_t j = 0; j < oh; j++) for (uint32_t i = 0; i < ow; i++) {
+        const uint32_t x0 = i * dxn / nx, y0 = j * dyn / ny; uint32_t r5 = 0, g6 = 0, b5 = 0;
+        for (uint32_t t = 0; t < 4u; t++) { const uint16_t p = fb[(sy + y0 + (t >> 1)) * 512u + sx + x0 + (t & 1u)]; r5 += p >> 11; g6 += (p >> 5) & 63u; b5 += p & 31u; }
+        fb[(dy + j) * 512u + dx + i] = (uint16_t)((((r5 + 2u) >> 2) << 11) | (((g6 + 2u) >> 2) << 5) | ((b5 + 2u) >> 2));
+    }
+}
 uint32_t gfx_text(uint32_t x, uint32_t y, const char *s, uint16_t fg, uint16_t bg) { (void)x; (void)y; (void)fg; (void)bg; if (ntext == 64) ntext = 0; strncpy(texts[ntext], s, 63); texts[ntext++][63] = 0; return 0; }
 uint32_t gfx_text_width(const char *s) { return 8u * (uint32_t)strlen(s); }
 void irq_enable(uint32_t m) { (void)m; }
@@ -223,7 +245,7 @@ static int hist_screen_ok(uint32_t i)    /* the details page's four histograms a
 {
     const uint8_t *t = thumb_of(i); uint32_t cnt[4][32]; memset(cnt, 0, sizeof cnt);
     /* the picture's own pixels of the thumbnail (not its black bars): the converter's fit rule in floating point, one pixel in from each edge that borders a bar */
-    const uint32_t pw = ent[i - page * PER_PAGE].width, ph = ent[i - page * PER_PAGE].height;
+    const uint32_t pw = EN(i).width, ph = EN(i).height;
     double sc = fmin(fmin(96.0 / pw, 72.0 / ph), 1.0); uint32_t rw = (uint32_t)nearbyint(pw * sc), rh = (uint32_t)nearbyint(ph * sc); if (rw < 1u) rw = 1u; if (rh < 1u) rh = 1u; if (rw > 96u) rw = 96u; if (rh > 72u) rh = 72u;
     uint32_t X0 = (96u - rw) / 2u, Y0 = (72u - rh) / 2u, X1 = X0 + rw, Y1 = Y0 + rh; if (rw < 96u && rw > 2u) { X0++; X1--; } if (rh < 72u && rh > 2u) { Y0++; Y1--; }
     uint32_t inside = 0u;
