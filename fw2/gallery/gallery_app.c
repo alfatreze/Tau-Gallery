@@ -845,7 +845,11 @@ static void viewer(void)
             if (mask_i) mask_apply();
             continue;
         }
-        if ((rot_o != 0u || mask_i != 0u) && (edge & (KEY_A | KEY_R1))) continue;                                                                      /* no zoom while the picture is turned: turn it back first */
+        if ((rot_o != 0u || mask_i != 0u) && (edge & (KEY_A | KEY_R1))) {                                                             /* zoom from a turned, mirrored or masked view: the zoom views are upright, so the picture goes upright first (owner decision B, 2026-11-13) */
+            if (zn == 0u) continue;                                                                                                   /* no zoom level: nothing to go to, the view stays as it is */
+            rot_o = 0u; mask_i = 0u;
+            const int r = view_reopen(); if (r) { gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); say(open_msg[r], BAD); return; }
+        }                                                                      /* no zoom while the picture is turned: turn it back first */
         if (edge & KEY_A) { if (zn > 0u) { zoom_goto((int)zn - 1); held = 0u; next_tick = cycles(); } continue; }                   /* A: the last stop (1:1) */
         if (edge & KEY_R1) { if (zn > 0u) { zoom_goto(0); held = 0u; next_tick = cycles(); } continue; }                                /* R1: the first stop */
         if (edge & KEY_B) { gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); return; }

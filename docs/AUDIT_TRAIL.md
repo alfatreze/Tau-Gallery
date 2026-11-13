@@ -16776,3 +16776,10 @@ Histograms from the decoder (K4 used): `tgy_hw_hist_begin/end/fold32` (tgy_hw.c)
 Mirror keys: with Start held, X mirrors left-right and Y top-bottom (`gr_flip` new, `gr_mirror` existing; numpy agrees for all 8 orientations, 3 new mutants killed); a mask is dropped like for a turn. Scenario `v1mirror` (540 to 547) with 5 mutants killed. Controls page: rows for X / Y, Start + X / Y and L1 / Start added. Caveat: Start pressed on its own with a mask on still turns the mask, so press the chord together or with the mask off.
 Equivalent, not tested: `hist_counted = (r == TH_OK)` (a failed decode never reaches hist_for either way), `gset.lut % GL_PRESETS` in fx_apply (the stored field is 3 bits).
 Not done: rotated zoom, PSRAM cold UI image, Pocket checks of all of this; the m1f fit is still running.
+
+## B-1119: zoom from a turned, mirrored or masked view goes upright (follows B-1118)
+
+Evidence label: HOST-SIMULATED; not run on a Pocket. Tier: B (`make test-gallery-quick`, the 7 mutants of this code).
+Owner decision B (2026-11-13) on the rotated zoom: the zoom views stay upright. Pressing A or R1 in the viewer while the picture is turned, mirrored or masked drops the turn and the mask, decodes the fit level upright again (`view_reopen`) and then zooms as usual; with no zoom level (`zn == 0`, e.g. a small picture) the key changes nothing. Before this the keys were ignored in those states (B-1115, B-1117). Rotated zoom proper (turned window and tile mapping) is not built.
+Tests: scenarios `v1mask` (A with a mask on the upright and on the turned picture, the plane is the whole picture again after B, v01 without zoom level keeps its mask), `v1rot` (A on a turned picture, upright plane after B), `v1mirror` (R1 on a mirrored picture); checkpoints 478, 507, 511 changed from "ignored" to "goes upright", 512 to 514 and 548 new. Mutants: no `zn` guard, `rot_o` not dropped, `mask_i` not dropped, no re-open, A only (not R1), rotation only, mask only: all killed. Two older mutants (the old "ignored" guard) were dropped, their code is gone.
+Not done: Pocket check; rotated zoom.

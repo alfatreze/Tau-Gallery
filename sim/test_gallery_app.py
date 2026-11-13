@@ -425,7 +425,6 @@ def mutants(setdir, tail=None):
         ("gallery_app.c", "(rot_pan + ROT_STEP > rot_pan_max ? rot_pan_max : rot_pan + ROT_STEP)", "(rot_pan + ROT_STEP)"),
         ("gallery_app.c", "(rot_pan > ROT_STEP ? rot_pan - ROT_STEP : 0u)", "(rot_pan - ROT_STEP)"),
         ("gallery_app.c", "rot_view(); prev = REG_RD(R_INPUT) & 0xFFFFu; held = 0u; next_tick = cycles(); continue;", "prev = REG_RD(R_INPUT) & 0xFFFFu; held = 0u; next_tick = cycles(); continue;"),
-        ("gallery_app.c", "if ((rot_o != 0u || mask_i != 0u) && (edge & (KEY_A | KEY_R1))) continue;", ""),
         ("gallery_app.c", "sel = n; rot_o = 0u;", "sel = n;"),
         ("gallery_app.c", "            REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16); REG_WR(R_VIEW_BASE, GAL_PLANE_BASE);                                              /* the upright plane (the previous picture may have been turned: the view pointed at the turned plane) */\n", ""),
         ("gallery_app.c", "    rot_o = 0u; mask_i = 0u; mask_painted = 0u;\n    const int r = open_timed(sel, 1);", "    mask_i = 0u; mask_painted = 0u;\n    const int r = open_timed(sel, 1);"),
@@ -457,7 +456,6 @@ def mutants(setdir, tail=None):
         ("gallery_app.c", "    mask_painted = 0u;\n    if (rot_o == 0u) { REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16);", "    if (rot_o == 0u) { REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16);"),
         ("gallery_app.c", "sel = n; rot_o = 0u; mask_i = 0u; mask_painted = 0u;", "sel = n; rot_o = 0u; mask_painted = 0u;"),
         ("gallery_app.c", ": gr_turn(rot_o, (edge & KEY_Y) != 0u); mask_i = 0u;", ": gr_turn(rot_o, (edge & KEY_Y) != 0u);"),
-        ("gallery_app.c", "if ((rot_o != 0u || mask_i != 0u) && (edge & (KEY_A | KEY_R1))) continue;", "if (rot_o != 0u && (edge & (KEY_A | KEY_R1))) continue;"),
         ("gallery_app.c", "*x = rot_px + (xa < xb ? xa : xb);", "*x = (xa < xb ? xa : xb);"),
         ("gallery_app.c", "const uint32_t base = rot_o ? GAL_ROT_BASE : GAL_PLANE_BASE, rows = rot_o ? rot_rows : GT_CANVAS_H;", "const uint32_t base = GAL_PLANE_BASE, rows = rot_o ? rot_rows : GT_CANVAS_H;"),
         ("gallery_app.c", "gm_crop(mask_i, mask_p, rx, ry, rw, rh, &x0, &y0, &x1, &y1);", "gm_crop(mask_i, 0u, rx, ry, rw, rh, &x0, &y0, &x1, &y1);"),
@@ -500,6 +498,15 @@ def mutants(setdir, tail=None):
         ("gallery_app.c", "rot_o = (keys & KEY_START) ? ((edge & KEY_Y) ? gr_flip(rot_o) : gr_mirror(rot_o)) :", "rot_o = (keys & KEY_START) ? ((edge & KEY_Y) ? gr_flip(rot_o) : gr_flip(rot_o)) :"),
         ("gallery_app.c", "rot_o = (keys & KEY_START) ? ((edge & KEY_Y) ? gr_flip(rot_o) : gr_mirror(rot_o)) :", "rot_o = (keys & KEY_L1) ? ((edge & KEY_Y) ? gr_flip(rot_o) : gr_mirror(rot_o)) :"),
         ("gallery_app.c", "rot_o = (keys & KEY_START) ? ((edge & KEY_Y) ? gr_flip(rot_o) : gr_mirror(rot_o)) : gr_turn(rot_o, (edge & KEY_Y) != 0u); mask_i = 0u;", "rot_o = (keys & KEY_START) ? ((edge & KEY_Y) ? gr_flip(rot_o) : gr_mirror(rot_o)) : gr_turn(rot_o, (edge & KEY_Y) != 0u);"),
+    ]
+    muts += [                                                                                                      # zoom from a turned or masked view goes upright (owner decision B)
+        ("gallery_app.c", "            if (zn == 0u) continue;                                                                                                   /* no zoom level", "            if (0) continue;                                                                                                   /* no zoom level"),
+        ("gallery_app.c", "            rot_o = 0u; mask_i = 0u;\n            const int r = view_reopen(); if (r) { gal_view_off();", "            mask_i = 0u;\n            const int r = view_reopen(); if (r) { gal_view_off();"),
+        ("gallery_app.c", "            rot_o = 0u; mask_i = 0u;\n            const int r = view_reopen(); if (r) { gal_view_off();", "            rot_o = 0u;\n            const int r = view_reopen(); if (r) { gal_view_off();"),
+        ("gallery_app.c", "            rot_o = 0u; mask_i = 0u;\n            const int r = view_reopen(); if (r) { gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); say(open_msg[r], BAD); return; }\n        }", "            rot_o = 0u; mask_i = 0u;\n        }"),
+        ("gallery_app.c", "if ((rot_o != 0u || mask_i != 0u) && (edge & (KEY_A | KEY_R1))) {", "if ((rot_o != 0u || mask_i != 0u) && (edge & KEY_A)) {"),
+        ("gallery_app.c", "if ((rot_o != 0u || mask_i != 0u) && (edge & (KEY_A | KEY_R1))) {", "if (rot_o != 0u && (edge & (KEY_A | KEY_R1))) {"),
+        ("gallery_app.c", "if ((rot_o != 0u || mask_i != 0u) && (edge & (KEY_A | KEY_R1))) {", "if (mask_i != 0u && (edge & (KEY_A | KEY_R1))) {"),
     ]
     only = sys.argv[sys.argv.index("--only") + 1] if "--only" in sys.argv else None                                   # --only TEXT: just the mutants whose original code contains TEXT (Tier B of CLAUDE.md section 4: the mutants of the code you changed)
     if only: muts = [m for m in muts if only in m[1]]; assert muts, "no mutant matches --only"
