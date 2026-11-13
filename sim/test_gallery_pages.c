@@ -1,5 +1,6 @@
 /* Host test of fw2/gallery/gallery_pages.h (menu, Controls list, Help pages). Compile with -DBUG=n for the mutants (1..4 must fail). */
 #include <stdio.h>
+#include <math.h>
 #include <string.h>
 #include "../fw2/gallery/gallery_pages.h"
 static int fails;
@@ -167,6 +168,28 @@ int main(void)
             chk("histogram: a bar is 0 for an empty bin, at least 1 pixel for any other, never more than the plot, grows with the count, and the tallest bin fills the plot", okh);
             chk("histogram: half the tallest is half the plot, and 6,912 counts of 6,912 do not overflow", hs_height(25u, 50u, 50u) == 25u && hs_height(6912u, 6912u, 50u) == 50u && hs_height(3456u, 6912u, 50u) == 25u);
             hs_clear(&h); for (uint32_t i = 0; i < 6912u; i++) hs_add(&h, 0x1234u); chk("histogram: a whole thumbnail of one colour (6,912 pixels) counts in 16 bits without wrapping", h.bin[3][0x1234u & 31u] == 6912u && hs_max(&h, 3u) == 6912u && hs_max(&h, 0u) == 6912u);
+            { /* the picture's rectangle inside the thumbnail, against the converter's own rule in floating point (round half to even): for every size up to 800 x 800 and 200,000 random sizes up to 65,535 it lies INSIDE the converter's picture
+               * (never a bar pixel) and at most 2 pixels in from each edge of it (one for the inset, one for a tie that the converter's floating point rounds the other way: 25 sizes of 640,000 differ by that one pixel) */
+                int okr = 1, tight = 1; uint32_t seed = 7u, cases = 0u;
+                for (uint32_t n = 0; n < 640000u + 200000u; n++) {
+                    uint32_t w, hh;
+                    if (n < 640000u) { w = 1u + n / 800u; hh = 1u + n % 800u; } else { seed = seed * 1664525u + 1013904223u; w = 1u + (seed >> 8) % 65535u; seed = seed * 1664525u + 1013904223u; hh = 1u + (seed >> 8) % 65535u; }
+                    cases++;
+                    double sc = fmin(fmin(96.0 / w, 72.0 / hh), 1.0); uint32_t rw = (uint32_t)nearbyint(w * sc), rh = (uint32_t)nearbyint(hh * sc); if (rw < 1u) rw = 1u; if (rh < 1u) rh = 1u; if (rw > 96u) rw = 96u; if (rh > 72u) rh = 72u;
+                    const uint32_t cx0 = (96u - rw) / 2u, cy0 = (72u - rh) / 2u, cx1 = cx0 + rw, cy1 = cy0 + rh;
+                    const hs_rect_t r = hs_rect(w, hh);
+                    if (r.x0 < cx0 || r.y0 < cy0 || r.x1 > cx1 || r.y1 > cy1 || r.x0 >= r.x1 + (rw <= 2u) || r.y0 >= r.y1 + (rh <= 2u)) okr = 0;
+                    if (r.x0 > cx0 + 2u || r.y0 > cy0 + 2u || r.x1 + 2u < cx1 || r.y1 + 2u < cy1) tight = 0;
+                }
+                chk("histogram rectangle: for 840,000 sizes it lies inside the converter's picture, never on a bar", okr && cases == 840000u);
+                chk("histogram rectangle: and no more than 2 pixels in from each edge of it", tight);
+                { const hs_rect_t a = hs_rect(192u, 101u), b = hs_rect(192u, 103u); chk("histogram rectangle: exact ties round to even as the converter does (192 x 101: 50.5 rows gives 50; 192 x 103: 51.5 gives 52)", a.y0 == 12u && a.y1 == 60u && b.y0 == 11u && b.y1 == 61u); }
+                const hs_rect_t sq = hs_rect(100u, 100u), land = hs_rect(3506u, 2329u), por = hs_rect(8192u, 12288u), tiny = hs_rect(40u, 30u), unk = hs_rect(0u, 500u), huge = hs_rect(70000u, 100u);
+                chk("histogram rectangle: a square picture leaves bars left and right (72 wide), a 3:2 landscape bars above and below, a portrait bars at the sides; a tiny picture is its own size; no size or over 65,535 counts the whole thumbnail",
+                    sq.y0 == 0u && sq.y1 == 72u && sq.x0 == 13u && sq.x1 == 83u && land.x0 == 0u && land.x1 == 96u && land.y0 > 4u && land.y1 < 68u && por.y0 == 0u && por.y1 == 72u && por.x0 > 24u && por.x1 < 72u
+                    && tiny.x1 - tiny.x0 == 38u && tiny.y1 - tiny.y0 == 28u && unk.x0 == 0u && unk.x1 == 96u && unk.y1 == 72u && huge.x1 == 96u && huge.y1 == 72u);
+                chk("histogram rectangle: pixels inside and outside", hs_inside(&land, 36u, 48u) && !hs_inside(&land, 0u, 48u) && !hs_inside(&land, 71u, 48u) && !hs_inside(&por, 36u, 0u) && !hs_inside(&por, 36u, 95u) && hs_inside(&por, 36u, 48u));
+            }
             chk("histogram: the source note fits under the frames (19 characters)", strlen(GD_HIST_SRC) <= 24u);
         }
         { uint32_t found = 0; for (uint32_t i = 0; i < GC_N; i++) if (!strcmp(gc_rows[i].key, "SELECT") && !strcmp(gc_rows[i].what, "PICTURE DETAILS")) found++; chk("controls: SELECT is listed for the grid and for the picture view", found == 2u); }

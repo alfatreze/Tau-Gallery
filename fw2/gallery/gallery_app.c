@@ -798,16 +798,18 @@ static void frame_box(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t c
 #define DET_HH 76u
 /* The histograms are counted from the picture's thumbnail in the index (the CPU does not read the viewer plane): the same 4 KB reads as draw_thumb, two pixels a word. Returns 0 when a read failed. */
 static hs_t det_hist;
-static int thumb_hist(uint32_t off, hs_t *h)
+static int thumb_hist(uint32_t off, hs_t *h, uint32_t pw, uint32_t ph)       /* pw, ph: the picture's size from the index; only the picture's rectangle of the thumbnail is counted, not its black bars */
 {
-    hs_clear(h);
+    hs_clear(h); const hs_rect_t rc = hs_rect(pw, ph);
     for (uint32_t pos = off & ~4095u; pos < off + GX_THUMB_BYTES; pos += 4096u) {
         if (!slot_read_blocking(SLOT_IDX, pos, (uint32_t)(uintptr_t)_tag_start, 4096u, CLK_HZ)) return 0;
         const volatile uint32_t *w = GAL_TAGWIN;
         for (uint32_t i = 0; i < 1024u; i++) {
             const uint32_t a = pos + 4u * i;
             if (a < off || a >= off + GX_THUMB_BYTES) continue;
-            const uint32_t v = w[i]; hs_add(h, (uint16_t)(v & 0xFFFFu)); hs_add(h, (uint16_t)(v >> 16));
+            const uint32_t v = w[i], px = (a - off) / 2u, row = px / HS_TW, col = px % HS_TW;                   /* the word's two pixels are in the same row (96 is even and a thumbnail starts on a word) */
+            if (hs_inside(&rc, row, col)) hs_add(h, (uint16_t)(v & 0xFFFFu));
+            if (hs_inside(&rc, row, col + 1u)) hs_add(h, (uint16_t)(v >> 16));
         }
     }
     return 1;
@@ -847,7 +849,7 @@ static uint32_t next_edge(uint32_t *prev)
 static void run_details(void)
 {
     const gx_entry_t *e = &ent[sel - page * PER_PAGE]; const gd_t d = { e->name, sel, head.count, e->size, e->width, e->height };
-    uint32_t prev = REG_RD(R_INPUT) & 0xFFFFu; draw_details(&d, thumb_hist(gx_thumb_off(&head, e->thumb), &det_hist) ? &det_hist : 0);
+    uint32_t prev = REG_RD(R_INPUT) & 0xFFFFu; draw_details(&d, thumb_hist(gx_thumb_off(&head, e->thumb), &det_hist, e->width, e->height) ? &det_hist : 0);
     while (!gd_input(next_edge(&prev))) { }
 }
 static void run_pages(void)

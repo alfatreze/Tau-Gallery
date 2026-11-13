@@ -222,12 +222,18 @@ static const uint8_t *thumb_of(uint32_t i) { uint32_t atlas = (uint32_t)idx_data
 static int hist_screen_ok(uint32_t i)    /* the details page's four histograms against a count made here from the index's thumbnail (separate code, floating point for the luma) and the bars' pixels in the framebuffer */
 {
     const uint8_t *t = thumb_of(i); uint32_t cnt[4][32]; memset(cnt, 0, sizeof cnt);
+    /* the picture's own pixels of the thumbnail (not its black bars): the converter's fit rule in floating point, one pixel in from each edge that borders a bar */
+    const uint32_t pw = ent[i - page * PER_PAGE].width, ph = ent[i - page * PER_PAGE].height;
+    double sc = fmin(fmin(96.0 / pw, 72.0 / ph), 1.0); uint32_t rw = (uint32_t)nearbyint(pw * sc), rh = (uint32_t)nearbyint(ph * sc); if (rw < 1u) rw = 1u; if (rh < 1u) rh = 1u; if (rw > 96u) rw = 96u; if (rh > 72u) rh = 72u;
+    uint32_t X0 = (96u - rw) / 2u, Y0 = (72u - rh) / 2u, X1 = X0 + rw, Y1 = Y0 + rh; if (rw < 96u && rw > 2u) { X0++; X1--; } if (rh < 72u && rh > 2u) { Y0++; Y1--; }
+    uint32_t inside = 0u;
     for (uint32_t p = 0; p < 96u * 72u; p++) {
+        if (p / 96u < Y0 || p / 96u >= Y1 || p % 96u < X0 || p % 96u >= X1) continue; inside++;
         const uint32_t v = (uint32_t)t[2u * p] | (uint32_t)t[2u * p + 1u] << 8; const double R = ((v >> 11) & 31u) * 255.0 / 31.0, G = ((v >> 5) & 63u) * 255.0 / 63.0, B = (v & 31u) * 255.0 / 31.0;
         uint32_t y = (uint32_t)((77.0 * R + 150.0 * G + 29.0 * B) / 256.0 / 8.0); if (y > 31u) y = 31u;
         cnt[0][y]++; cnt[1][(v >> 11) & 31u]++; cnt[2][((v >> 5) & 63u) / 2u]++; cnt[3][v & 31u]++;
     }
-    int ok = 1; const uint16_t col[4] = { 0xFFFFu, 0xF800u, 0x07E0u, 0x001Fu };
+    int ok = det_hist.n == inside && inside > 0u && inside < 96u * 72u + 1u; const uint16_t col[4] = { 0xFFFFu, 0xF800u, 0x07E0u, 0x001Fu };
     for (uint32_t k = 0; k < 4u; k++) {
         uint32_t max = 0u, diff = 0u; for (uint32_t b = 0; b < 32u; b++) { if (cnt[k][b] > max) max = cnt[k][b]; if (cnt[k][b] != det_hist.bin[k][b]) diff++; }
         if (diff > 40u) ok = 0;                                                                                        /* the luma bin may differ by one at a bin edge: a few pixels move to a neighbour, never many */
@@ -479,7 +485,7 @@ static void checkpoint(int n)
     case 311: chk(311, said("DETAILS") && count_text("NOT COMPUTED YET") == 5 && !said("FROM THE THUMBNAIL") && said("Picture 01")); fail_idx = 0u; clear_texts(); break;      /* the thumbnail cannot be read: the page still opens, the frames say so */
     case 312: chk(312, thumbs_on_screen(0, 16u) && sel == 1u); break;
     case 309: chk(309, vid_bus == 1u && plane_is(3) && sel == 3u && !said("DETAILS")); break;                                                                  /* Select + Right together is the next picture, not the page */
-    case 301: chk(301, said("DETAILS") && said("NAME") && said("Picture 00") && said("1 OF 18") && said("SIZE") && said("FILE") && said("NOT READ YET") && !said("NOT COMPUTED YET") && said("FROM THE THUMBNAIL") && hist_screen_ok(0u) && det_hist.n == 6912u && said("LUMA") && said("RED") && said("GREEN") && said("BLUE") && said("B OR SELECT BACK") && !thumbs_on_screen(0, 16u)); clear_texts(); break;      /* Select on the grid: the page of the selected picture */
+    case 301: chk(301, said("DETAILS") && said("NAME") && said("Picture 00") && said("1 OF 18") && said("SIZE") && said("FILE") && said("NOT READ YET") && !said("NOT COMPUTED YET") && said("FROM THE THUMBNAIL") && hist_screen_ok(0u) && det_hist.n < 6912u && said("LUMA") && said("RED") && said("GREEN") && said("BLUE") && said("B OR SELECT BACK") && !thumbs_on_screen(0, 16u)); clear_texts(); break;      /* Select on the grid: the page of the selected picture */
     case 302: chk(302, thumbs_on_screen(0, 16u) && !strcmp(last_text(), "1/18") && !said("DETAILS")); clear_texts(); break;                                                                  /* B: the grid again, nothing changed */
     case 303: chk(303, said("DETAILS") && said("Picture 01") && said("2 OF 18") && !said("Picture 00") && hist_screen_ok(1u)); clear_texts(); break;                                               /* Right, Select: the next picture's page */
     case 304: chk(304, thumbs_on_screen(0, 16u) && !strcmp(last_text(), "2/18") && sel == 1u); break;                                                                          /* Select closes it too */

@@ -333,6 +333,41 @@ static inline void hs_add(hs_t *h, uint16_t px)
 #endif
     h->n++;
 }
+/* Where the picture is inside its 96 x 72 thumbnail: the converter fits the picture into the thumbnail (never enlarged, rounded half to even) and centres it on black, so a landscape or portrait picture has black bars that
+ * are NOT the picture and would pile up in the lowest bin. The rectangle [x0, x1) x [y0, y1) is that fit (the same integer rule as tgy.fit_rect, checked against it), taken one pixel in from each edge that borders a bar (the
+ * resampling blends the edge, and a rounding difference of a pixel must not let a bar in). A picture with no size in the index, or larger than 65,535 pixels a side, counts the whole thumbnail. */
+#define HS_TW 96u
+#define HS_TH 72u
+typedef struct { uint32_t x0, y0, x1, y1; } hs_rect_t;
+static inline hs_rect_t hs_rect(uint32_t w, uint32_t h)
+{
+    hs_rect_t r = { 0u, 0u, HS_TW, HS_TH };
+    if (w == 0u || h == 0u || w > 65535u || h > 65535u) return r;
+    uint32_t rw, rh;
+    if (w <= HS_TW && h <= HS_TH) { rw = w; rh = h; }
+    else if (w * HS_TH >= h * HS_TW) {                                                                                              /* the width limits: 96 wide */
+        const uint32_t num = h * HS_TW; uint32_t q = num / w; const uint32_t m = num % w;
+#if BUG == 20
+        if (2u * m >= w) q++;                                                                                                       /* ties round up, not to even */
+#else
+        if (2u * m > w || (2u * m == w && (q & 1u))) q++;
+#endif
+        rw = HS_TW; rh = q < 1u ? 1u : q > HS_TH ? HS_TH : q;
+    } else {                                                                                                                        /* the height limits: 72 high */
+        const uint32_t num = w * HS_TH; uint32_t q = num / h; const uint32_t m = num % h;
+        if (2u * m > h || (2u * m == h && (q & 1u))) q++;
+        rh = HS_TH; rw = q < 1u ? 1u : q > HS_TW ? HS_TW : q;
+    }
+    r.x0 = (HS_TW - rw) / 2u; r.y0 = (HS_TH - rh) / 2u; r.x1 = r.x0 + rw; r.y1 = r.y0 + rh;
+#if BUG == 21
+    return r;                                                                                                                       /* no inset: the edge pixels of a bar get in */
+#else
+    if (rw < HS_TW && rw > 2u) { r.x0++; r.x1--; }
+    if (rh < HS_TH && rh > 2u) { r.y0++; r.y1--; }
+    return r;
+#endif
+}
+static inline int hs_inside(const hs_rect_t *r, uint32_t row, uint32_t col) { return row >= r->y0 && row < r->y1 && col >= r->x0 && col < r->x1; }
 static inline uint32_t hs_max(const hs_t *h, uint32_t k) { uint32_t m = 0u; for (uint32_t i = 0; i < HS_BINS; i++) if (h->bin[k][i] > m) m = h->bin[k][i]; return m; }
 /* Height in pixels of a bar of `count` when the tallest bin is `max` and the plot is `hmax` pixels high. */
 static inline uint32_t hs_height(uint32_t count, uint32_t max, uint32_t hmax)

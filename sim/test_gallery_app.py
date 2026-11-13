@@ -329,10 +329,14 @@ def mutants(setdir, tail=None):
         ("gallery_app.c", "gfx_rect(x + DET_BX + i * DET_BW, y + DET_HH - DET_BB - bh, DET_BW - 1u, bh, bar_col[h]);", "gfx_rect(x + DET_BX + i * DET_BW, y + DET_HH - DET_BB - bh, DET_BW, bh, bar_col[h]);"),
         ("gallery_app.c", "{ 0xFFFFu, 0xF800u, 0x07E0u, 0x001Fu }", "{ 0xFFFFu, 0x07E0u, 0xF800u, 0x001Fu }"),
         ("gallery_app.c", "const uint32_t m = hs_max(hist, h);", "const uint32_t m = hs_max(hist, 0u);"),
-        ("gallery_app.c", "gh_clear(h);" if False else "    hs_clear(h);\n    for (uint32_t pos = off & ~4095u;", "    for (uint32_t pos = off & ~4095u;"),
-        ("gallery_app.c", "hs_add(h, (uint16_t)(v & 0xFFFFu)); hs_add(h, (uint16_t)(v >> 16));", "hs_add(h, (uint16_t)(v & 0xFFFFu));"),
+        ("gallery_app.c", "gh_clear(h);" if False else "    hs_clear(h); const hs_rect_t rc = hs_rect(pw, ph);", "    const hs_rect_t rc = hs_rect(pw, ph);"),
         ("gallery_app.c", "if (a < off || a >= off + GX_THUMB_BYTES) continue;\n            const uint32_t v = w[i];", "if (a >= off + GX_THUMB_BYTES) continue;\n            const uint32_t v = w[i];"),
         ("gallery_app.c", "if (!hist) { gfx_text(x + 6u, y + 34u, GD_HIST_NOTE, DIM, BG); continue; }", ""),
+        ("gallery_app.c", "if (hs_inside(&rc, row, col)) hs_add(h, (uint16_t)(v & 0xFFFFu));", "hs_add(h, (uint16_t)(v & 0xFFFFu));"),
+        ("gallery_app.c", "if (hs_inside(&rc, row, col + 1u)) hs_add(h, (uint16_t)(v >> 16));", "if (hs_inside(&rc, row, col)) hs_add(h, (uint16_t)(v >> 16));"),
+        ("gallery_app.c", "const hs_rect_t rc = hs_rect(pw, ph);", "const hs_rect_t rc = hs_rect(ph, pw);"),
+        ("gallery_app.c", "thumb_hist(gx_thumb_off(&head, e->thumb), &det_hist, e->width, e->height)", "thumb_hist(gx_thumb_off(&head, e->thumb), &det_hist, 0u, 0u)"),
+        ("gallery_app.c", "row = px / HS_TW, col = px % HS_TW;", "row = px / HS_TW, col = (px % HS_TW) + 1u;"),
         ("gallery_app.c", "gfx_text(6, 324, hist ? GD_HIST_SRC : GD_HIST_NOTE, DIM, BG);", ""),
     ]
     muts += [                                                                                                      # the version 1 path (open_v1, the hardware decoder)
