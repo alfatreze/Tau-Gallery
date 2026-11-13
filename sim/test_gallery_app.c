@@ -283,6 +283,27 @@ static int thumbs_on_screen(uint32_t first, uint32_t n)                         
     }
     return 1;
 }
+
+/* ---- the rotated view: the plane of the turned picture against the reference decode turned here (explicit formulas, not the firmware's matrix table) ---- */
+static void ref_turn(uint32_t o, uint32_t iw, uint32_t ih, uint32_t x, uint32_t y, uint32_t *X, uint32_t *Y)
+{
+    switch (o) {
+    case 0: *X = x; *Y = y; break;               case 1: *X = iw - 1u - x; *Y = y; break;
+    case 2: *X = x; *Y = ih - 1u - y; break;     case 3: *X = iw - 1u - x; *Y = ih - 1u - y; break;
+    case 4: *X = y; *Y = x; break;               case 5: *X = y; *Y = iw - 1u - x; break;
+    case 6: *X = ih - 1u - y; *Y = x; break;     default: *X = ih - 1u - y; *Y = iw - 1u - x; break;
+    }
+}
+static int rot_plane_ok(const char *ref, uint32_t o, uint32_t iw, uint32_t ih)
+{
+    char f[600]; snprintf(f, sizeof f, "%s/%s", dir, ref); uint32_t n; uint8_t *d = slurp(f, &n); if (!d || n != iw * ih * 3u) return 0;
+    const uint32_t dw = o >= 4u ? ih : iw, dh = o >= 4u ? iw : ih, px = (800u - dw) / 2u, py = dh < 720u ? (720u - dh) / 2u : 0u, rows = dh > 720u ? dh : 720u;
+    uint8_t *want = calloc((size_t)rows * 2400u, 1);
+    for (uint32_t y = 0; y < ih; y++) for (uint32_t x = 0; x < iw; x++) { uint32_t X, Y; ref_turn(o, iw, ih, x, y, &X, &Y); for (uint32_t k = 0; k < 3u; k++) want[(py + Y) * 2400u + (px + X) * 3u + k] = d[(y * iw + x) * 3u + k]; }
+    uint32_t bad = 0;
+    for (uint32_t b = 0; b < rows * 2400u; b++) { const uint8_t got = (uint8_t)(mem[GAL_ROT_BASE + b / 2u] >> (8u * (b & 1u))); if (got != want[b]) bad++; }
+    free(want); free(d); return bad == 0u;
+}
 static int plane_is(uint32_t pic)                                                                 /* the plane equals the canvas of picture `pic` byte for byte */
 {
     char f[600]; snprintf(f, sizeof f, "%s/p%02u.tgy", dir, pic); uint32_t n; uint8_t *d = slurp(f, &n); if (!d) return 0;
@@ -612,6 +633,18 @@ static void checkpoint(int n)
     case 229: chk(229, said("PICTURE READ FAILED") && vid_bus == 0u && zk < 0); force_short = 0; clear_texts(); break;                                                     /* is not accepted either */
     case 225: chk(225, land_unaligned == 0u); break;                                                                                                                         /* no landing read of a picture was unaligned (the tile streams read as 4 KB aligned supersets) */
     case 206: chk(206, said("NEEDS THE HW DECODER") && tg.starts == 0u); clear_texts(); break;                                                                                /* a core without the decoder */
+    case 470: chk(470, rot_o == 6u && rot_plane_ok("v00.rgb", 6u, 800u, 720u) && vbase == GAL_ROT_BASE + 40u * GAL_LINE_WORDS16 && vstride == GAL_LINE_WORDS16 && !said("ERROR") && !said("FAILED")); break;      /* Y: turned 90 degrees clockwise: the plane holds the turned picture (720 wide, 800 tall, black margins), the view is centred on it */
+    case 471: chk(471, rot_pan == 60u && vbase == GAL_ROT_BASE + 60u * GAL_LINE_WORDS16); break;                                     /* Down pans 20 rows */
+    case 472: chk(472, rot_pan == 80u && vbase == GAL_ROT_BASE + 80u * GAL_LINE_WORDS16); break;                                     /* the pan stops at the last row */
+    case 473: chk(473, rot_pan == 0u && vbase == GAL_ROT_BASE); break;                                                                 /* and at the first */
+    case 474: chk(474, rot_o == 3u && rot_pan_max == 0u && rot_plane_ok("v00.rgb", 3u, 800u, 720u) && vbase == GAL_ROT_BASE); break;       /* Y again: 180 degrees, no pan needed */
+    case 475: chk(475, rot_o == 6u && rot_plane_ok("v00.rgb", 6u, 800u, 720u) && vbase == GAL_ROT_BASE + 40u * GAL_LINE_WORDS16); break;   /* X: counter-clockwise from 180 is 90 clockwise; the margins are black again (the 180 picture was there) */
+    case 476: chk(476, rot_o == 0u && vbase == GAL_PLANE_BASE && plane_is_rgb("v00.rgb")); break;                                    /* X: upright again, the upright plane is shown and is still the picture */
+    case 477: chk(477, rot_o == 5u && rot_plane_ok("v00.rgb", 5u, 800u, 720u) && vbase == GAL_ROT_BASE + 40u * GAL_LINE_WORDS16); break;     /* X: 90 counter-clockwise; the details page and back keep the turned view */
+    case 478: chk(478, zk < 0 && rot_o == 5u && vbase == GAL_ROT_BASE + 40u * GAL_LINE_WORDS16); break;                               /* A (zoom) is ignored while the picture is turned */
+    case 479: chk(479, rot_o == 0u && vbase == GAL_PLANE_BASE); break;                                                                 /* the next picture is upright */
+    case 480: chk(480, rot_o == 0u && vbase == GAL_PLANE_BASE && sel == 1u); break;                                                    /* a turned picture left with B and opened again from the grid is upright */
+    case 481: chk(481, rot_o == 0u && vbase == GAL_PLANE_BASE); break;                                                                 /* a version 0 picture cannot be turned: X and Y do nothing */
     case 300: chk(300, thumbs_on_screen(0, 16u) && !strcmp(last_text(), "1/18")); break;                                                                               /* the details scenario: the grid, picture 1 selected */
     case 310: fail_idx = 1u; clear_texts(); break;
     case 311: chk(311, said("DETAILS") && count_text("NOT COMPUTED YET") == 5 && !said("FROM THE THUMBNAIL") && said("Picture 01")); fail_idx = 0u; clear_texts(); break;      /* the thumbnail cannot be read: the page still opens, the frames say so */
@@ -895,6 +928,13 @@ int main(int argc, char **argv)
         S7[k++] = KEY_B; S7[k++] = 0; S7[k++] = KEY_RIGHT; S7[k++] = 0; S7[k++] = KEY_A; S7[k++] = 0; S7[k++] = CP(298); S7[k++] = KEY_A; S7[k++] = 0; for (int i = 0; i < 20; i++) S7[k++] = 0; S7[k++] = CP(299);      /* v10: a file with the EXIF tag still in its header */
         S7[k++] = END;
         nscript = k; memcpy(script, S7, (size_t)k * sizeof S7[0]);
+        if (!setjmp(done)) gallery_app_main();
+        printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
+    }
+    if (argc > 2 && !strcmp(argv[2], "v1rot")) {                                                           /* the turned view of a version 1 picture (v00: 1000 x 900, its fit canvas fills the screen) */
+        const uint32_t SR[] = { KEY_A, 0, CP(200), KEY_Y, 0, CP(470), KEY_DOWN, 0, CP(471), KEY_DOWN, 0, KEY_DOWN, 0, KEY_DOWN, 0, CP(472), KEY_UP, 0, KEY_UP, 0, KEY_UP, 0, KEY_UP, 0, KEY_UP, 0, KEY_UP, 0, CP(473), KEY_Y, 0, CP(474), KEY_X, 0, CP(475), KEY_X, 0, CP(476),
+                                KEY_X, 0, KEY_SELECT, 0, KEY_B, 0, CP(477), KEY_A, 0, CP(478), KEY_RIGHT, 0, CP(479), KEY_Y, 0, KEY_B, 0, KEY_A, 0, CP(480), KEY_RIGHT, 0, KEY_Y, 0, CP(481), END };
+        nscript = (int)(sizeof SR / sizeof SR[0]); memcpy(script, SR, sizeof SR);
         if (!setjmp(done)) gallery_app_main();
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
     }

@@ -12,6 +12,7 @@
 #include "gallery_settings_hw.h"
 #include "../ui/theme.h"
 #include "gallery_view.h"
+#include "gallery_rot.h"
 
 #define BG   th_role[TR_BG_BOTTOM]                /* the colours are the theme's roles (ui/theme.c, docs/THEME_SPEC.md) */
 #define FG   th_role[TR_TEXT_PRIMARY]
@@ -200,6 +201,36 @@ static int v1_tick(void *ctx, uint32_t tx, uint32_t ty)
     if (*show) { const uint32_t done = ty * v1l.cols + tx + 1u, all = v1l.cols * v1l.rows; char b[24], *q = put_s(b, "DECODING "); q = put_u(q, done * 100u / all); q = put_s(q, "%"); *q = 0; say(b, ACC); loader_bar(done, all); }
     return 0;
 }
+/* ---- the rotated view (K7, docs/features/GALLERY_RTL_1_0_SPEC.md): X turns the picture 90 degrees counter-clockwise, Y clockwise. The hardware decoder's scatter writer draws the fit level in the new orientation into a plane of its
+ * own (the window memory: a rotated picture is not zoomed), 800 pixels wide and as tall as the rotated picture needs. A landscape picture turned 90 degrees is 800 rows tall, 80 more than the screen: Up and Down pan the view
+ * (R_VIEW_BASE). The upright plane is untouched; turning back to 0 decodes into it again. ---- */
+#define GAL_ROT_BASE 0x900000u                   /* halfword address of the rotated plane (the first resident window: no zoom runs while the picture is rotated; asserted equal to GAL_WIN0 below) */
+#define GAL_ROTZERO 0xE2F000u                    /* 127 zero halfwords that clear the plane (past the staging tile of GAL_STAGE; asserted below) */
+#define ROT_STEP 20u                             /* rows a press of Up or Down pans */
+static uint32_t rot_o, rot_pan, rot_pan_max;
+static void rot_view(void)                       /* the view registers of the rotated plane (after any gal_view_on, which points at the upright one) */
+{
+    if (rot_o == 0u) return;
+    REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16); REG_WR(R_VIEW_BASE, GAL_ROT_BASE + rot_pan * GAL_LINE_WORDS16);
+}
+static void rot_clear(uint32_t rows)             /* the plane black: 127 halfword copies from a zero source (the copy command reaches offsets below 2^19: 0x40000 halfwords a base) */
+{
+    for (uint32_t i = 0; i < 64u; i++) gfx_mb_write(GAL_ROTZERO + 2u * i, 0u);
+    const uint32_t total = rows * GAL_LINE_WORDS16;
+    for (uint32_t hw = 0; hw < total; hw += 127u) gfx_blit_raw(GAL_ROTZERO, GAL_ROT_BASE + (hw / 0x40000u) * 0x40000u, 0u, hw % 0x40000u, total - hw < 127u ? total - hw : 127u);
+    gfx_fence();
+}
+/* Draws the open version 1 picture's level in orientation o into the rotated plane. The picture is the whole fit canvas (a fit level) or the picture alone (a level of a small picture); turned, it is centred in the 800 columns
+ * and top-aligned when it is taller than the screen. Returns the tgy_hw code. */
+static int rot_show(uint32_t o, int *show)
+{
+    const uint32_t cw = v1l.kind == 2u ? GT_CANVAS_W : v1l.w, ch = v1l.kind == 2u ? GT_CANVAS_H : v1l.h; uint32_t pw, ph; gr_dims(o, cw, ch, &pw, &ph);
+    const uint32_t px = (GT_CANVAS_W - pw) / 2u, py = ph < GT_CANVAS_H ? (GT_CANVAS_H - ph) / 2u : 0u, rows = ph > GT_CANVAS_H ? ph : GT_CANVAS_H;
+    rot_clear(rows); rot_pan_max = rows - GT_CANVAS_H; rot_pan = rot_pan_max / 2u;
+    const int r = tgy_hw_level_rot(&v1f, &v1l, GAL_ROT_BASE * 2u + py * GT_STRIDE + px * 3u, GT_STRIDE, o, v1_tick, show);
+    gfx_fence();
+    return r;
+}
 static int open_v1(int show_progress)
 {
     v1_on = 0u;
@@ -222,7 +253,7 @@ static int open_v1(int show_progress)
     if (r == TH_SHORT) return 2;
     if (r != TH_OK) return 8;
     int show = show_progress;
-    r = tgy_hw_show(&v1f, &v1l, GAL_PLANE_BASE * 2u, v1_tick, &show);
+    r = rot_o != 0u ? rot_show(rot_o, &show) : tgy_hw_show(&v1f, &v1l, GAL_PLANE_BASE * 2u, v1_tick, &show);
     if (r == TH_HWERR) return 9;
     if (r == TH_TIMEOUT) return 10;
     if (r != TH_OK) return 8;
@@ -291,6 +322,7 @@ static void res_clear(uint32_t w) { for (uint32_t i = 0; i < GV_WIN_TX * GV_WIN_
 /* ---- zoom of a version 1 picture (docs/TGY_HW_DMA.md, "Zoom"): its full-resolution level (kind 1) is a compressed tile level. The one stop after fit is that level at 1:1; a tile is a card read of its stream (a 4 KB aligned
  * superset of it, landed at GAL_STREAM) and one decode by the hardware decoder straight into its place in the resident window (no staging copy, no Talos): the windows, the re-centre, the map and the keys are the version 0
  * tile level's own. The level's tile index (12 bytes a tile) is read from the card when the first zoom opens. The quantisation tables come from the prefix of the file landed when the picture opened. ---- */
+_Static_assert(GAL_ROT_BASE == GAL_WIN0 && GAL_ROTZERO == GAL_STAGE + 0x7000u, "the rotated plane is the first window; its zero source lies between the staging tile and the bar save area");
 #define GAL_STREAM (GAL_STAGE + 0x10000u)        /* one landed tile stream, 128 KB (halfword address): past the staging tile (0x6000) and the bar save area (GAL_STAGE + 0x8000, 0x3000 used) */
 #define SDRAM_HZ 100000000u                      /* the decoder's cycle counter runs on the SDRAM clock */
 #define V1Z_STREAM_MAX 122880u                   /* a stream longer than this (a tile of noise at the highest quality is about 60 KB) is not decoded */
@@ -728,8 +760,22 @@ static void viewer(void)
         if ((edge & KEY_SELECT) && !(edge & (KEY_LEFT | KEY_RIGHT))) {                                                                 /* Select: the details page (not Select + Left / Right) */
             gal_view_off(); run_details();                                                                                            /* the picture's plane in SDRAM is not touched by the page: the view is simply switched on again */
             if (!gal_view_on()) { loaded_page = 0xFFFFFFFFu; draw_page(); say("VIEWER DID NOT START", BAD); return; }
-            prev = REG_RD(R_INPUT) & 0xFFFFu; held = 0u; next_tick = cycles(); continue;
+            rot_view(); prev = REG_RD(R_INPUT) & 0xFFFFu; held = 0u; next_tick = cycles(); continue;
         }
+        if (edge & (KEY_X | KEY_Y)) {                                                                                                 /* X: turn the picture counter-clockwise, Y: clockwise (version 1 pictures: the hardware decoder draws it turned) */
+            if (!v1_on) continue;
+            rot_o = gr_turn(rot_o, (edge & KEY_Y) != 0u);
+            const int r = open_timed(sel, 0);
+            if (r) { rot_o = 0u; gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); say(open_msg[r], BAD); return; }
+            if (rot_o == 0u) { REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16); REG_WR(R_VIEW_BASE, GAL_PLANE_BASE); } else rot_view();
+            continue;
+        }
+        if (rot_o != 0u && (edge & (KEY_UP | KEY_DOWN))) {                                                                            /* a turned picture taller than the screen: Up and Down pan it */
+            const uint32_t np = (edge & KEY_DOWN) ? (rot_pan + ROT_STEP > rot_pan_max ? rot_pan_max : rot_pan + ROT_STEP) : (rot_pan > ROT_STEP ? rot_pan - ROT_STEP : 0u);
+            if (np != rot_pan) { rot_pan = np; rot_view(); }
+            continue;
+        }
+        if (rot_o != 0u && (edge & (KEY_A | KEY_R1))) continue;                                                                      /* no zoom while the picture is turned: turn it back first */
         if (edge & KEY_A) { if (zn > 0u) { zoom_goto((int)zn - 1); held = 0u; next_tick = cycles(); } continue; }                   /* A: the last stop (1:1) */
         if (edge & KEY_R1) { if (zn > 0u) { zoom_goto(0); held = 0u; next_tick = cycles(); } continue; }                                /* R1: the first stop */
         if (edge & KEY_B) { gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); return; }
@@ -737,9 +783,10 @@ static void viewer(void)
             const uint32_t rel = sel - cur_first, nrel = (edge & KEY_RIGHT) ? (rel + 1u) % cur_count : (rel + cur_count - 1u) % cur_count, n = cur_first + nrel;      /* the next picture of the folder, wrapping inside it */
             const uint32_t np = nrel / pp;
             if (np != page) { page = np; if (!load_page()) { gal_view_off(); draw_page(); return; } }
-            sel = n;
+            sel = n; rot_o = 0u;
             const int r = open_timed(sel, 0);
             if (r) { gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); say(open_msg[r], BAD); return; }
+            REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16); REG_WR(R_VIEW_BASE, GAL_PLANE_BASE);                                              /* the upright plane (the previous picture may have been turned: the view pointed at the turned plane) */
             remember(sel);
         }
     }
@@ -747,6 +794,7 @@ static void viewer(void)
 
 static void open_from_grid(void)
 {
+    rot_o = 0u;
     const int r = open_timed(sel, 1);
     if (r) { say(open_msg[r], BAD); return; }
     if (!gal_view_on()) { say("VIEWER DID NOT START", BAD); return; }

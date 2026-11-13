@@ -133,7 +133,7 @@ def run(workdir, setdir):
     if r.returncode: rc = 1; out += "\nFAIL scenario zoom\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
     global V1SET
     if V1SET is None: V1SET = Path(tempfile.mkdtemp()); make_v1_set(V1SET)
-    for sc in ("v1", "v1nohw", "v1zoom", "v1map"):
+    for sc in ("v1", "v1nohw", "v1zoom", "v1map", "v1rot"):
         r = subprocess.run([str(workdir / "t"), str(V1SET), sc], capture_output=True, text=True, timeout=900)
         if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
         else: out += "\n" + r.stdout
@@ -221,7 +221,7 @@ def mutants(setdir, tail=None):
             ("gallery_app.c", "if ((edge & KEY_SELECT) && !(edge & (KEY_LEFT | KEY_RIGHT))) {", "if (0) {"),                                                          # details page: no key in the picture view
             ("gallery_app.c", "if ((edge & KEY_SELECT) && !(edge & (KEY_LEFT | KEY_RIGHT))) {", "if (edge & KEY_SELECT) {"),                                         # Select + Right opens the page instead of stepping on
             ("gallery_app.c", "gal_view_off(); run_details();", "run_details();"),                                                                                 # the page is drawn under the live picture view
-            ("gallery_app.c", "if (!gal_view_on()) { loaded_page = 0xFFFFFFFFu; draw_page(); say(\"VIEWER DID NOT START\", BAD); return; }\n            prev = REG_RD(R_INPUT) & 0xFFFFu; held = 0u;", "prev = REG_RD(R_INPUT) & 0xFFFFu; held = 0u;"),                # the view is not switched on again
+            ("gallery_app.c", "if (!gal_view_on()) { loaded_page = 0xFFFFFFFFu; draw_page(); say(\"VIEWER DID NOT START\", BAD); return; }\n            rot_view(); prev = REG_RD(R_INPUT) & 0xFFFFu; held = 0u;", "prev = REG_RD(R_INPUT) & 0xFFFFu; held = 0u;"),                # the view is not switched on again
             ("gallery_app.c", "const gx_entry_t *e = &EN(sel); const gd_t d", "const gx_entry_t *e = &ent[0]; const gd_t d"),                        # the page of the first picture, not the selected one
             ("gallery_app.c", "(rel + cur_count - 1u) % cur_count, n =", "(rel + cur_count - 1u), n ="),
             ("gallery_app.c", "if (np != page) { page = np; if (!load_page())", "if (np != page) { if (!load_page())"),
@@ -389,7 +389,7 @@ def mutants(setdir, tail=None):
         ("gallery_app.c", "if (r == TH_HWERR) return 9;", "if (r == TH_HWERR) return 8;"),
         ("gallery_app.c", "if (r == TH_CRC || r == TH_MAGIC || r == TH_VERSION || r == TH_SHORT) return 3;", ""),
         ("gallery_app.c", "h4[4] == 1u && h4[5] == 0u) return open_v1(show_progress);", "h4[4] == 1u && h4[5] == 7u) return open_v1(show_progress);"),
-        ("gallery_app.c", "r = tgy_hw_show(&v1f, &v1l, GAL_PLANE_BASE * 2u, v1_tick, &show);", "r = tgy_hw_show(&v1f, &v1l, GAL_LAND_BASE * 2u, v1_tick, &show);"),
+        ("gallery_app.c", ": tgy_hw_show(&v1f, &v1l, GAL_PLANE_BASE * 2u, v1_tick, &show);", ": tgy_hw_show(&v1f, &v1l, GAL_LAND_BASE * 2u, v1_tick, &show);"),
         ("gallery_app.c", "const uint32_t fsize = (uint32_t)h4[48] | (uint32_t)h4[49] << 8 | (uint32_t)h4[50] << 16 | (uint32_t)h4[51] << 24, base = GAL_LAND_BASE * 2u;", "const uint32_t fsize = (uint32_t)h4[48] | (uint32_t)h4[49] << 8 | (uint32_t)h4[50] << 16 | (uint32_t)h4[51] << 24, base = GAL_LAND_BASE * 2u + 2u;"),
     ]
     muts += [                                                                                                      # Gallery 1.0: folders, grid sizes, rounded corners, selection ring, resume in a folder
@@ -415,6 +415,22 @@ def mutants(setdir, tail=None):
         ("gallery_app.c", "gfx_rect(x, y + GR.ch - 16u, GR.cw, 16u, dark_bg()); gfx_text(x + 2u, y + GR.ch - 16u, b, FG, dark_bg());", "gfx_text(x + 2u, y + GR.ch - 16u, b, FG, dark_bg());"),
         ("gallery_app.c", "*q++ = ' '; q = put_u(q, n); *q = 0;", "*q = 0;"),
         ("gallery_app.c", "if (gx_parse_entry_h(&head, buf + k * head.entry_bytes, head.entry_bytes, &ent[k])) return 0;", "if (gx_parse_entry_h(&head, buf + k * 160u, head.entry_bytes, &ent[k])) return 0;"),
+    ]
+    muts += [                                                                                                      # the turned view (K7)
+        ("gallery_app.c", "rot_o = gr_turn(rot_o, (edge & KEY_Y) != 0u);", "rot_o = gr_turn(rot_o, (edge & KEY_X) != 0u);"),
+        ("gallery_app.c", "(rot_pan + ROT_STEP > rot_pan_max ? rot_pan_max : rot_pan + ROT_STEP)", "(rot_pan + ROT_STEP)"),
+        ("gallery_app.c", "(rot_pan > ROT_STEP ? rot_pan - ROT_STEP : 0u)", "(rot_pan - ROT_STEP)"),
+        ("gallery_app.c", "rot_view(); prev = REG_RD(R_INPUT) & 0xFFFFu; held = 0u; next_tick = cycles(); continue;", "prev = REG_RD(R_INPUT) & 0xFFFFu; held = 0u; next_tick = cycles(); continue;"),
+        ("gallery_app.c", "if (rot_o != 0u && (edge & (KEY_A | KEY_R1))) continue;", ""),
+        ("gallery_app.c", "sel = n; rot_o = 0u;", "sel = n;"),
+        ("gallery_app.c", "            REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16); REG_WR(R_VIEW_BASE, GAL_PLANE_BASE);                                              /* the upright plane (the previous picture may have been turned: the view pointed at the turned plane) */\n", ""),
+        ("gallery_app.c", "    rot_o = 0u;\n    const int r = open_timed(sel, 1);", "    const int r = open_timed(sel, 1);"),
+        ("gallery_app.c", "rot_pan = rot_pan_max / 2u;", "rot_pan = 0u;"),
+        ("gallery_app.c", "px = (GT_CANVAS_W - pw) / 2u,", "px = 0u,"),
+        ("gallery_app.c", "rot_clear(rows); rot_pan_max", "rot_pan_max"),
+        ("gallery_app.c", "gr_dims(o, cw, ch, &pw, &ph);", "pw = cw; ph = ch;"),
+        ("gallery_app.c", "if (rot_o == 0u) { REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16); REG_WR(R_VIEW_BASE, GAL_PLANE_BASE); } else rot_view();", "rot_view();"),
+        ("gallery_app.c", "            if (!v1_on) continue;\n            rot_o = gr_turn", "            rot_o = gr_turn"),
     ]
     only = sys.argv[sys.argv.index("--only") + 1] if "--only" in sys.argv else None                                   # --only TEXT: just the mutants whose original code contains TEXT (Tier B of CLAUDE.md section 4: the mutants of the code you changed)
     if only: muts = [m for m in muts if only in m[1]]; assert muts, "no mutant matches --only"
