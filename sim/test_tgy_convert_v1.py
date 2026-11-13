@@ -34,8 +34,10 @@ def suite(mod):
     fails = 0; d = Path(tempfile.mkdtemp()); src = d / "My Pictures"; (src / "Beach").mkdir(parents=True); (src / "Alps").mkdir(); (src / "empty").mkdir()
     pic(src / "Beach" / "b2.jpg", (200, 100, 50), exif=exif(taken="2024:07:02 10:00:00")); pic(src / "Beach" / "b1.jpg", (10, 120, 200), exif=exif(taken="2024:07:03 09:00:00", iso=800))
     pic(src / "Alps" / "a1.jpg", (30, 30, 200), size=(90, 150)); pic(src / "top.png", (90, 90, 90), fmt="PNG")
+    (src / "._top.png").write_bytes(b"\x00\x05\x16\x07" + b"\0" * 60); (src / "Alps" / "._a1.jpg").write_bytes(b"\x00\x05\x16\x07" + b"\0" * 60); (src / "Beach" / ".hidden.jpg").write_bytes(b"x")      # what macOS leaves on a FAT / exFAT card next to every file (AppleDouble), and a hidden file
     out = d / "o1"; rc, ev = run(tgy_convert, src, out) if mod is None else run(mod, src, out)
     check("the run succeeds and says how many folders it made (empty subfolders do not count, the top pictures go to a folder named after the source)", rc == 0 and ev[-1]["event"] == "done" and ev[-1]["folders"] == 3 and ev[-1]["pictures"] == 4)
+    check("macOS metadata files (._name) and hidden files are not pictures: no skip event, nothing in the index", not [e for e in ev if e["event"] == "skip"] and ev[-1].get("skipped", 0) == 0)
     lib = load(out)
     check("version 1 index, folders in name order: Alps, Beach, My Pictures", lib["version"] == 1 and [f["name"] for f in lib["folders"]] == ["Alps", "Beach", "My Pictures"] and [(f["first"], f["count"]) for f in lib["folders"]] == [(0, 1), (1, 2), (3, 1)])
     check("the entries of a folder are in file name order (b1 before b2)", [e["name"] for e in lib["entries"]] == ["a1", "b1", "b2", "top"])
@@ -71,6 +73,8 @@ def suite(mod):
     return fails
 
 MUTANTS = [
+    ("a ._ metadata file counts as a picture", ' and not p.name.startswith(".") and p.is_file()', ' and p.is_file()'),
+    ("a hidden file counts as a picture (only ._ is excluded)", 'not p.name.startswith(".")', 'not p.name.startswith("._")'),
     ("the subfolders are not folders", "if a.index_format == \"v1\" and subs: jobs =", "if False: jobs ="),
     ("an empty subfolder counts", "subs = [(d, fl) for d, fl in subs if fl]", "subs = [(d, fl) for d, fl in subs]"),
     ("the top pictures go to ALL PICTURES", "[(p, a.src.name or tgy.ALL_PICTURES) for p in top]", "[(p, None) for p in top]"),

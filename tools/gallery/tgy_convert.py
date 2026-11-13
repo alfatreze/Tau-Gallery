@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import tgy, tgy_make
 
 EXT = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tif", ".tiff", ".webp"}
+def is_picture(p): return p.suffix.lower() in EXT and not p.name.startswith(".") and p.is_file()      # not the ._name files macOS writes beside every file on a FAT / exFAT volume, nor hidden files
 
 def write_atomic(path, data):
     tmp = path.with_name(path.name + ".part")
@@ -53,8 +54,8 @@ def main(argv=None):
         if a.src.suffix.lower() not in EXT: print(json.dumps({"event": "error", "error": "not a picture this tool reads: " + a.src.name})); return 2
         jobs = [(a.src, None)]
     elif a.src.is_dir():
-        top = sorted(p for p in a.src.iterdir() if p.suffix.lower() in EXT and p.is_file())
-        subs = [(d, sorted(p for p in d.iterdir() if p.suffix.lower() in EXT and p.is_file())) for d in sorted(q for q in a.src.iterdir() if q.is_dir() and not q.name.startswith("."))]
+        top = sorted(p for p in a.src.iterdir() if is_picture(p))
+        subs = [(d, sorted(p for p in d.iterdir() if is_picture(p))) for d in sorted(q for q in a.src.iterdir() if q.is_dir() and not q.name.startswith("."))]
         subs = [(d, fl) for d, fl in subs if fl]                                                          # one level of folders: a subfolder with pictures is a folder of the library
         if a.index_format == "v1" and subs: jobs = [(p, d.name) for d, fl in subs for p in fl] + [(p, a.src.name or tgy.ALL_PICTURES) for p in top]
         else: jobs = [(p, None) for p in top]                                                             # no subfolders (or the flat v0 index): one folder, ALL PICTURES
