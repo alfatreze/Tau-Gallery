@@ -14,13 +14,38 @@ int gx_parse_head(const uint8_t *b, uint32_t n, gx_head_t *h)
 {
     if (n < GX_HEAD_BYTES) return GF_SHORT;
     if (b[0] != 'T' || b[1] != 'G' || b[2] != 'I' || b[3] != 'X') return GF_MAGIC;
-    if (rd16(b + 4) != 0u || rd16(b + 6) != GX_HEAD_BYTES || rd32(b + 12) != GX_ENTRY_BYTES || rd16(b + 24) != GX_THUMB_W || rd16(b + 26) != GX_THUMB_H) return GF_VERSION;
-    h->count = rd32(b + 8); h->entries_off = rd32(b + 16); h->atlas_off = rd32(b + 20);
-    if (h->count > 0x100000u || h->entries_off < GX_HEAD_BYTES || h->atlas_off < h->entries_off + h->count * GX_ENTRY_BYTES) return GF_RANGE;      /* 1 M pictures is far beyond any card; it also keeps the offsets below 2^32 */
+    const uint32_t ver = rd16(b + 4);
+    if (ver == 0u) {
+        if (rd16(b + 6) != GX_HEAD_BYTES || rd32(b + 12) != GX_ENTRY_BYTES || rd16(b + 24) != GX_THUMB_W || rd16(b + 26) != GX_THUMB_H) return GF_VERSION;
+        h->version = 0u; h->count = rd32(b + 8); h->entries_off = rd32(b + 16); h->atlas_off = rd32(b + 20); h->entry_bytes = GX_ENTRY_BYTES;
+        h->thumb_w = GX_THUMB_W; h->thumb_h = GX_THUMB_H; h->thumb_bytes = GX_THUMB_BYTES; h->folder_count = 1u; h->folders_off = 0u; h->details_off = 0u; h->details_len = 0u; h->sort = 0u;
+        if (h->count > 0x100000u || h->entries_off < GX_HEAD_BYTES || h->atlas_off < h->entries_off + h->count * GX_ENTRY_BYTES) return GF_RANGE;      /* 1 M pictures is far beyond any card; it also keeps the offsets below 2^32 */
+        return GF_OK;
+    }
+    if (ver != 1u) return GF_VERSION;
+    if (n < GX1_HEAD_BYTES) return GF_SHORT;
+    if (rd16(b + 6) != GX1_HEAD_BYTES || rd16(b + 12) != GX1_ENTRY_BYTES || rd16(b + 14) != GX1_THUMB_W || rd16(b + 16) != GX1_THUMB_H || rd16(b + 32) != GX1_FOLDER_BYTES) return GF_VERSION;
+    if (gf_crc32(b, 60u) != rd32(b + 60)) return GF_CRC;
+    h->version = 1u; h->count = rd32(b + 8); h->folder_count = rd16(b + 18); h->entries_off = rd32(b + 20); h->atlas_off = rd32(b + 24); h->folders_off = rd32(b + 28);
+    h->sort = rd16(b + 34); h->details_off = rd32(b + 36); h->details_len = rd32(b + 40); h->entry_bytes = GX1_ENTRY_BYTES; h->thumb_w = GX1_THUMB_W; h->thumb_h = GX1_THUMB_H; h->thumb_bytes = GX1_THUMB_BYTES;
+    if (h->count > GX_MAX_ENTRIES || h->folder_count < 1u || h->folder_count > GX_MAX_FOLDERS || h->sort > 2u) return GF_RANGE;
+    /* the sections in order, without overlap; 64-bit sums so nothing wraps */
+    if (h->entries_off < GX1_HEAD_BYTES) return GF_RANGE;
+    if ((uint64_t)h->atlas_off < (uint64_t)h->entries_off + (uint64_t)h->count * GX1_ENTRY_BYTES) return GF_RANGE;
+    if ((uint64_t)h->folders_off < (uint64_t)h->atlas_off + (uint64_t)h->count * GX1_THUMB_BYTES) return GF_RANGE;
+    if ((uint64_t)h->details_off < (uint64_t)h->folders_off + (uint64_t)h->folder_count * GX1_FOLDER_BYTES) return GF_RANGE;
+    if ((uint64_t)h->details_off + (uint64_t)h->details_len > 0xFFFFFFFFull) return GF_RANGE;
     return GF_OK;
 }
-uint32_t gx_entry_off(const gx_head_t *h, uint32_t i) { return h->entries_off + i * GX_ENTRY_BYTES; }
-uint32_t gx_thumb_off(const gx_head_t *h, uint32_t thumb) { return h->atlas_off + thumb * GX_THUMB_BYTES; }
+int gx_check_size(const gx_head_t *h, uint32_t file_size)
+{
+    uint64_t end = (uint64_t)h->atlas_off + (uint64_t)h->count * h->thumb_bytes;
+    if (h->version == 1u && (uint64_t)h->details_off + h->details_len > end) end = (uint64_t)h->details_off + h->details_len;
+    return end <= file_size ? GF_OK : GF_RANGE;
+}
+uint32_t gx_entry_off(const gx_head_t *h, uint32_t i) { return h->entries_off + i * h->entry_bytes; }
+uint32_t gx_thumb_off(const gx_head_t *h, uint32_t thumb) { return h->atlas_off + thumb * h->thumb_bytes; }
+uint32_t gx_folder_off(const gx_head_t *h, uint32_t k) { return h->folders_off + k * GX1_FOLDER_BYTES; }
 
 static void copy_str(char *dst, const uint8_t *src, uint32_t max)
 {
@@ -33,8 +58,42 @@ int gx_parse_entry(const uint8_t *r, uint32_t n, gx_entry_t *e)
     if (n < GX_ENTRY_BYTES) return GF_SHORT;
     copy_str(e->path, r, GX_PATH_MAX); copy_str(e->name, r + GX_PATH_MAX, GX_NAME_MAX);
     e->size = rd32(r + 136); e->width = rd32(r + 140); e->height = rd32(r + 144); e->thumb = rd32(r + 148);
+    e->folder = 0u; e->flags = 0u; e->details_off = 0u; e->details_len = 0u; e->taken = 0u;
     if (e->path[0] == 0) return GF_RANGE;
     return GF_OK;
+}
+int gx_parse_entry_h(const gx_head_t *h, const uint8_t *r, uint32_t n, gx_entry_t *e)
+{
+    if (n < h->entry_bytes) return GF_SHORT;
+    int rc = gx_parse_entry(r, GX_ENTRY_BYTES, e);
+    if (rc || h->version == 0u) return rc;
+    e->folder = (uint16_t)rd16(r + 152); e->flags = (uint16_t)rd16(r + 154); e->details_off = rd32(r + 156); e->details_len = (uint16_t)rd16(r + 160); e->taken = rd32(r + 164);
+    if (e->thumb >= h->count || e->folder >= h->folder_count || e->details_len > GX_MAX_DETAILS || (uint64_t)e->details_off + e->details_len > h->details_len) return GF_RANGE;
+    return GF_OK;
+}
+int gx_parse_folder(const gx_head_t *h, const uint8_t *r, uint32_t n, gx_folder_t *f)
+{
+    if (n < GX1_FOLDER_BYTES) return GF_SHORT;
+    copy_str(f->name, r, GX_FOLDER_NAME); f->first = rd32(r + 32); f->count = rd32(r + 36); f->cover = rd32(r + 40);
+    if (((f->count < 1u) && h->count != 0u) || (uint64_t)f->first + f->count > h->count || (h->count != 0u && f->cover >= h->count)) return GF_RANGE;
+    return GF_OK;
+}
+uint32_t gx_details_abs(const gx_head_t *h, const gx_entry_t *e) { return h->details_off + e->details_off; }
+int gx_details_ok(const uint8_t *d, uint32_t n)
+{
+    uint32_t i = 0;
+    while (i < n) { if (i + 2u > n || i + 2u + d[i + 1u] > n) return 0; i += 2u + d[i + 1u]; }
+    return 1;
+}
+int gx_details_find(const uint8_t *d, uint32_t n, uint8_t tag, const uint8_t **v, uint32_t *len)
+{
+    uint32_t i = 0;
+    while (i < n) {
+        if (i + 2u > n || i + 2u + d[i + 1u] > n) return 0;
+        if (d[i] == tag) { *v = d + i + 2u; *len = d[i + 1u]; return 1; }
+        i += 2u + d[i + 1u];
+    }
+    return 0;
 }
 
 int gt_parse(const uint8_t *b, uint32_t n, gt_info_t *t)

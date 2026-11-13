@@ -15,13 +15,40 @@
 #define GT_STRIDE 2400u
 enum { GF_OK = 0, GF_SHORT = 1, GF_MAGIC = 2, GF_VERSION = 3, GF_CRC = 4, GF_NOLEVEL = 5, GF_RANGE = 6 };
 
-typedef struct { uint32_t count, entries_off, atlas_off; } gx_head_t;
-/* The first 32 bytes of the index. Checks the magic, the version, the entry size and the thumbnail size. */
+/* The library index (TGIX): version 0 (one list, 96 x 72 thumbnails, 160-byte entries) and version 1 (docs/features/TGIX_V1_SPEC.md: folders, details, 96 x 96 thumbnails, 176-byte entries). A reader works on the
+ * head, so every function below takes the head the parse filled in; nothing is read past a bound that was checked. */
+#define GX1_HEAD_BYTES 64u
+#define GX1_ENTRY_BYTES 176u
+#define GX1_FOLDER_BYTES 48u
+#define GX1_THUMB_W 96u
+#define GX1_THUMB_H 96u
+#define GX1_THUMB_BYTES (GX1_THUMB_W * GX1_THUMB_H * 2u)    /* 18,432 */
+#define GX_FOLDER_NAME 32u
+#define GX_MAX_ENTRIES 65535u
+#define GX_MAX_FOLDERS 255u
+#define GX_MAX_DETAILS 255u
+typedef struct {
+    uint32_t version, count, entries_off, atlas_off, entry_bytes, thumb_w, thumb_h, thumb_bytes;
+    uint32_t folder_count, folders_off, details_off, details_len, sort;      /* version 0: one folder (the whole list), no details */
+} gx_head_t;
+/* The head of the index (at least 64 bytes for version 1, 32 for version 0). Checks the magic, the version, the header CRC (version 1), the entry and thumbnail sizes, the counts and that the sections lie in order
+ * without overlapping or wrapping. GF_VERSION for a version or a size it does not know, GF_CRC for a damaged header, GF_RANGE for impossible offsets. */
 int gx_parse_head(const uint8_t *b, uint32_t n, gx_head_t *h);
+/* The same checks against the size of the file (a section past the end is GF_RANGE); call it when the size is known. */
+int gx_check_size(const gx_head_t *h, uint32_t file_size);
 uint32_t gx_entry_off(const gx_head_t *h, uint32_t i);                    /* byte offset of entry i in the file */
 uint32_t gx_thumb_off(const gx_head_t *h, uint32_t thumb);                /* byte offset of thumbnail number `thumb` (the entry's thumb field) */
-typedef struct { char path[GX_PATH_MAX + 1u]; char name[GX_NAME_MAX + 1u]; uint32_t size, width, height, thumb; } gx_entry_t;
-int gx_parse_entry(const uint8_t *rec, uint32_t n, gx_entry_t *e);        /* one 160-byte record; strings are cut at their NUL or their field end, never read past it */
+uint32_t gx_folder_off(const gx_head_t *h, uint32_t k);                   /* byte offset of folder k (version 1; the version 0 list has none) */
+typedef struct { char path[GX_PATH_MAX + 1u]; char name[GX_NAME_MAX + 1u]; uint32_t size, width, height, thumb, details_off, taken; uint16_t folder, flags, details_len; } gx_entry_t;
+int gx_parse_entry(const uint8_t *rec, uint32_t n, gx_entry_t *e);        /* a version 0 record (160 bytes); strings are cut at their NUL or their field end, never read past it */
+int gx_parse_entry_h(const gx_head_t *h, const uint8_t *rec, uint32_t n, gx_entry_t *e);   /* either version: the record of the head's entry size, with folder, details and thumbnail number checked against the head */
+typedef struct { char name[GX_FOLDER_NAME + 1u]; uint32_t first, count, cover; } gx_folder_t;
+int gx_parse_folder(const gx_head_t *h, const uint8_t *rec, uint32_t n, gx_folder_t *f);   /* one 48-byte record; GF_RANGE when its entries lie outside the list or it is empty (an empty library has one empty folder) */
+uint32_t gx_details_abs(const gx_head_t *h, const gx_entry_t *e);         /* byte offset of the entry's details in the file */
+/* Details items (`tag, length, bytes`): 1 if the run is well formed (no item reaches past n); gx_details_find: 1 and the item's bytes when the tag is present (an unknown tag is skipped; a run that overruns finds nothing). */
+int gx_details_ok(const uint8_t *d, uint32_t n);
+int gx_details_find(const uint8_t *d, uint32_t n, uint8_t tag, const uint8_t **v, uint32_t *len);
+enum { GD_FORMAT = 1, GD_CAMERA = 2, GD_LENS = 3, GD_TAKEN = 4, GD_SHUTTER = 5, GD_APERTURE = 6, GD_ISO = 7, GD_FOCAL = 8 };
 
 typedef struct { uint32_t width, height, file_size, canvas_off, canvas_len, thumb_off; uint16_t rx, ry, rw, rh; } gt_info_t;
 /* The first bytes (at least 128) of a .tgy: header checksum and the first level that is a raw RGB888 raster fit canvas of 800 x 720 with stride 2,400, inside the file. */

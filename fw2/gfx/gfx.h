@@ -31,6 +31,9 @@ void gfx_blit_abs(uint32_t sx, uint32_t sy, uint32_t dx, uint32_t dy, uint32_t w
 void gfx_blit_raw(uint32_t src_base, uint32_t dst_base, uint32_t src_off, uint32_t dst_off, uint32_t w);   /* one BLIT row piece of w (1..127) halfwords between two SDRAM halfword bases plus offsets below 2^19 (the zoom windows of M2) */
 void gfx_sblit(uint32_t sx, uint32_t sy, uint32_t dx, uint32_t dy, uint32_t w, uint32_t h, uint32_t scale);   /* copy w x h SOURCE pixels (from the stash) scaled by 1, 2 or 3 into the drawing target (the engine clamps the output at 127) */
 /* Helios H2 double buffering: which buffer is drawn into, a full redraw into the idle one flipped in at vblank, and an off-screen compose copied onto the displayed buffer. */
+void gfx_rrect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t r, uint16_t fg, uint16_t bg);   /* a filled rounded rectangle (radius 0..15 px), the corner cuts in bg (Talos op 8) */
+void gfx_corners(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t r, uint16_t bg);               /* only the four corner cuts, in bg, over what is drawn: rounds a picture (Talos op 10, core rev 30) */
+void gfx_dsblit(uint32_t sx, uint32_t sy, uint32_t dx, uint32_t dy, uint32_t w, uint32_t h, uint32_t ratio_x, uint32_t ratio_y);   /* scaled DOWN from the stash, w <= 127; ratio 0 = 3:4, 1 = 2:3, 2 = 1:2, 3 = 1:3 (Talos op 11, core rev 30) */
 uint32_t gfx_cur_buf(void);
 uint32_t gfx_front_buf(void);
 void gfx_set_target(uint32_t buf);

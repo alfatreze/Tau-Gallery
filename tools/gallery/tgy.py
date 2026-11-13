@@ -227,3 +227,170 @@ def parse_index(data):
         size, w, h, ti = struct.unpack_from("<IIII", r, PATH_BYTES + NAME_BYTES)
         out.append(dict(path=path, name=name, size=size, width=w, height=h, thumb=data[aoff + ti * THUMB_BYTES:aoff + (ti + 1) * THUMB_BYTES]))
     return out
+
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# TGIX version 1 (docs/features/TGIX_V1_SPEC.md): the library index of Tau Gallery 1.0: a folder table (one level), per-picture details, 96 x 96 square thumbnails, a sort key. The reader of the firmware is
+# fw2/gallery/gallery_fmt.c; this is the reference writer and reader. Layout: header (64) | entries (n x 176) | pad 4 KB | atlas (n x 18,432) | pad | folders (f x 48) | details | pad 4 KB.
+IDX1_VERSION, IDX1_HEADER, IDX1_ENTRY, FOLDER_ENTRY, FOLDER_NAME = 1, 64, 176, 48, 32
+THUMB1_W = THUMB1_H = 96
+THUMB1_BYTES = THUMB1_W * THUMB1_H * 2                  # 18,432
+MAX_ENTRIES, MAX_FOLDERS, MAX_DETAILS = 65535, 255, 255
+SORT_NAME, SORT_TAKEN, SORT_CONVERTED = 0, 1, 2
+(DT_FORMAT, DT_CAMERA, DT_LENS, DT_TAKEN, DT_SHUTTER, DT_APERTURE, DT_ISO, DT_FOCAL) = range(1, 9)
+ALL_PICTURES = "ALL PICTURES"
+
+def square_thumb(img):
+    """The picture scaled to cover a 96 x 96 square and cropped to it (a centre crop), RGB565 little-endian, 18,432 bytes."""
+    from PIL import Image
+    s = max(THUMB1_W / img.width, THUMB1_H / img.height)
+    w, h = max(THUMB1_W, round(img.width * s)), max(THUMB1_H, round(img.height * s))
+    small = img.resize((w, h), Image.LANCZOS) if (w, h) != img.size else img
+    x, y = (w - THUMB1_W) // 2, (h - THUMB1_H) // 2
+    return rgb565_le(small.crop((x, y, x + THUMB1_W, y + THUMB1_H)).convert("RGB").tobytes())
+
+def thumb72_to_square(t72):
+    """A version 0 thumbnail (96 x 72) padded to 96 x 96 with black bars (12 rows above and below), for merging an old index."""
+    assert len(t72) == THUMB_BYTES
+    return bytes(12 * THUMB1_W * 2) + t72 + bytes(12 * THUMB1_W * 2)
+
+def pack_details(d):
+    """Details items (`tag u8, length u8, bytes`) for the fields present in `d`; a field that is missing or None is not stored. Keys: format (ASCII, 15), camera, lens (Latin-1, 40), taken (year, month, day, hour, minute, second),
+    shutter (numerator, denominator), aperture (f-number x 10), iso, focal (millimetres x 10)."""
+    out = bytearray()
+    def item(tag, b): out.extend(bytes((tag, len(b))) + b)
+    if d.get("format"): item(DT_FORMAT, d["format"].encode("ascii", "replace")[:15])
+    if d.get("camera"): item(DT_CAMERA, d["camera"].encode("latin-1", "replace")[:40])
+    if d.get("lens"): item(DT_LENS, d["lens"].encode("latin-1", "replace")[:40])
+    if d.get("taken"): y, mo, dd, h, mi, s = d["taken"]; item(DT_TAKEN, struct.pack("<HBBBBB", y, mo, dd, h, mi, s))
+    if d.get("shutter"): n, de = d["shutter"]; item(DT_SHUTTER, struct.pack("<II", n, de))
+    if d.get("aperture"): item(DT_APERTURE, struct.pack("<H", d["aperture"]))
+    if d.get("iso"): item(DT_ISO, struct.pack("<I", d["iso"]))
+    if d.get("focal"): item(DT_FOCAL, struct.pack("<H", d["focal"]))
+    assert len(out) <= MAX_DETAILS
+    return bytes(out)
+
+def parse_details(b):
+    """The items of a details run as a dict (the same keys as pack_details); an unknown tag is skipped, a run that overruns raises."""
+    d = {}; i = 0
+    while i < len(b):
+        if i + 2 > len(b) or i + 2 + b[i + 1] > len(b): raise ValueError("a details run overruns")
+        tag, n = b[i], b[i + 1]; v = b[i + 2:i + 2 + n]; i += 2 + n
+        if tag == DT_FORMAT: d["format"] = v.decode("ascii", "replace")
+        elif tag == DT_CAMERA: d["camera"] = v.decode("latin-1")
+        elif tag == DT_LENS: d["lens"] = v.decode("latin-1")
+        elif tag == DT_TAKEN and n == 7: d["taken"] = struct.unpack("<HBBBBB", v)
+        elif tag == DT_SHUTTER and n == 8: d["shutter"] = struct.unpack("<II", v)
+        elif tag == DT_APERTURE and n == 2: d["aperture"] = struct.unpack("<H", v)[0]
+        elif tag == DT_ISO and n == 4: d["iso"] = struct.unpack("<I", v)[0]
+        elif tag == DT_FOCAL and n == 2: d["focal"] = struct.unpack("<H", v)[0]
+    return d
+
+def exif_details(img, source_format=None):
+    """The details a picture has, read from its EXIF (Pillow): a dict for pack_details. GPS is never read."""
+    from fractions import Fraction
+    d = {}
+    if source_format: d["format"] = source_format
+    try: ex = img.getexif(); ifd = ex.get_ifd(0x8769)
+    except Exception: return d
+    mk, md = str(ex.get(271, "") or "").strip("\0 "), str(ex.get(272, "") or "").strip("\0 ")
+    if md: d["camera"] = md if (not mk or md.lower().startswith(mk.lower())) else mk + " " + md
+    elif mk: d["camera"] = mk
+    lens = str(ifd.get(0xA434, "") or "").strip("\0 ")
+    if lens: d["lens"] = lens
+    ts = str(ifd.get(0x9003, "") or ex.get(306, "") or "").strip("\0 ")
+    try:
+        dt, tm = ts.split(" "); y, mo, dd = (int(x) for x in dt.split(":")); h, mi, s = (int(x) for x in tm.split(":"))
+        if 1990 <= y <= 2100 and 1 <= mo <= 12 and 1 <= dd <= 31 and h < 24 and mi < 60 and s < 61: d["taken"] = (y, mo, dd, h, mi, min(s, 59))
+    except Exception: pass
+    try:
+        et = float(ifd.get(0x829A)); fr = Fraction(et).limit_denominator(100000)
+        if et > 0 and fr.numerator > 0: d["shutter"] = (fr.numerator, fr.denominator)
+    except Exception: pass
+    try:
+        fn = float(ifd.get(0x829D))
+        if 0 < fn < 6553: d["aperture"] = int(round(fn * 10))
+    except Exception: pass
+    try:
+        iso = ifd.get(0x8827); iso = iso[0] if isinstance(iso, (tuple, list)) else iso
+        if iso and int(iso) > 0: d["iso"] = int(iso)
+    except Exception: pass
+    try:
+        fl = float(ifd.get(0x920A))
+        if 0 < fl < 6553: d["focal"] = int(round(fl * 10))
+    except Exception: pass
+    return d
+
+def taken_seconds(taken):
+    """Seconds since 2000-01-01 00:00:00 of a `taken` tuple (the clock as written, no time zone), 0 when unknown."""
+    import datetime
+    if not taken: return 0
+    try: s = int((datetime.datetime(*taken) - datetime.datetime(2000, 1, 1)).total_seconds())
+    except ValueError: return 0
+    return s if s > 0 else 0
+
+def pack_index_v1(entries, thumbs, folders=None, sort=SORT_NAME):
+    """entries: dict(path, name, size, width, height, folder=0, taken=0, details=b'' or a dict for pack_details), sorted by folder (the range of a folder is [first, first + count)); thumbs: THUMB1_BYTES each, in entry order;
+    folders: dict(name, cover=None) per folder (default one folder, ALL PICTURES). The file is padded to 4 KB at the end."""
+    n = len(entries)
+    folders = folders or [dict(name=ALL_PICTURES)]
+    if n > MAX_ENTRIES or len(thumbs) != n: raise ValueError("entry count")
+    if not 1 <= len(folders) <= MAX_FOLDERS: raise ValueError("folder count")
+    fi = [e.get("folder", 0) for e in entries]
+    if any(not 0 <= f < len(folders) for f in fi) or fi != sorted(fi): raise ValueError("entries must be sorted by folder, each folder index in range")
+    first = [fi.index(k) if k in fi else -1 for k in range(len(folders))]; count = [fi.count(k) for k in range(len(folders))]
+    if n and min(count) == 0: raise ValueError("a folder with no picture")
+    det = bytearray(); recs = []
+    for i, e in enumerate(entries):
+        dd = e.get("details", b""); dd = pack_details(dd) if isinstance(dd, dict) else bytes(dd)
+        if len(dd) > MAX_DETAILS: raise ValueError("details too long")
+        recs.append((len(det), len(dd))); det.extend(dd)
+    ent_off = IDX1_HEADER; atlas_off = align(ent_off + n * IDX1_ENTRY); fold_off = align(atlas_off + n * THUMB1_BYTES)
+    det_off = fold_off + len(folders) * FOLDER_ENTRY; total = align(det_off + len(det) + 1)
+    buf = bytearray(total)
+    head = struct.pack("<4sHHIHHHHIIIHHIIIII", b"TGIX", IDX1_VERSION, IDX1_HEADER, n, IDX1_ENTRY, THUMB1_W, THUMB1_H, len(folders), ent_off, atlas_off, fold_off, FOLDER_ENTRY, sort, det_off, len(det), 0, 0, 0)
+    head = head[:48] + bytes(12); buf[:60] = head[:60]; buf[60:64] = struct.pack("<I", crc(bytes(buf[:60])))
+    for i, (e, t) in enumerate(zip(entries, thumbs)):
+        p = e["path"].encode("utf-8"); nm = e["name"].encode("latin-1", "replace")
+        if len(p) >= PATH_BYTES: raise ValueError("path too long for the index: " + e["path"])
+        if len(t) != THUMB1_BYTES: raise ValueError("thumbnail size")
+        do, dl = recs[i]
+        rec = (p.ljust(PATH_BYTES, b"\0") + nm[:NAME_BYTES - 1].ljust(NAME_BYTES, b"\0") + struct.pack("<IIIIHHIHHI", e["size"], e["width"], e["height"], i, e.get("folder", 0), 1 if dl else 0, do, dl, 0, e.get("taken", 0)) + bytes(8))
+        assert len(rec) == IDX1_ENTRY
+        buf[ent_off + i * IDX1_ENTRY:ent_off + (i + 1) * IDX1_ENTRY] = rec
+        buf[atlas_off + i * THUMB1_BYTES:atlas_off + (i + 1) * THUMB1_BYTES] = t
+    for k, f in enumerate(folders):
+        cover = f.get("cover"); cover = (first[k] if first[k] >= 0 else 0) if cover is None else cover
+        rec = f["name"].encode("latin-1", "replace")[:FOLDER_NAME - 1].ljust(FOLDER_NAME, b"\0") + struct.pack("<III", max(first[k], 0), count[k], cover) + bytes(4)
+        buf[fold_off + k * FOLDER_ENTRY:fold_off + (k + 1) * FOLDER_ENTRY] = rec
+    buf[det_off:det_off + len(det)] = det
+    return bytes(buf)
+
+def parse_index_full(data):
+    """Both versions: dict(version, sort, folders=[dict(name, first, count, cover)], entries=[dict(path, name, size, width, height, thumb (bytes), folder, taken, details (dict)), thumb_w, thumb_h]). Raises ValueError for
+    anything the firmware's reader would refuse."""
+    if len(data) < 32 or data[:4] != b"TGIX": raise ValueError("not a TGIX file")
+    ver = struct.unpack_from("<H", data, 4)[0]
+    if ver == 0:
+        ents = parse_index(data)
+        for e in ents: e.update(folder=0, taken=0, details={})
+        return dict(version=0, sort=SORT_NAME, folders=[dict(name=ALL_PICTURES, first=0, count=len(ents), cover=0)], entries=ents, thumb_w=THUMB_W, thumb_h=THUMB_H)
+    if ver != IDX1_VERSION or len(data) < IDX1_HEADER: raise ValueError("unknown TGIX version")
+    (_, _, hsz, n, esz, tw, th, nf, eoff, aoff, foff, fesz, sort, doff, dlen, flags) = struct.unpack_from("<4sHHIHHHHIIIHHIII", data, 0)
+    if crc(data[:60]) != struct.unpack_from("<I", data, 60)[0]: raise ValueError("header checksum")
+    if hsz != IDX1_HEADER or esz != IDX1_ENTRY or fesz != FOLDER_ENTRY or (tw, th) != (THUMB1_W, THUMB1_H) or not 1 <= nf <= MAX_FOLDERS or n > MAX_ENTRIES or sort > 2: raise ValueError("TGIX header fields")
+    if eoff < IDX1_HEADER or aoff < eoff + n * esz or foff < aoff + n * THUMB1_BYTES or doff < foff + nf * fesz or doff + dlen > len(data): raise ValueError("TGIX sections")
+    folders = []
+    for k in range(nf):
+        r = data[foff + k * fesz:foff + (k + 1) * fesz]; first, count, cover = struct.unpack_from("<III", r, FOLDER_NAME)
+        if (count < 1 and n) or first + count > n or cover >= max(n, 1): raise ValueError("folder range")   # an empty library has one empty folder
+        folders.append(dict(name=r[:FOLDER_NAME].split(b"\0")[0].decode("latin-1"), first=first, count=count, cover=cover))
+    ents = []
+    for i in range(n):
+        r = data[eoff + i * esz:eoff + (i + 1) * esz]
+        size, w, h, ti, fo, fl, do, dl, _, taken = struct.unpack_from("<IIIIHHIHHI", r, PATH_BYTES + NAME_BYTES)
+        if ti >= n or fo >= nf or do + dl > dlen: raise ValueError("entry fields")
+        ents.append(dict(path=r[:PATH_BYTES].split(b"\0")[0].decode("utf-8"), name=r[PATH_BYTES:PATH_BYTES + NAME_BYTES].split(b"\0")[0].decode("latin-1"), size=size, width=w, height=h, folder=fo, taken=taken,
+                         thumb=data[aoff + ti * THUMB1_BYTES:aoff + (ti + 1) * THUMB1_BYTES], details=parse_details(data[doff + do:doff + do + dl]) if dl else {}))
+    for k, f in enumerate(folders):
+        if any(ents[i]["folder"] != k for i in range(f["first"], f["first"] + f["count"])): raise ValueError("folder entries not contiguous")
+    return dict(version=1, sort=sort, folders=folders, entries=ents, thumb_w=THUMB1_W, thumb_h=THUMB1_H)

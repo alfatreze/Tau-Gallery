@@ -215,6 +215,29 @@ void gfx_sblit(uint32_t sx, uint32_t sy, uint32_t dx, uint32_t dy, uint32_t w, u
     const uint32_t s = scale == 3u ? 3u : scale == 2u ? 2u : 0u;                                  /* the engine's scale field: 0 = 1x, 2 = 2x, 3 = 3x */
     blit_op(sx, sy, dx, dy, w, h, OP_SBLIT | (s << 10) | (s << 12), 0u, buf_base(cpu_buf));
 }
+/* Gallery 1.0 (docs/features/GALLERY_RTL_1_0_SPEC.md): the draw engine's rounded-rectangle ops. The radius rides in the glyph field (0..15), the colours in R_FB_COLOR as for a plain rectangle; ops 8, 10 and 11 are
+ * {GO bit 14, GO bits 2:0} (a bitstream before rev 30 does not know op 10 or 11: the firmware checks CORE_VERSION). OP_RRECT fills the box in fg with its four corner cuts in bg; OP_CORNERS paints only the cuts (in bg) over
+ * what is already there, which rounds a picture that has just been drawn. */
+static void rrect_op(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t r, uint16_t fg, uint16_t bg, uint32_t op)
+{
+    if (!w || !h || x >= GFX_W || y >= GFX_H) return;
+    if (x + w > GFX_W) w = GFX_W - x;
+    if (y + h > GFX_H) h = GFX_H - y;
+    if (r > 15u) r = 15u;
+    gt_note(&gfx_touch, y, h);
+    wait_fifo();
+    REG_WR(R_FB_ADDR, y * GFX_STRIDE + x);
+    REG_WR(R_FB_SIZE, (h << 9) | w);
+    set_colors(fg, bg);
+    FB_GO(op | (r << 3));
+}
+void gfx_rrect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t r, uint16_t fg, uint16_t bg) { rrect_op(x, y, w, h, r, fg, bg, 0x4000u); }
+void gfx_corners(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t r, uint16_t bg) { rrect_op(x, y, w, h, r, bg, bg, 0x4002u); }
+/* OP_DSBLIT: w x h source pixels from the stash (w <= 127) scaled DOWN into the buffer being drawn into, each axis by 0 = 3:4, 1 = 2:3, 2 = 1:2 or 3 = 1:3, every output pixel the rounded average of a 2 x 2 source box. */
+void gfx_dsblit(uint32_t sx, uint32_t sy, uint32_t dx, uint32_t dy, uint32_t w, uint32_t h, uint32_t ratio_x, uint32_t ratio_y)
+{
+    blit_op(sx, sy, dx, dy, w, h, 0x4003u | ((ratio_x & 3u) << 10) | ((ratio_y & 3u) << 12), 0u, buf_base(cpu_buf));
+}
 uint32_t gfx_cur_buf(void) { return cpu_buf; }
 int gfx_mb_write_buf(uint32_t a, uint32_t d) { return gfx_mb_write(a + (cpu_buf && a < GFX_STRIDE * GFX_H ? DBUF_BASE1_W : 0u), d); }      /* the mailbox write that follows the drawing buffer (visible rows only: the stash is shared) */
 uint32_t gfx_front_buf(void) { return caps_dbuf ? (REG_RD(R_DBUF_DISP) & 1u) : 0u; }
