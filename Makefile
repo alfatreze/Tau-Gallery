@@ -1080,7 +1080,7 @@ test-rtl-dmux:
 	for b in 1 2 3 4 5 6 7 8 9 10; do iverilog -g2012 -P tb_tau_dmux.BUG=$$b -o $(RTL_BUILD_DIR)/dmux_m$$b.out sim/tb_tau_dmux.v sim/sp_model.v src/fpga/core/tau_sdram_dmux.sv && if vvp $(RTL_BUILD_DIR)/dmux_m$$b.out | /usr/bin/grep -q "^  PASS"; then echo "MUTANT SURVIVED: $$b"; exit 1; else echo "mutant killed: $$b"; fi; done
 
 # Tau Gallery: the TGY decoder's SDRAM DMA (table load, stream fetch, pixel row writer) against the scheduler port model, whole memory compared; mutants must fail.
-TGY_DMA_SRC = sim/tb_tau_tgy_dma.v sim/sp_model.v src/fpga/core/tau_tgy_dma.sv src/fpga/core/tau_tgy_dcore.sv src/fpga/core/tau_tgy_wfifo.sv src/fpga/core/tau_cdc_gray_bus.sv src/fpga/core/tau_cdc_sync1.sv src/fpga/core/tau_tgy_dec.sv src/fpga/core/tau_tgy_tile.sv src/fpga/core/tau_tgy_ent.sv src/fpga/core/tau_tgy_idct.sv src/fpga/core/tau_tgy_recon.sv
+TGY_DMA_SRC = sim/tb_tau_tgy_dma.v sim/sp_model.v src/fpga/core/tau_tgy_dma.sv src/fpga/core/tau_tgy_dcore.sv src/fpga/core/tau_tgy_wfifo.sv src/fpga/core/tau_cdc_gray_bus.sv src/fpga/core/tau_cdc_sync1.sv src/fpga/core/tau_tgy_dec.sv src/fpga/core/tau_tgy_tile.sv src/fpga/core/tau_tgy_ent.sv src/fpga/core/tau_tgy_idct.sv src/fpga/core/tau_tgy_recon.sv src/fpga/core/tau_hist_if.sv src/fpga/core/tau_hist.sv
 .PHONY: test-rtl-tgy-dma
 test-rtl-tgy-dma:
 	mkdir -p $(RTL_BUILD_DIR)
@@ -1089,7 +1089,7 @@ test-rtl-tgy-dma:
 	for b in 2 3 4 5 6 7 8 9 11 12 13 14; do iverilog -g2012 -P tb_tau_tgy_dma.C444=1 -P tb_tau_tgy_dma.BUG=$$b -o $(RTL_BUILD_DIR)/dma_m$$b.out $(TGY_DMA_SRC) && if vvp $(RTL_BUILD_DIR)/dma_m$$b.out +VEC=$(RTL_BUILD_DIR)/dec_vec.hex +N=11 | /usr/bin/grep -q "^DMA PASSED"; then echo "MUTANT SURVIVED: $$b"; exit 1; else echo "mutant killed: $$b"; fi; done
 
 # Tau Gallery: the register block with its clock crossings + DMA + decoder, driven as the CPU will (two unrelated clocks); register mutants must fail.
-TGY_UNIT_SRC = sim/tb_tau_tgy_unit.v sim/sp_model.v src/fpga/core/tau_tgy_unit.sv src/fpga/core/tau_tgy_regs.sv src/fpga/core/tau_tgy_dma.sv src/fpga/core/tau_tgy_dcore.sv src/fpga/core/tau_tgy_wfifo.sv src/fpga/core/tau_cdc_gray_bus.sv src/fpga/core/tau_cdc_sync1.sv src/fpga/core/tau_tgy_dec.sv src/fpga/core/tau_tgy_tile.sv src/fpga/core/tau_tgy_ent.sv src/fpga/core/tau_tgy_idct.sv src/fpga/core/tau_tgy_recon.sv
+TGY_UNIT_SRC = sim/tb_tau_tgy_unit.v sim/sp_model.v src/fpga/core/tau_tgy_unit.sv src/fpga/core/tau_tgy_regs.sv src/fpga/core/tau_tgy_dma.sv src/fpga/core/tau_tgy_dcore.sv src/fpga/core/tau_tgy_wfifo.sv src/fpga/core/tau_cdc_gray_bus.sv src/fpga/core/tau_cdc_sync1.sv src/fpga/core/tau_tgy_dec.sv src/fpga/core/tau_tgy_tile.sv src/fpga/core/tau_tgy_ent.sv src/fpga/core/tau_tgy_idct.sv src/fpga/core/tau_tgy_recon.sv src/fpga/core/tau_hist_if.sv src/fpga/core/tau_hist.sv
 .PHONY: test-rtl-tgy-unit
 test-rtl-tgy-unit:
 	mkdir -p $(RTL_BUILD_DIR)
@@ -1098,7 +1098,7 @@ test-rtl-tgy-unit:
 	for b in 1 2 3 4 5 6; do iverilog -g2012 -P tb_tau_tgy_unit.C444=1 -P tb_tau_tgy_unit.BUG=$$b -o $(RTL_BUILD_DIR)/unit_m$$b.out $(TGY_UNIT_SRC) && if vvp $(RTL_BUILD_DIR)/unit_m$$b.out +VEC=$(RTL_BUILD_DIR)/dec_vec.hex | /usr/bin/grep -q "^UNIT PASSED"; then echo "MUTANT SURVIVED: $$b"; exit 1; else echo "mutant killed: $$b"; fi; done
 
 # Tau Gallery: tau_soc.v with TGY_ENABLE and the real VexRiscv running sim/fw_tgy/main.c: the MMIO window 0x220-0x24C, the interrupt source 4 and CORE_VERSION rev 29 (-DTAU_TGY) against tau_tgy_unit and the port model; the picture memory compared byte for byte.
-TGY_SOC_SRC = sim/tb_tgy_soc.v build/rtl/tau_soc_sim.v src/fpga/rtl/VexRiscv_Full.v src/fpga/core/pcm_fifo.v src/fpga/core/tau_halcyon.sv src/fpga/core/tau_sdram_addr_decode.sv src/fpga/core/tau_sdram_wb_adapter.sv src/fpga/core/tau_cdc_sync1.sv src/fpga/core/tau_clut_wr.sv src/fpga/core/tau_cymo_resamp.sv src/fpga/core/tau_cymo_feed.sv src/fpga/core/tau_pcm_ring.sv sim/sp_model.v src/fpga/core/tau_tgy_unit.sv src/fpga/core/tau_tgy_regs.sv src/fpga/core/tau_tgy_dma.sv src/fpga/core/tau_tgy_dcore.sv src/fpga/core/tau_tgy_wfifo.sv src/fpga/core/tau_cdc_gray_bus.sv src/fpga/core/tau_tgy_dec.sv src/fpga/core/tau_tgy_tile.sv src/fpga/core/tau_tgy_ent.sv src/fpga/core/tau_tgy_idct.sv src/fpga/core/tau_tgy_recon.sv
+TGY_SOC_SRC = sim/tb_tgy_soc.v build/rtl/tau_soc_sim.v src/fpga/rtl/VexRiscv_Full.v src/fpga/core/pcm_fifo.v src/fpga/core/tau_halcyon.sv src/fpga/core/tau_sdram_addr_decode.sv src/fpga/core/tau_sdram_wb_adapter.sv src/fpga/core/tau_cdc_sync1.sv src/fpga/core/tau_clut_wr.sv src/fpga/core/tau_cymo_resamp.sv src/fpga/core/tau_cymo_feed.sv src/fpga/core/tau_pcm_ring.sv sim/sp_model.v src/fpga/core/tau_tgy_unit.sv src/fpga/core/tau_tgy_regs.sv src/fpga/core/tau_tgy_dma.sv src/fpga/core/tau_tgy_dcore.sv src/fpga/core/tau_tgy_wfifo.sv src/fpga/core/tau_cdc_gray_bus.sv src/fpga/core/tau_tgy_dec.sv src/fpga/core/tau_tgy_tile.sv src/fpga/core/tau_tgy_ent.sv src/fpga/core/tau_tgy_idct.sv src/fpga/core/tau_tgy_recon.sv src/fpga/core/tau_hist_if.sv src/fpga/core/tau_hist.sv
 .PHONY: test-rtl-tgy-soc
 test-rtl-tgy-soc: $(RTL_BUILD_DIR)/tau_soc_sim.v
 	$(PYTHON) sim/gen_tgy_dec_vectors.py $(RTL_BUILD_DIR)/dec_vec.hex > /dev/null
@@ -1181,3 +1181,12 @@ outcomes-validate:
 	$(PYTHON) tools/outcomes.py validate docs/outcomes/outcomes.jsonl
 outcomes-report:
 	$(PYTHON) tools/outcomes.py report docs/outcomes/outcomes.jsonl --md
+
+# Tau Gallery 1.0 pixel RTL (K1 dither + K5 colour table, K4 histogram core and its register/crossing wrapper), each against a reference with its mutants
+.PHONY: test-rtl-gallery-fx
+test-rtl-gallery-fx:
+	mkdir -p $(RTL_BUILD_DIR)
+	$(PYTHON) sim/test_rtl_pixfx.py --mutants
+	$(PYTHON) sim/test_rtl_hist.py --mutants
+	iverilog -g2012 -Isrc/fpga/core -o $(RTL_BUILD_DIR)/hif.vvp sim/tb_tau_hist_if.v src/fpga/core/tau_hist_if.sv src/fpga/core/tau_hist.sv && vvp $(RTL_BUILD_DIR)/hif.vvp | /usr/bin/grep -q "^HISTIF PASSED"
+	for b in 1 2 3; do iverilog -g2012 -Isrc/fpga/core -P tb_tau_hist_if.BUG=$$b -o $(RTL_BUILD_DIR)/hif_m$$b.vvp sim/tb_tau_hist_if.v src/fpga/core/tau_hist_if.sv src/fpga/core/tau_hist.sv && if vvp $(RTL_BUILD_DIR)/hif_m$$b.vvp | /usr/bin/grep -q "^HISTIF PASSED"; then echo "MUTANT SURVIVED: $$b"; exit 1; else echo "mutant killed: $$b"; fi; done

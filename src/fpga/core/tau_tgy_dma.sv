@@ -37,7 +37,10 @@ module tau_tgy_dma #(parameter integer C444 = 0, parameter integer BUG = 0, para
     input  wire        p_r_valid,
     input  wire [15:0] p_r_data,
     input  wire        p_r_last,
-    input  wire        p_done
+    input  wire        p_done,
+    output wire        tap_valid,
+    output wire [6:0]  tap_x, tap_y,
+    output wire [7:0]  tap_r, tap_g, tap_b
 );
     // ---- scheduler inputs, registered once
     reg rv_q = 1'b0, dn_q = 1'b0; reg [15:0] rd_q = 16'd0;
@@ -74,7 +77,8 @@ module tau_tgy_dma #(parameter integer C444 = 0, parameter integer BUG = 0, para
     wire [24:0] rec_addr_o; wire [8:0] rec_nhw_o; wire rec_b0_o, rec_lodd_o;
     tau_tgy_dcore #(.C444(C444), .BUG(BUG >= 11 ? BUG - 10 : 0)) dcore (.clk_dec(clk_dec), .rst_dec(rst_dec), .clk_mem(clk), .start_tog(start_tog), .rst_tog(rst_tog), .cfg_fmt(fmt), .cfg_w(w), .cfg_h(h), .cfg_len(len), .cfg_dst(dst), .cfg_pitch(pitch),
         .q_we(dec_qwe), .q_sel(dec_qsel), .q_idx(dec_qidx), .q_val(dec_qval), .wf_valid(wf_rvalid), .wf_data(wf_rdata), .wf_pop(wf_pop), .fin_tog(fin_tog), .err_tog(err_tog),
-        .rows_wr(rows_wr), .rows_arr_m(rows_arr_m), .r_addr(radr), .r_d0(rd0), .r_d1(rd1), .r_d2(rd2), .r_d3(rd3), .r_slot(wslot), .rec_addr_o(rec_addr_o), .rec_nhw_o(rec_nhw_o), .rec_b0_o(rec_b0_o), .rec_lodd_o(rec_lodd_o));
+        .rows_wr(rows_wr), .rows_arr_m(rows_arr_m), .r_addr(radr), .r_d0(rd0), .r_d1(rd1), .r_d2(rd2), .r_d3(rd3), .r_slot(wslot), .rec_addr_o(rec_addr_o), .rec_nhw_o(rec_nhw_o), .rec_b0_o(rec_b0_o), .rec_lodd_o(rec_lodd_o),
+        .tap_valid(tap_valid), .tap_x(tap_x), .tap_y(tap_y), .tap_r(tap_r), .tap_g(tap_g), .tap_b(tap_b));
     wire fin_s, err_s; reg fin_q = 1'b0, err_q = 1'b0;
     tau_cdc_sync1 #(.STAGES(3)) u_fin (.clk_dst(clk), .d_src(fin_tog), .q_dst(fin_s));
     tau_cdc_sync1 #(.STAGES(3)) u_err (.clk_dst(clk), .d_src(err_tog), .q_dst(err_s));

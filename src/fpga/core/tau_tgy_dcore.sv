@@ -30,7 +30,10 @@ module tau_tgy_dcore #(parameter integer C444 = 0, parameter integer BUG = 0, pa
     input  wire [2:0]  r_slot,
     output wire [24:0] rec_addr_o,
     output wire [8:0]  rec_nhw_o,
-    output wire        rec_b0_o, rec_lodd_o
+    output wire        rec_b0_o, rec_lodd_o,
+    output wire        tap_valid,
+    output wire [6:0]  tap_x, tap_y,
+    output wire [7:0]  tap_r, tap_g, tap_b
 );
     // ---- commands from the SDRAM clock
     wire st_s, rt_s; reg st_q = 1'b0, rt_q = 1'b0;
@@ -53,6 +56,7 @@ module tau_tgy_dcore #(parameter integer C444 = 0, parameter integer BUG = 0, pa
         .in_valid(wf_valid), .in_word(wf_data), .in_ready(dec_in_ready), .hold(hold), .busy(dec_busy), .done(dec_done), .err(dec_err),
         .px_valid(px_valid), .px_x(px_x), .px_y(px_y), .px_r(px_r), .px_g(px_g), .px_b(px_b), .px_last(px_last));
     assign wf_pop = wf_valid && dec_in_ready;
+    assign tap_valid = px_valid; assign tap_x = px_x; assign tap_y = px_y; assign tap_r = px_r; assign tap_g = px_g; assign tap_b = px_b;   // the pixel stream, for the histogram unit
 
     // ---- events back
     reg [7:0] fd = 8'd0;

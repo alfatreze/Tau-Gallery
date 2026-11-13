@@ -1259,7 +1259,7 @@ module tau_soc #(
     reg  [24:0] land_base_r = 25'd0;
     reg         land_clear_r = 1'b0;
     assign fb_tgy_addr  = (TGY_ENABLE != 0) ? mmio_reg : 10'd0;
-    assign fb_tgy_we    = (TGY_ENABLE != 0) && d_req && d_is_mmio && dWE && (mmio_reg >= 10'h220) && (mmio_reg <= 10'h24C);
+    assign fb_tgy_we    = (TGY_ENABLE != 0) && d_req && d_is_mmio && dWE && ((mmio_reg >= 10'h220 && mmio_reg <= 10'h24C) || (mmio_reg >= 10'h260 && mmio_reg <= 10'h278));   // decoder 0x220-0x24C, histogram unit 0x260-0x278 (0x250/0x254 are the pixel effects)
     assign fb_tgy_wdata = (TGY_ENABLE != 0) ? dDAT_MOSI : 32'd0;
     reg         irq_tgy_q = 1'b0;
     assign fb_land_base  = (LAND_ENABLE != 0) ? land_base_r : 25'd0;

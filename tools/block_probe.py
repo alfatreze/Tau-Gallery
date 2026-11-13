@@ -5,7 +5,7 @@
   python3 tools/block_probe.py launch NAME PROBE [--seed 1] [--period-scale 1.0] [--dry-run] [--wait-free] [--force]
   python3 tools/block_probe.py status NAME                    # running / done; resources and the worst setup / hold slack per corner and per clock
   python3 tools/block_probe.py collect NAME                   # copy the reports to work/diagnostics/block_probe-NAME/
-PROBE is one of: """ + "unit, ent" + """. The probe project has the RTL of the block copied from the CURRENT working tree (uncommitted changes included), a top that puts every input and output one register away from a virtual pin, the clocks as
+PROBE is one of: """ + "unit, ent, pixfx" + """. The probe project has the RTL of the block copied from the CURRENT working tree (uncommitted changes included), a top that puts every input and output one register away from a virtual pin, the clocks as
 pins at the block's real periods (unit: 15 / 10 / 20 ns, ent: 10 ns) and asynchronous clock groups, the device and the fit settings of src/fpga/ap_core.qsf. Needs the owner's yes for the VM (rule 3: state the finish time; the tool prints it;
 measured 2026-11-11: `ent` about 15 minutes, `unit` about 40; the full core takes 1h45); it refuses to start while a Quartus process runs on the VM (--wait-free polls until it is free; --force only if sure it is idle). --period-scale 0.8 tightens every clock to see how much margin
 there is. Same ssh constants and shape as tools/vm_fit.py."""
@@ -19,7 +19,8 @@ QBIN = V.QUARTUS.rsplit("/", 1)[0]; QSTA = QBIN + "/quartus_sta"
 PROBES = {
     "unit": dict(top="tau_tgy_unit_probe_top", clocks={"clk_sys": 15.0, "clk_mem": 10.0, "clk_dec": 20.0},
                  files=["tau_sdram_dmux.sv", "tau_tgy_unit.sv", "tau_tgy_regs.sv", "tau_tgy_dma.sv", "tau_tgy_dcore.sv", "tau_tgy_wfifo.sv", "tau_cdc_gray_bus.sv", "tau_cdc_sync1.sv", "tau_tgy_dec.sv", "tau_tgy_tile.sv",
-                        "tau_tgy_ent.sv", "tau_tgy_idct.sv", "tau_tgy_recon.sv"], virtual=["vi_sys[*]", "vi_mem[*]", "vo_sys[*]", "vo_mem[*]"]),
+                        "tau_tgy_ent.sv", "tau_tgy_idct.sv", "tau_tgy_recon.sv", "tau_hist_if.sv", "tau_hist.sv"], virtual=["vi_sys[*]", "vi_mem[*]", "vo_sys[*]", "vo_mem[*]"]),
+    "pixfx": dict(top="tau_pixfx_probe_top", clocks={"clk_sys": 15.0, "clk_vid": 25.0}, files=["tau_pixfx.sv"], virtual=["vi_sys[*]", "vi_vid[*]", "vo_sys[*]", "vo_vid[*]"]),
     "ent": dict(top="tau_tgy_ent_probe_top", clocks={"clk": 10.0}, files=["tau_tgy_ent.sv"], virtual=["vi[*]", "vo[*]"]),
 }
 SETTINGS = """set_global_assignment -name FAMILY "Cyclone V"
