@@ -42,6 +42,10 @@ uint32_t tgy_hw_cycles(void);
 int tgy_hw_level(const tgy_file_t *f, const tgy_level_t *l, uint32_t dst0, uint32_t pitch, int (*tick)(void *ctx, uint32_t tx, uint32_t ty), void *ctx);
 /* The level on the 800 x 720 viewer canvas at its own rectangle: plane = SDRAM byte address of canvas pixel (0, 0), pitch 2,400. */
 int tgy_hw_show(const tgy_file_t *f, const tgy_level_t *l, uint32_t plane, int (*tick)(void *ctx, uint32_t tx, uint32_t ty), void *ctx);
+/* K7 (core rev 30, docs/features/GALLERY_RTL_1_0_SPEC.md): the scatter writer. tgy_hw_scatter(on, stx, sty) sets how the NEXT tile starts write: with on, every pixel goes to dst + x * stx + y * sty (signed byte steps, any rotation or
+ * mirror) instead of whole rows at dst + y * pitch. tgy_hw_level_rot decodes the whole level into a displayed picture of orientation o (gallery_rot.h) whose pixel (0, 0) is at dst0, plane pitch `pitch`; scatter is off again after. */
+void tgy_hw_scatter(int on, int32_t stx, int32_t sty);
+int tgy_hw_level_rot(const tgy_file_t *f, const tgy_level_t *l, uint32_t dst0, uint32_t pitch, uint32_t o, int (*tick)(void *ctx, uint32_t tx, uint32_t ty), void *ctx);
 uint32_t tgy_hw_status(void);                                                /* STATUS as of the last tile */
 void tgy_hw_forget(void);                                                    /* drop the tables cache (after a reset of the decoder) */
 #endif

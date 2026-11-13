@@ -87,6 +87,8 @@
 #define R_TGY_GEOM   0x80000238u        /* [17:16] format (0 grey, 2 4:2:0), [15:8] width, [7:0] height of the tile in luma samples */
 #define R_TGY_QY     0x8000023Cu        /* SDRAM byte address of the Y quantisation table (64 u16, zigzag, even) */
 #define R_TGY_QC     0x80000240u        /* the same for Cb and Cr */
+#define R_TGY_STX    0x80000248u        /* K7 (core rev 30): signed byte step from one pixel of a source row to the next, 18 bit (scatter mode, GEOM bit 18) */
+#define R_TGY_STY    0x8000024Cu        /* the signed byte step from one source row to the next, 18 bit */
 #define R_TGY_CYCLES 0x80000244u        /* SDRAM-clock cycles of the last tile (valid after done) */
 #define R_SDA_SEL    0x800001D4u        /* per-port SDRAM statistics window (tau_sdr_stat_win.sv): write {port[1:0], stat[2:0]} (stat 0 requests, 1 words, 2 busy cycles, 3 worst wait, 4 urgent over the bound, 5 bad requests; port 0 scan-out, 1 engine, 2 CPU) -- ignored while pending; read [31] built in, [8] a snapshot is pending, [4:0] the selection */
 #define R_SDA_VAL    0x800001D8u        /* read: the snapshot of the selected counter, stable until the next select; valid once R_SDA_SEL bit 8 is 0 */

@@ -11,13 +11,17 @@
 // The scheduler's read data and `done` are registered once on the way in (their paths from the scheduler are long at 100 MHz).
 // BUG (test only): 0 = correct; 2 no FIFO space check, 3 no odd-start skip, 4 last byte enable, 5 first byte enable, 6 enables forced, 7 no timeout, 8 the word FIFO is not cleared before a tile,
 // 9 the finished tile does not wait for the last rows (done at once), 10 words not limited to ceil(len / 4) (equivalent: the FIFO is cleared before every tile, so it is not in the sweep), 11..14 mutants of tau_tgy_dcore (1..4).
-module tau_tgy_dma #(parameter integer C444 = 0, parameter integer BUG = 0, parameter [23:0] TMO = 24'hFFFFFF) (
+// K7 (rotation): with cfg_scat the tile is not written as whole rows but pixel by pixel at dst + x * stx + y * sty (signed byte steps), 3 bytes a pixel as a 2-halfword burst with byte enables, so any of the 8 rotations / mirrors of
+// the picture is just a choice of the two steps (docs/features/GALLERY_RTL_1_0_SPEC.md). SBUG (test only) selects mutants of that path (1..10, killed by sim/tb_tau_tgy_dma.v).
+module tau_tgy_dma #(parameter integer C444 = 0, parameter integer BUG = 0, parameter integer SBUG = 0, parameter [23:0] TMO = 24'hFFFFFF) (
     input  wire        clk, rst,
     input  wire        clk_dec, rst_dec,
     input  wire [25:0] cfg_src, cfg_dst, cfg_qy, cfg_qc,
     input  wire [19:0] cfg_len,
     input  wire [15:0] cfg_pitch,
     input  wire [1:0]  cfg_fmt,
+    input  wire        cfg_scat,
+    input  wire [17:0] cfg_stx, cfg_sty,
     input  wire [7:0]  cfg_w, cfg_h,
     input  wire        cmd_tile, cmd_tables, cmd_abort,
     output wire        busy,
@@ -56,8 +60,17 @@ module tau_tgy_dma #(parameter integer C444 = 0, parameter integer BUG = 0, para
     wire run = (mode == M_TILE) && (tph == 2'd3);
     // ---- port state
     localparam [1:0] P_IDLE = 0, P_REQ = 1, P_WAIT = 2;
-    localparam [1:0] K_TBL = 0, K_STR = 1, K_WR = 2;
+    localparam [1:0] K_TBL = 0, K_STR = 1, K_WR = 2, K_SC = 3;
     reg [1:0] pst, pk;
+    // ---- scatter writer state (K7)
+    localparam [2:0] SC_IDLE = 3'd0, SC_R0 = 3'd1, SC_R1 = 3'd2, SC_R2 = 3'd3, SC_Q = 3'd4, SC_REQ = 3'd5, SC_WAIT = 3'd6, SC_NEXT = 3'd7;
+    reg scat; reg [17:0] stx, sty; reg [2:0] sc_st; reg [6:0] sc_x; reg [25:0] sc_rowb, sc_a; reg [31:0] sc_w0, sc_w1; reg [15:0] sc_h0, sc_h1;
+    wire [8:0] sc_n = {2'd0, sc_x} + {1'd0, sc_x, 1'd0};                                   // byte offset of the pixel in the ring row: 3 x
+    wire [6:0] sc_wa = sc_n[8:2] + ((sc_st == SC_R1) ? 7'd1 : 7'd0);                         // the ring word to read: the one holding the first byte, then the next
+    wire [1:0] sc_l = sc_n[1:0];
+    wire sc_last = (SBUG == 6) ? (sc_x == w[6:0]) : ((sc_x == w[6:0] - 7'd1) || (w == 8'd128 && sc_x == 7'd127));
+    wire [25:0] stx_e = (SBUG == 1) ? 26'd3 : (SBUG == 10) ? {8'd0, stx} : {{8{stx[17]}}, stx};
+    wire [25:0] sty_e = (SBUG == 2) ? {10'd0, pitch} : (SBUG == 10) ? {8'd0, sty} : {{8{sty[17]}}, sty};
     // ---- tables
     reg tbl_stage; reg tbl_req_done; reg [5:0] tbl_cnt; reg tbl_qsel;
     reg dec_qwe; reg [5:0] dec_qidx; reg dec_qsel; reg [15:0] dec_qval;
@@ -75,7 +88,7 @@ module tau_tgy_dma #(parameter integer C444 = 0, parameter integer BUG = 0, para
     wire fin_tog, err_tog; wire [4:0] rows_arr_m; reg [4:0] rows_wr;
     wire [9:0] radr; wire [7:0] rd0, rd1, rd2, rd3; wire [2:0] wslot = rows_wr[2:0];
     wire [24:0] rec_addr_o; wire [8:0] rec_nhw_o; wire rec_b0_o, rec_lodd_o;
-    tau_tgy_dcore #(.C444(C444), .BUG(BUG >= 11 ? BUG - 10 : 0)) dcore (.clk_dec(clk_dec), .rst_dec(rst_dec), .clk_mem(clk), .start_tog(start_tog), .rst_tog(rst_tog), .cfg_fmt(fmt), .cfg_w(w), .cfg_h(h), .cfg_len(len), .cfg_dst(dst), .cfg_pitch(pitch),
+    tau_tgy_dcore #(.C444(C444), .BUG(BUG >= 11 ? BUG - 10 : 0)) dcore (.clk_dec(clk_dec), .rst_dec(rst_dec), .clk_mem(clk), .start_tog(start_tog), .rst_tog(rst_tog), .cfg_fmt(fmt), .cfg_w(w), .cfg_h(h), .cfg_len(len), .cfg_dst(dst), .cfg_pitch(pitch), .cfg_scat(scat),
         .q_we(dec_qwe), .q_sel(dec_qsel), .q_idx(dec_qidx), .q_val(dec_qval), .wf_valid(wf_rvalid), .wf_data(wf_rdata), .wf_pop(wf_pop), .fin_tog(fin_tog), .err_tog(err_tog),
         .rows_wr(rows_wr), .rows_arr_m(rows_arr_m), .r_addr(radr), .r_d0(rd0), .r_d1(rd1), .r_d2(rd2), .r_d3(rd3), .r_slot(wslot), .rec_addr_o(rec_addr_o), .rec_nhw_o(rec_nhw_o), .rec_b0_o(rec_b0_o), .rec_lodd_o(rec_lodd_o),
         .tap_valid(tap_valid), .tap_x(tap_x), .tap_y(tap_y), .tap_r(tap_r), .tap_g(tap_g), .tap_b(tap_b));
@@ -87,12 +100,13 @@ module tau_tgy_dma #(parameter integer C444 = 0, parameter integer BUG = 0, para
 
     // ---- the writer's data path: the ring's read port (on clk), two clocks of lead, byte enables
     reg idx1_0; reg [1:0] be1;
-    assign radr = {wslot, p_idx[7:1]};
-    wire [8:0] rnhw = rec_nhw_o; wire rb0 = rec_b0_o, rlodd = rec_lodd_o;
+    assign radr = (scat && mode == M_TILE) ? {wslot, sc_wa} : {wslot, p_idx[7:1]};
+    wire use_sc = (pk == K_SC);
+    wire [8:0] rnhw = use_sc ? 9'd2 : rec_nhw_o; wire rb0 = use_sc ? sc_a[0] : rec_b0_o, rlodd = use_sc ? ((SBUG == 4) ? 1'b0 : !sc_a[0]) : rec_lodd_o;
     wire [1:0] be_comb = {!(p_idx[8:0] == rnhw - 9'd1 && rlodd && BUG != 4), !(p_idx == 10'd0 && rb0 && BUG != 5)};
     always @(posedge clk) begin
         idx1_0 <= p_idx[0]; be1 <= be_comb;
-        p_wdata <= idx1_0 ? {rd3, rd2} : {rd1, rd0};
+        p_wdata <= use_sc ? (idx1_0 ? sc_h1 : sc_h0) : (idx1_0 ? {rd3, rd2} : {rd1, rd0});
         p_be <= (BUG == 6) ? 2'b11 : be1;
     end
 
@@ -105,7 +119,8 @@ module tau_tgy_dma #(parameter integer C444 = 0, parameter integer BUG = 0, para
 
     // ---- main control
     wire want_tbl = (mode == M_TABLES) && !tbl_req_done;
-    wire want_wr  = (mode == M_TILE) && (rows_arr_m != rows_wr);
+    wire want_wr  = (mode == M_TILE) && !scat && (rows_arr_m != rows_wr);
+    wire want_sc  = (sc_st == SC_REQ);
     wire [20:0] rlen_full = (hw_left > 21'd32) ? 21'd32 : hw_left;
     wire want_str = run && (hw_left != 21'd0) && ((BUG == 2) || ((8'd128 - scount) >= rlen_full[7:0]));
     reg [24:0] req_addr_n; reg [9:0] req_len_n; reg req_we_n; reg [1:0] req_k_n; reg req_go;
@@ -113,6 +128,7 @@ module tau_tgy_dma #(parameter integer C444 = 0, parameter integer BUG = 0, para
         req_go = 1'b0; req_addr_n = 25'd0; req_len_n = 10'd0; req_we_n = 1'b0; req_k_n = K_TBL;
         if (pst == P_IDLE && mode != M_DRAIN && !err_pend) begin
             if (want_tbl) begin req_go = 1'b1; req_addr_n = (tbl_stage ? qc[25:1] : qy[25:1]); req_len_n = 10'd64; req_we_n = 1'b0; req_k_n = K_TBL; end
+            else if (want_sc) begin req_go = 1'b1; req_addr_n = sc_a[25:1]; req_len_n = 10'd2; req_we_n = 1'b1; req_k_n = K_SC; end
             else if (want_wr) begin req_go = 1'b1; req_addr_n = rec_addr_o; req_len_n = {1'b0, rec_nhw_o}; req_we_n = 1'b1; req_k_n = K_WR; end
             else if (want_str) begin req_go = 1'b1; req_addr_n = s_hw; req_len_n = rlen_full[9:0]; req_we_n = 1'b0; req_k_n = K_STR; end
         end
@@ -122,7 +138,7 @@ module tau_tgy_dma #(parameter integer C444 = 0, parameter integer BUG = 0, para
         ev_done <= 1'b0; ev_err <= 1'b0; ev_tables <= 1'b0; dec_qwe <= 1'b0;
         if (rst) begin
             mode <= M_IDLE; pst <= P_IDLE; p_valid <= 1'b0; err_pend <= 1'b0; scount <= 8'd0; hv <= 1'b0; nb <= 4'd0; acc <= 64'd0; clear_req <= 1'b0; tph <= 2'd0; drain_cnt <= 5'd0;
-            rows_wr <= 5'd0; tcyc <= 24'd0; tile_cycles <= 32'd0; err_code <= 4'd0; dec_fin <= 1'b0; sw_p <= 7'd0; sr_p <= 7'd0; hw_left <= 21'd0; words_left <= 18'd0;
+            rows_wr <= 5'd0; scat <= 1'b0; sc_st <= SC_IDLE; sc_x <= 7'd0; tcyc <= 24'd0; tile_cycles <= 32'd0; err_code <= 4'd0; dec_fin <= 1'b0; sw_p <= 7'd0; sr_p <= 7'd0; hw_left <= 21'd0; words_left <= 18'd0;
         end else begin
             // ---- port FSM
             case (pst)
@@ -136,6 +152,7 @@ module tau_tgy_dma #(parameter integer C444 = 0, parameter integer BUG = 0, para
                 P_WAIT: if (dn_q) begin
                     pst <= P_IDLE;
                     if (pk == K_WR) rows_wr <= rows_wr + 5'd1;
+                    if (pk == K_SC) sc_st <= SC_NEXT;
                     if (pk == K_TBL) begin
                         if (tbl_stage) begin ev_tables <= 1'b1; mode <= M_IDLE; end
                         else begin tbl_stage <= 1'b1; tbl_req_done <= 1'b0; end
@@ -156,11 +173,38 @@ module tau_tgy_dma #(parameter integer C444 = 0, parameter integer BUG = 0, para
                 if (skip) begin acc[8 * nb +: 8] <= sfq[15:8]; nb <= nb + 4'd1; skip <= 1'b0; end
                 else begin acc[8 * nb +: 16] <= sfq; nb <= nb + 4'd2; end
             end
+            // ---- scatter writer (K7): one row of the ring at a time, a pixel per request
+            case (sc_st)
+                SC_IDLE: if (mode == M_TILE && scat && rows_arr_m != rows_wr && !err_pend) begin sc_x <= 7'd0; sc_a <= sc_rowb; sc_st <= SC_R0; end
+                SC_R0: sc_st <= SC_R1;                                                                     // the ring address (word of the first byte) is on radr; the word is on r_d next clock
+                SC_R1: begin sc_w0 <= {rd3, rd2, rd1, rd0}; sc_st <= SC_R2; end                           // radr is now the next word
+                SC_R2: begin sc_w1 <= (SBUG == 7) ? 32'd0 : {rd3, rd2, rd1, rd0}; sc_st <= SC_Q; end
+                SC_Q: begin
+                    begin : pix
+                        reg [63:0] bw; reg [7:0] pr, pg, pb;
+                        bw = {sc_w1, sc_w0} >> (8 * sc_l); pr = bw[7:0]; pg = (SBUG == 5) ? bw[23:16] : bw[15:8]; pb = (SBUG == 5) ? bw[15:8] : bw[23:16];
+                        if (sc_a[0] ^ (SBUG == 3)) begin sc_h0 <= {pr, 8'd0}; sc_h1 <= {pb, pg}; end         // odd byte address: R in the upper byte of the first halfword
+                        else begin sc_h0 <= {pg, pr}; sc_h1 <= {8'd0, pb}; end
+                    end
+                    sc_st <= SC_REQ;
+                end
+                SC_REQ: if (pst == P_IDLE && req_go && req_k_n == K_SC) sc_st <= SC_WAIT;                // the port FSM took it; SC_NEXT follows when its write is done
+                SC_NEXT: begin
+                    sc_a <= sc_a + stx_e;
+                    if (sc_last) begin
+                        rows_wr <= rows_wr + ((SBUG == 8) ? 5'd2 : 5'd1); sc_rowb <= sc_rowb + sty_e; sc_x <= 7'd0; sc_st <= SC_IDLE;
+                        if (SBUG == 9) sc_rowb <= sc_rowb;
+                    end else begin sc_x <= sc_x + 7'd1; sc_st <= SC_R0; end
+                end
+                default: ;
+            endcase
+            if (mode == M_DRAIN || err_pend) sc_st <= SC_IDLE;
             // ---- mode control
             case (mode)
                 M_IDLE: begin
                     if (cmd_tables) begin mode <= M_TABLES; tbl_stage <= 1'b0; tbl_req_done <= 1'b0; qy <= cfg_qy; qc <= cfg_qc; end
                     else if (cmd_tile) begin
+                        scat <= cfg_scat; stx <= cfg_stx; sty <= cfg_sty; sc_rowb <= cfg_dst; sc_st <= SC_IDLE; sc_x <= 7'd0;
                         mode <= M_TILE; src <= cfg_src; dst <= cfg_dst; len <= cfg_len; pitch <= cfg_pitch; fmt <= cfg_fmt; w <= cfg_w; h <= cfg_h;
                         s_hw <= cfg_src[25:1]; hw_left <= (({20'd0, cfg_src[0]} + {1'b0, cfg_len} + 21'd1) >> 1); skip <= cfg_src[0] && (BUG != 3); words_left <= (({1'b0, cfg_len} + 21'd3) >> 2);
                         scount <= 8'd0; hv <= 1'b0; nb <= 4'd0; acc <= 64'd0; sw_p <= 7'd0; sr_p <= 7'd0; tcyc <= 24'd0; dec_fin <= 1'b0; tph <= 2'd0; clear_req <= (BUG != 8);

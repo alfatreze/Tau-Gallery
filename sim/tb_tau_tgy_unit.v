@@ -31,6 +31,10 @@ module tb_tau_tgy_unit;
     task put_expected(input integer tt); integer y, x, c; reg [63:0] wd; begin
         for (y = 0; y < h; y = y + 1) for (x = 0; x < w; x = x + 1) for (c = 0; c < 3; c = c + 1) begin wd = mem[tt * SLOT + OFF_EXP + c * 2048 + y * 16 + x / 8]; gold[dstb + y * pitch + 3 * x + c] = wd[8 * (x % 8) +: 8]; end
     end endtask
+    integer stx_i, sty_i;
+    task put_expected_sc(input integer tt); integer y, x, c; reg [63:0] wd; begin
+        for (y = 0; y < h; y = y + 1) for (x = 0; x < w; x = x + 1) for (c = 0; c < 3; c = c + 1) begin wd = mem[tt * SLOT + OFF_EXP + c * 2048 + y * 16 + x / 8]; gold[dstb + x * stx_i + y * sty_i + c] = wd[8 * (x % 8) +: 8]; end
+    end endtask
     task compare(input integer lbl); integer j; begin
         nbad = 0;
         for (j = 0; j < MEMB; j = j + 1) if (((j % 2 == 0) ? port.mem[j / 2][7:0] : port.mem[j / 2][15:8]) !== gold[j]) begin nbad = nbad + 1; if (nbad < 4) $display("check %0d: byte %0d (0x%0h) = %0h want %0h", lbl, j, j, (j % 2 == 0) ? port.mem[j / 2][7:0] : port.mem[j / 2][15:8], gold[j]); end
@@ -72,6 +76,17 @@ module tb_tau_tgy_unit;
         mmio_r(10'h224); if (!v[2]) fail("err flag lost before CLEAR"); mmio_w(10'h220, 32'h8); mmio_r(10'h224); if (v[2] || v[1]) fail("CLEAR did not clear err");
         mmio_w(10'h220, 32'h1); poll_idle(80000); mmio_r(10'h224); if (!v[1] || v[2]) fail("tile after abort not done"); compare(2);
         if (!irq) fail("irq not raised at done (second tile)"); mmio_w(10'h220, 32'h8); mmio_r(10'h224); if (v[1] || v[2] || v[4]) fail("CLEAR did not clear done / err / rejected"); if (irq) fail("irq still up after CLEAR");
+        // ---- K7: the scatter registers. Tile 4 (48 x 48, 4:2:0) written transposed and mirrored (STX = +400 bytes, STY = -3 bytes), from the registers; then the same tile with bit 18 clear writes rows again
+        base = 4 * SLOT; f = mem[base][17:16]; w = mem[base][15:8]; h = mem[base][7:0]; len = mem[base + 1]; pitch = 400; srcb = SRC_BASE + 1; stx_i = 400; sty_i = -3; dstb = DST_BASE + 1 + (h - 1) * 3;
+        snapshot; put_tile(4); put_expected_sc(4);
+        mmio_w(10'h228, srcb); mmio_w(10'h22C, len); mmio_w(10'h230, dstb); mmio_w(10'h234, pitch); mmio_w(10'h23C, TBL_Y); mmio_w(10'h240, TBL_C);
+        mmio_w(10'h248, stx_i); mmio_w(10'h24C, sty_i); mmio_w(10'h238, (1 << 18) | (f << 16) | (w << 8) | h);
+        mmio_r(10'h248); if (v !== (stx_i & 32'h3FFFF)) fail("STX reads back wrong"); mmio_r(10'h24C); if (v !== (sty_i & 32'h3FFFF)) fail("STY reads back wrong");
+        mmio_r(10'h238); if (v !== ((1 << 18) | (f << 16) | (w << 8) | h)) fail("GEOM bit 18 reads back wrong");
+        mmio_w(10'h220, 32'h2); poll_idle(2000); mmio_w(10'h220, 32'h8); mmio_w(10'h220, 32'h1); poll_idle(120000); mmio_r(10'h224); if (!v[1] || v[2]) fail("scatter tile not done"); compare(3);
+        mmio_w(10'h220, 32'h8);
+        base = 4 * SLOT; pitch = 397; srcb = SRC_BASE + 1; dstb = DST_BASE + 1; stx_i = 3; sty_i = pitch; snapshot; put_tile(4); put_expected(4);
+        program_tile; mmio_w(10'h220, 32'h2); poll_idle(2000); mmio_w(10'h220, 32'h8); mmio_w(10'h220, 32'h1); poll_idle(80000); mmio_r(10'h224); if (!v[1] || v[2]) fail("tile after the scatter tile not done"); compare(4);
         if (errors == 0) $display("UNIT PASSED (0 failures)"); else $display("UNIT FAILED %0d", errors);
         $finish;
     end

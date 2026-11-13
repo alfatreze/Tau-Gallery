@@ -60,6 +60,15 @@ def suite(exe):
     check("full level (%dx%d, %d tiles, odd start address, odd pitch): equals the reference decode" % (e["w"], e["h"], e["rows"] * e["cols"]), np.array_equal(pic, want))
     gap = rows[:, 1 + e["w"] * 3:1 + e["w"] * 3 + 4]
     check("full level: the bytes between rows and around the picture untouched", bool((gap == 0x55).all()) and bool((rows[:, 0] == 0x55).all()) and bool((rows[e["h"]] == 0x55).all()))
+    # 1b. K7: the full level decoded in each of the 8 orientations by the scatter writer (driver + model of the registers): the displayed picture is numpy's transform of the reference decode, the bytes around it untouched
+    NPT = {0: lambda a: a, 1: lambda a: a[:, ::-1], 2: lambda a: a[::-1, :], 3: lambda a: a[::-1, ::-1], 4: lambda a: a.transpose(1, 0, 2), 5: lambda a: np.rot90(a, 1), 6: lambda a: np.rot90(a, -1), 7: lambda a: a.transpose(1, 0, 2)[::-1, ::-1]}
+    e = c.levels[full]; want0 = c.pixels(full); okr = True; why = ""
+    for o in range(8):
+        out, got = run(exe, "rotfull", data, extra=(o,)); want = NPT[o](want0); dh, dw = want.shape[0], want.shape[1]; pr = dw * 3 + 5
+        rows = np.frombuffer(got, np.uint8).reshape(dh + 1, pr); pic = rows[:dh, 1:1 + dw * 3].reshape(dh, dw, 3)
+        ok = "run" not in out or True
+        if not (np.array_equal(pic, want) and bool((rows[:, 0] == 0x55).all()) and bool((rows[dh] == 0x55).all()) and bool((rows[:, 1 + dw * 3:] == 0x55).all())): okr = False; why += " o%d" % o
+    check("full level in all 8 orientations (scatter writer): equals numpy's rotation / mirror of the reference, the bytes around untouched%s" % (" (failed:" + why + ")" if why else ""), okr)
     # 2. a small picture: only the full level; and a grey one
     data = MK.from_image(image(300, 200, 22)); c = C.Container(data); out, got = run(exe, "full", data); e = c.levels[0]
     pic = np.frombuffer(got, np.uint8).reshape(e["h"] + 1, e["w"] * 3 + 5)[:e["h"], 1:1 + e["w"] * 3].reshape(e["h"], e["w"], 3)
@@ -136,11 +145,16 @@ MUTANTS = [
     ("explicit stream address ignored (the file's own position is used)", "REG_WR(R_TGY_SRC, src);", "REG_WR(R_TGY_SRC, f->base + foff);"),
     ("the wrapper passes the wrong stream address", "return tgy_hw_tile_from(f, l, tx, ty, dst, pitch, f->base + foff);", "return tgy_hw_tile_from(f, l, tx, ty, dst, pitch, f->base + l->data_off);"),
     ("tile location ignores the level's data offset", "*off = l->data_off + o; *len = n;", "*off = o; *len = n;"),
+    ("scatter bit not set in GEOM", "(g_sc.on ? (1u << 18) : 0u) |", ""),
+    ("scatter steps not written", "if (g_sc.on) { REG_WR(R_TGY_STX, (uint32_t)g_sc.stx & 0x3FFFFu); REG_WR(R_TGY_STY, (uint32_t)g_sc.sty & 0x3FFFFu); }", ""),
+    ("the steps are swapped", "tgy_hw_scatter(1, gr_stx(o, (int32_t)pitch), gr_sty(o, (int32_t)pitch));", "tgy_hw_scatter(1, gr_sty(o, (int32_t)pitch), gr_stx(o, (int32_t)pitch));"),
+    ("a rotated tile goes where an upright one would", "dst0 + gr_tile_off(o, l->w, l->h, tx * TH_TILE, ty * TH_TILE, pitch)", "dst0 + ty * TH_TILE * pitch + tx * TH_TILE * 3u"),
+    ("the step is not masked to 18 bits (a negative step reads back wrong in the model)", "(uint32_t)g_sc.stx & 0x3FFFFu", "(uint32_t)g_sc.stx & 0x7FFu"),
 ]
 def main():
     global fails
     if "--mutants" in sys.argv:
-        src = {n: (ROOT / "fw2/gallery" / n).read_text() for n in ("tgy_hw.c", "tgy_hw.h", "gallery_fmt.c", "gallery_fmt.h", "tgy_dec.c", "tgy_dec.h", "tgy_pix.c", "tgy_pix.h")}
+        src = {n: (ROOT / "fw2/gallery" / n).read_text() for n in ("tgy_hw.c", "tgy_hw.h", "gallery_fmt.c", "gallery_fmt.h", "gallery_rot.h", "tgy_dec.c", "tgy_dec.h", "tgy_pix.c", "tgy_pix.h")}
         survived = 0
         for name, a, b in MUTANTS:
             assert a in src["tgy_hw.c"], name

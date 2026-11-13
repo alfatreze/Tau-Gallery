@@ -16,6 +16,7 @@ module tau_tgy_dcore #(parameter integer C444 = 0, parameter integer BUG = 0, pa
     input  wire [19:0] cfg_len,
     input  wire [25:0] cfg_dst,
     input  wire [15:0] cfg_pitch,
+    input  wire        cfg_scat,          // K7: the rows are read back pixel by pixel from byte 0 of the ring row (no destination parity shift)
     input  wire        q_we, q_sel,
     input  wire [5:0]  q_idx,
     input  wire [15:0] q_val,
@@ -66,7 +67,7 @@ module tau_tgy_dcore #(parameter integer C444 = 0, parameter integer BUG = 0, pa
     reg [24:0] rec_addr [0:7]; reg [8:0] rec_nhw [0:7]; reg rec_b0 [0:7]; reg rec_lodd [0:7];
     reg [25:0] arr_row_addr = 26'd0; reg row_first = 1'b0;
     wire [25:0] ra_now = (px_x == 7'd0) ? ((row_first && BUG != 4) ? cfg_dst : arr_row_addr + {10'd0, cfg_pitch}) : arr_row_addr;
-    wire        b0_now = ra_now[0];
+    wire        b0_now = cfg_scat ? 1'b0 : ra_now[0];
     wire [8:0]  o_now = {8'd0, b0_now} + {2'd0, px_x} * 9'd3;
     wire [2:0]  bank = rows_arr[2:0];
     (* ramstyle = "M10K, no_rw_check" *) reg [7:0] m0 [0:1023];

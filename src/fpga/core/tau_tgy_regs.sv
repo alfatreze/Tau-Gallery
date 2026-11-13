@@ -7,9 +7,12 @@
 //   0x238 GEOM   [17:16] format (0 grey, 1 4:4:4, 2 4:2:0), [15:8] width, [7:0] height of the tile in luma samples (1..128)
 //   0x23C QY     byte address of the Y quantisation table (64 u16, zigzag, even)    0x240 QC   the same for Cb and Cr
 //   0x244 CYCLES (read)   SDRAM-clock cycles the last tile took (valid after done)
+//   0x248 STX    (K7, rotation) signed byte step in memory from one pixel of a source row to the next, 18 bit        0x24C STY  signed byte step from one source row to the next, 18 bit
+//   GEOM bit 18 SCATTER: write every pixel at DST + x * STX + y * STY (DST = where source pixel (0, 0) goes) instead of whole rows at DST + y * PITCH; any rotation or mirror is a choice of the two steps, the pixels are those of the
+//   plain decode. With bit 18 clear PITCH rules and STX / STY are ignored.
 // Rules: write the configuration registers, THEN write CTRL in a separate store (the configuration crosses to the SDRAM clock when the command does; the CPU's store spacing covers the crossing). `irq` is
 // done | err (a level, cleared by CLEAR). Commands and events cross as toggles through 2-flop synchronisers, so a start and an immediate read of STATUS cannot see the previous tile's flags.
-// BUG (test only): 0 = correct; 1..6 = one deliberate fault each, killed by sim/tb_tau_tgy_unit.v.
+// BUG (test only): 0 = correct; 1..8 = one deliberate fault each (7: GEOM bit 18 not stored, 8: STX written into STY), killed by sim/tb_tau_tgy_unit.v.
 module tau_tgy_regs #(parameter integer BUG = 0) (
     input  wire        clk_sys, rst_sys,
     input  wire [9:0]  reg_addr,
@@ -24,6 +27,8 @@ module tau_tgy_regs #(parameter integer BUG = 0) (
     output wire [19:0] cfg_len,
     output wire [15:0] cfg_pitch,
     output wire [1:0]  cfg_fmt,
+    output wire        cfg_scat,
+    output wire [17:0] cfg_stx, cfg_sty,
     output wire [7:0]  cfg_w, cfg_h,
     output reg         cmd_tile, cmd_tables, cmd_abort,
     input  wire        ev_done, ev_err, ev_tables,
@@ -31,8 +36,9 @@ module tau_tgy_regs #(parameter integer BUG = 0) (
     input  wire [31:0] tile_cycles
 );
     assign reg_hit = (reg_addr >= 10'h220) && (reg_addr <= 10'h24C);
-    reg [25:0] r_src = 26'd0, r_dst = 26'd0, r_qy = 26'd0, r_qc = 26'd0; reg [19:0] r_len = 20'd0; reg [15:0] r_pitch = 16'd0; reg [17:0] r_geom = 18'd0;
+    reg [25:0] r_src = 26'd0, r_dst = 26'd0, r_qy = 26'd0, r_qc = 26'd0; reg [19:0] r_len = 20'd0; reg [15:0] r_pitch = 16'd0; reg [18:0] r_geom = 19'd0; reg [17:0] r_stx = 18'd3, r_sty = 18'd0;
     assign cfg_src = r_src; assign cfg_dst = r_dst; assign cfg_qy = r_qy; assign cfg_qc = r_qc; assign cfg_len = r_len; assign cfg_pitch = r_pitch;
+    assign cfg_scat = r_geom[18]; assign cfg_stx = r_stx; assign cfg_sty = r_sty;
     assign cfg_fmt = r_geom[17:16]; assign cfg_w = r_geom[15:8]; assign cfg_h = r_geom[7:0];
     // ---- clk_sys: flags and command toggles
     reg tg_tile = 1'b0, tg_tables = 1'b0, tg_abort = 1'b0;
@@ -55,7 +61,9 @@ module tau_tgy_regs #(parameter integer BUG = 0) (
                 10'h22C: r_len <= reg_wdata[19:0];
                 10'h230: if (BUG != 1) r_dst <= reg_wdata[25:0];
                 10'h234: r_pitch <= reg_wdata[15:0];
-                10'h238: r_geom <= reg_wdata[17:0];
+                10'h238: r_geom <= (BUG == 7) ? {1'b0, reg_wdata[17:0]} : reg_wdata[18:0];
+                10'h248: if (BUG == 8) r_sty <= reg_wdata[17:0]; else r_stx <= reg_wdata[17:0];
+                10'h24C: r_sty <= reg_wdata[17:0];
                 10'h23C: r_qy <= reg_wdata[25:0];
                 10'h240: r_qc <= reg_wdata[25:0];
                 default: ;
@@ -78,7 +86,9 @@ module tau_tgy_regs #(parameter integer BUG = 0) (
             10'h22C: reg_rdata = {12'd0, r_len};
             10'h230: reg_rdata = {6'd0, r_dst};
             10'h234: reg_rdata = {16'd0, r_pitch};
-            10'h238: reg_rdata = {14'd0, r_geom};
+            10'h238: reg_rdata = {13'd0, r_geom};
+            10'h248: reg_rdata = {14'd0, r_stx};
+            10'h24C: reg_rdata = {14'd0, r_sty};
             10'h23C: reg_rdata = {6'd0, r_qy};
             10'h240: reg_rdata = {6'd0, r_qc};
             10'h244: reg_rdata = tile_cycles;

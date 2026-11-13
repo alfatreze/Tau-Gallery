@@ -1,5 +1,6 @@
 #include "tgy_hw.h"
 #include "gallery_fmt.h"
+#include "gallery_rot.h"
 #include "../platform/mmio.h"
 
 #define TH_HEAD 64u
@@ -113,13 +114,17 @@ int tgy_tile_loc(const tgy_level_t *l, uint32_t tx, uint32_t ty, uint32_t *off, 
     return TH_OK;
 }
 
+static struct { uint32_t on; int32_t stx, sty; } g_sc;                              /* the scatter mode of the next tile starts (K7): off after reset */
+void tgy_hw_scatter(int on, int32_t stx, int32_t sty) { g_sc.on = on ? 1u : 0u; g_sc.stx = stx; g_sc.sty = sty; }
+
 int tgy_hw_start_from(const tgy_file_t *f, const tgy_level_t *l, uint32_t tx, uint32_t ty, uint32_t dst, uint32_t pitch, uint32_t src)
 {
     uint32_t foff, len; int r = tgy_tile_loc(l, tx, ty, &foff, &len); if (r != TH_OK) return r;
     r = tgy_hw_tables(f, l); if (r != TH_OK) return r;
     const uint32_t x0 = tx * TH_TILE, y0 = ty * TH_TILE, tw = (l->w - x0 < TH_TILE) ? l->w - x0 : TH_TILE, th = (l->h - y0 < TH_TILE) ? l->h - y0 : TH_TILE;
     REG_WR(R_TGY_SRC, src); REG_WR(R_TGY_LEN, len); REG_WR(R_TGY_DST, dst); REG_WR(R_TGY_PITCH, pitch);
-    REG_WR(R_TGY_GEOM, ((uint32_t)l->fmt << 16) | (tw << 8) | th); REG_WR(R_TGY_QY, f->base + f->tables_off + 2u + 128u * l->qy); REG_WR(R_TGY_QC, f->base + f->tables_off + 2u + 128u * l->qc);
+    if (g_sc.on) { REG_WR(R_TGY_STX, (uint32_t)g_sc.stx & 0x3FFFFu); REG_WR(R_TGY_STY, (uint32_t)g_sc.sty & 0x3FFFFu); }
+    REG_WR(R_TGY_GEOM, (g_sc.on ? (1u << 18) : 0u) | ((uint32_t)l->fmt << 16) | (tw << 8) | th); REG_WR(R_TGY_QY, f->base + f->tables_off + 2u + 128u * l->qy); REG_WR(R_TGY_QC, f->base + f->tables_off + 2u + 128u * l->qc);
     REG_WR(R_TGY_CTRL, 8u);                                                        /* CLEAR, then START in a separate store (the configuration crosses with the command) */
     REG_WR(R_TGY_CTRL, 1u);
     return TH_OK;                                                                  /* the decoder runs by itself from here: the stream at `src` must stay as it is until tgy_hw_finish says done */
@@ -157,6 +162,19 @@ int tgy_hw_level(const tgy_file_t *f, const tgy_level_t *l, uint32_t dst0, uint3
             if (tick && tick(ctx, tx, ty)) return TH_ABORT;
         }
     return TH_OK;
+}
+
+int tgy_hw_level_rot(const tgy_file_t *f, const tgy_level_t *l, uint32_t dst0, uint32_t pitch, uint32_t o, int (*tick)(void *ctx, uint32_t tx, uint32_t ty), void *ctx)
+{
+    if (o >= GR_NO) return TH_RANGE;
+    tgy_hw_scatter(1, gr_stx(o, (int32_t)pitch), gr_sty(o, (int32_t)pitch)); int r = TH_OK;
+    for (uint32_t ty = 0; ty < l->rows && r == TH_OK; ty++)
+        for (uint32_t tx = 0; tx < l->cols && r == TH_OK; tx++) {
+            r = tgy_hw_tile(f, l, tx, ty, dst0 + gr_tile_off(o, l->w, l->h, tx * TH_TILE, ty * TH_TILE, pitch), pitch);
+            if (r == TH_OK && tick && tick(ctx, tx, ty)) r = TH_ABORT;
+        }
+    tgy_hw_scatter(0, 3, 0);
+    return r;
 }
 
 int tgy_hw_show(const tgy_file_t *f, const tgy_level_t *l, uint32_t plane, int (*tick)(void *ctx, uint32_t tx, uint32_t ty), void *ctx)

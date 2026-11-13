@@ -6,15 +6,16 @@
 `timescale 1ns/1ps
 module tb_tau_tgy_dma;
     parameter integer BUG = 0;
+    parameter integer SBUG = 0;           // mutants of the scatter writer (K7)
     parameter integer C444 = 1;
     localparam integer STREAM_WORDS = 3300, OFF_STREAM = 34, OFF_EXP = 34 + STREAM_WORDS, SLOT = OFF_EXP + 3 * 2048, MEMW = 18, MEMB = 2 << MEMW;
     reg clk = 0, rst = 1, clk_dec = 0; always #5 clk = ~clk; initial begin #3.3; forever #10 clk_dec = ~clk_dec; end
     reg [2:0] rsd = 3'b111; always @(posedge clk_dec) rsd <= {rsd[1:0], rst}; wire rst_dec = rsd[2];
-    reg [25:0] cfg_src = 0, cfg_dst = 0, cfg_qy = 0, cfg_qc = 0; reg [19:0] cfg_len = 0; reg [15:0] cfg_pitch = 0; reg [1:0] cfg_fmt = 0; reg [7:0] cfg_w = 0, cfg_h = 0;
+    reg [25:0] cfg_src = 0, cfg_dst = 0, cfg_qy = 0, cfg_qc = 0; reg [19:0] cfg_len = 0; reg [15:0] cfg_pitch = 0; reg [1:0] cfg_fmt = 0; reg [7:0] cfg_w = 0, cfg_h = 0; reg cfg_scat = 0; reg [17:0] cfg_stx = 0, cfg_sty = 0; integer scat_en = 0, stx_i = 3, sty_i = 0, oo, tt2;
     reg cmd_tile = 0, cmd_tables = 0, cmd_abort = 0; wire busy, ev_done, ev_err, ev_tables; wire [3:0] err_code; wire [31:0] tile_cycles;
     wire p_valid, p_ready, p_we, p_next, p_r_valid, p_r_last, p_done; wire [24:0] p_addr; wire [9:0] p_len, p_idx; wire [15:0] p_wdata, p_r_data; wire [1:0] p_be; reg stall = 0, stall_slow = 0, slow_en = 0; integer slow_c = 0; wire stall_w = stall | stall_slow;
     always @(posedge clk) if (slow_en) begin slow_c <= slow_c + 1; stall_slow <= ((slow_c % 9000) > 5500); end else stall_slow <= 0;      // a slow SDRAM: the port refuses everything 3,500 clocks of every 9,000
-    tau_tgy_dma #(.C444(C444), .BUG(BUG), .TMO(24'd1200000)) dut (.clk(clk), .rst(rst), .clk_dec(clk_dec), .rst_dec(rst_dec), .cfg_src(cfg_src), .cfg_dst(cfg_dst), .cfg_qy(cfg_qy), .cfg_qc(cfg_qc), .cfg_len(cfg_len), .cfg_pitch(cfg_pitch), .cfg_fmt(cfg_fmt),
+    tau_tgy_dma #(.C444(C444), .BUG(BUG), .SBUG(SBUG), .TMO(24'd1200000)) dut (.clk(clk), .rst(rst), .clk_dec(clk_dec), .rst_dec(rst_dec), .cfg_src(cfg_src), .cfg_dst(cfg_dst), .cfg_qy(cfg_qy), .cfg_qc(cfg_qc), .cfg_len(cfg_len), .cfg_pitch(cfg_pitch), .cfg_fmt(cfg_fmt), .cfg_scat(cfg_scat), .cfg_stx(cfg_stx), .cfg_sty(cfg_sty),
         .cfg_w(cfg_w), .cfg_h(cfg_h), .cmd_tile(cmd_tile), .cmd_tables(cmd_tables), .cmd_abort(cmd_abort), .busy(busy), .ev_done(ev_done), .ev_err(ev_err), .ev_tables(ev_tables), .err_code(err_code), .tile_cycles(tile_cycles),
         .p_valid(p_valid), .p_ready(p_ready), .p_we(p_we), .p_addr(p_addr), .p_len(p_len), .p_next(p_next), .p_idx(p_idx), .p_wdata(p_wdata), .p_be(p_be), .p_r_valid(p_r_valid), .p_r_data(p_r_data), .p_r_last(p_r_last), .p_done(p_done));
     sp_model #(.SEED(21), .MEMW(MEMW), .RDYPCT(70)) port (.clk(clk), .rst(rst), .valid(p_valid), .ready(p_ready), .we(p_we), .addr(p_addr), .len(p_len), .w_next(p_next), .w_idx(p_idx), .w_data(p_wdata), .w_be(p_be),
@@ -35,13 +36,18 @@ module tb_tau_tgy_dma;
             wd = mem[tt * SLOT + OFF_EXP + c * 2048 + y * 16 + x / 8]; gold[dstb + y * pitch + 3 * x + c] = wd[8 * (x % 8) +: 8];
         end
     end endtask
+    task put_expected_sc(input integer tt); integer y, x, c; reg [63:0] wd; begin           // the scatter layout: source pixel (x, y) at dstb + x * stx + y * sty
+        for (y = 0; y < h; y = y + 1) for (x = 0; x < w; x = x + 1) for (c = 0; c < 3; c = c + 1) begin
+            wd = mem[tt * SLOT + OFF_EXP + c * 2048 + y * 16 + x / 8]; gold[dstb + x * stx_i + y * sty_i + c] = wd[8 * (x % 8) +: 8];
+        end
+    end endtask
     task compare(input integer lbl); integer j; begin
         nbad = 0;
         for (j = 0; j < MEMB; j = j + 1) if (((j % 2 == 0) ? port.mem[j / 2][7:0] : port.mem[j / 2][15:8]) !== gold[j]) begin nbad = nbad + 1; if (nbad < 4) $display("test %0d: byte %0d (0x%0h) = %0h want %0h", lbl, j, j, (j % 2 == 0) ? port.mem[j / 2][7:0] : port.mem[j / 2][15:8], gold[j]); end
         if (nbad != 0) errors = errors + 1;
     end endtask
     task run_cmd_tile(input integer maxc); begin
-        ev_d = 0; ev_e = 0; cfg_src <= srcb; cfg_len <= len; cfg_dst <= dstb; cfg_pitch <= pitch; cfg_fmt <= f; cfg_w <= w; cfg_h <= h; @(posedge clk);
+        ev_d = 0; ev_e = 0; cfg_src <= srcb; cfg_len <= len; cfg_dst <= dstb; cfg_pitch <= pitch; cfg_fmt <= f; cfg_w <= w; cfg_h <= h; cfg_scat <= scat_en[0]; cfg_stx <= stx_i[17:0]; cfg_sty <= sty_i[17:0]; @(posedge clk);
         cmd_tile <= 1; @(posedge clk); cmd_tile <= 0; cyc = 0;
         while (ev_d == 0 && ev_e == 0 && cyc < maxc) begin @(posedge clk); cyc = cyc + 1; end
         repeat (6) @(posedge clk);
@@ -73,6 +79,22 @@ module tb_tau_tgy_dma;
             end
         end
         $display("%0d tiles run, %0d skipped (4:4:4 without C444)", ran, skipped);
+        // K7: the scatter writer. The same tiles, each in the 8 orientations (identity, mirror x, mirror y, both, and the four transposed ones: the steps are +-3 bytes and +-400 bytes), odd and even destinations; every byte of the
+        // memory is compared, so a pixel in the wrong place, a stray byte or a clobbered neighbour shows
+        for (t = 0; t < nt; t = t + 1) if (t % 4 == 1 || t == 6) begin
+            base = t * SLOT; f = mem[base][17:16]; w = mem[base][15:8]; h = mem[base][7:0]; len = mem[base + 1];
+            if (!(f == 1 && C444 == 0)) for (oo = 0; oo < 8; oo = oo + 1) begin
+                scat_en = 1; pitch = 400;
+                stx_i = (oo >= 4) ? ((oo & 1) ? -400 : 400) : ((oo & 1) ? -3 : 3); sty_i = (oo >= 4) ? ((oo & 2) ? -3 : 3) : ((oo & 2) ? -400 : 400);
+                srcb = SRC_BASE + (t % 2); dstb = DST_BASE + ((t + oo) % 2) + ((stx_i < 0) ? (w - 1) * (-stx_i) : 0) + ((sty_i < 0) ? (h - 1) * (-sty_i) : 0);
+                snapshot; put_tile(t); put_expected_sc(t); load_tables; run_cmd_tile(6000000);
+                if (cyc >= 6000000 || ev_d != 1 || ev_e != 0 || busy) begin errors = errors + 1; $display("scatter tile %0d orientation %0d %0dx%0d: cyc %0d done %0d err %0d", t, oo, w, h, cyc, ev_d, ev_e); end
+                compare(1000 + 10 * t + oo);
+                if (len > 5000) $display("scatter tile %0d orientation %0d (%0dx%0d): %0d clocks", t, oo, w, h, tile_cycles);
+                if ((BUG != 0 || SBUG != 0) && errors != 0) begin $display("DMA FAILED %0d (scatter)", errors); $finish; end
+            end
+        end
+        scat_en = 0; stx_i = 3; sty_i = 0;
         // scenarios, on tile 6 (the sparse 128 x 128 photo tile)
         base = 6 * SLOT; f = mem[base][17:16]; w = mem[base][15:8]; h = mem[base][7:0]; len = mem[base + 1]; pitch = 400; srcb = SRC_BASE + 1; dstb = DST_BASE + 1; snapshot; put_tile(6); put_expected(6);
         load_tables;

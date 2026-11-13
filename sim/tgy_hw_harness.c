@@ -12,12 +12,12 @@ void REG_WR(uint32_t a, uint32_t v);
 #include "../fw2/platform/mmio.h"
 #define MEM_SIZE (24u << 20)
 static uint8_t *mem;
-static struct { uint32_t src, len, dst, pitch, geom, qy, qc, status, cycles_reg, cyc, polls_left, irq; uint16_t ty[64], tc[64]; int present, force_busy, reject_next, tables_ok, starts, loads, bad_order, cfg_since_start; } hw;
+static struct { uint32_t src, len, dst, pitch, geom, qy, qc, status, cycles_reg, cyc, polls_left, irq; int32_t stx, sty; uint16_t ty[64], tc[64]; int present, force_busy, reject_next, tables_ok, starts, loads, bad_order, cfg_since_start; } hw;
 #include "../fw2/gallery/tgy_dec.c"
 #include "../fw2/gallery/tgy_pix.c"
 static tgy_dec_t dec; static tgy_planes_t planes;
 typedef struct { uint32_t dst, pitch; } emit_t;
-static void emit(void *ctx, unsigned row, const uint8_t *rgb) { emit_t *e = ctx; unsigned w = (hw.geom >> 8) & 255; if ((uint64_t)e->dst + (uint64_t)row * e->pitch + w * 3u > MEM_SIZE) return; memcpy(mem + e->dst + (size_t)row * e->pitch, rgb, (size_t)w * 3u); }
+static void emit(void *ctx, unsigned row, const uint8_t *rgb) { emit_t *e = ctx; unsigned w = (hw.geom >> 8) & 255; if (hw.geom & (1u << 18)) { for (unsigned x = 0; x < w; x++) { int64_t a = (int64_t)e->dst + (int64_t)x * hw.stx + (int64_t)row * hw.sty; if (a >= 0 && a + 3 <= (int64_t)MEM_SIZE) memcpy(mem + a, rgb + 3u * x, 3); } return; } if ((uint64_t)e->dst + (uint64_t)row * e->pitch + w * 3u > MEM_SIZE) return; memcpy(mem + e->dst + (size_t)row * e->pitch, rgb, (size_t)w * 3u); }
 static void run_tile(void)
 {
     const unsigned fmt = (hw.geom >> 16) & 3, w = (hw.geom >> 8) & 255, h = hw.geom & 255; uint8_t rows[3] = {0}, cols[3] = {0}; unsigned nc = fmt == 0 ? 1 : 3;
@@ -43,7 +43,8 @@ void REG_WR(uint32_t a, uint32_t v)
 {
     switch (a) {
     case R_TGY_SRC: hw.src = v & 0x3FFFFFF; hw.cfg_since_start++; break; case R_TGY_LEN: hw.len = v & 0xFFFFF; hw.cfg_since_start++; break; case R_TGY_DST: hw.dst = v & 0x3FFFFFF; hw.cfg_since_start++; break;
-    case R_TGY_PITCH: hw.pitch = v & 0xFFFF; hw.cfg_since_start++; break; case R_TGY_GEOM: hw.geom = v & 0x3FFFF; hw.cfg_since_start++; break;
+    case R_TGY_PITCH: hw.pitch = v & 0xFFFF; hw.cfg_since_start++; break; case R_TGY_GEOM: hw.geom = v & 0x7FFFF; hw.cfg_since_start++; break;
+    case R_TGY_STX: hw.stx = (int32_t)(v << 14) >> 14; break; case R_TGY_STY: hw.sty = (int32_t)(v << 14) >> 14; break;
     case R_TGY_QY: hw.qy = v & 0x3FFFFFF; hw.cfg_since_start++; break; case R_TGY_QC: hw.qc = v & 0x3FFFFFF; hw.cfg_since_start++; break;
     case R_IRQ_PEND: hw.irq &= ~v; break;
     case R_TGY_CTRL:
@@ -75,7 +76,7 @@ int main(int argc, char **argv)
     if (argc < 5) return 2; const char *mode = argv[1]; FILE *f = fopen(argv[2], "rb"); if (!f) return 2; uint32_t base = (uint32_t)strtoul(argv[3], 0, 0);
     mem = calloc(MEM_SIZE, 1); if (!mem) return 2;
     fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET); if (fread(mem + base, 1, (size_t)n, f) != (size_t)n) return 2; fclose(f);
-    card_base = base; hw.present = strcmp(mode, "absent") != 0; hw.force_busy = !strcmp(mode, "busy"); const char *fm = (!strcmp(mode, "showfull") || !strcmp(mode, "sliced")) ? "full" : mode;
+    card_base = base; hw.present = strcmp(mode, "absent") != 0; hw.force_busy = !strcmp(mode, "busy"); const char *fm = (!strcmp(mode, "showfull") || !strcmp(mode, "sliced") || !strcmp(mode, "rotfull")) ? "full" : mode;
     if (!strcmp(mode, "badhdr")) mem[base + 9] ^= 0x40;
     if (!strcmp(mode, "prefix") && argc > 5) { n = strtol(argv[5], 0, 0); memset(mem + base + n, 0, (size_t)(MEM_SIZE - base - n)); }          /* only the first n bytes of the file are resident */
     tgy_file_t tf; int r = tgy_open(&tf, mem + base, (uint32_t)n, base);          /* the CPU's RAM copy of the header is the file's own first bytes here */
@@ -103,6 +104,10 @@ int main(int argc, char **argv)
     const uint32_t plane = 0x600000u, pitch_full = l.w * 3u + 5u, dst0 = 0x1000000u;
     if (!strcmp(mode, "show")) { memset(mem + plane, 0x55, 2400u * 720u); r = tgy_hw_show(&tf, &l, plane, tick, 0); }
     else if (!strcmp(mode, "full") || !strcmp(mode, "sliced")) { memset(mem + dst0, 0x55, (size_t)(pitch_full) * (l.h + 1u)); r = tgy_hw_level(&tf, &l, dst0 + 1u, pitch_full, tick, 0); }
+    else if (!strcmp(mode, "rotfull")) {                                            /* the full level decoded in orientation argv[5] with the scatter writer, into a displayed picture with an odd pitch */
+        const uint32_t o = argc > 5 ? (uint32_t)strtoul(argv[5], 0, 0) : 0u, dw = gr_swaps(o) ? l.h : l.w, dh = gr_swaps(o) ? l.w : l.h, pitch_r = dw * 3u + 5u;
+        memset(mem + dst0, 0x55, (size_t)pitch_r * (dh + 1u)); r = tgy_hw_level_rot(&tf, &l, dst0 + 1u, pitch_r, o, tick, 0); printf("rot %u dims %u %u pitch %u\n", o, dw, dh, pitch_r);
+    }
     else if (!strcmp(mode, "odd")) { tgy_file_t t2 = tf; t2.base |= 1u; r = tgy_hw_tables(&t2, &l); }
     else if (!strcmp(mode, "both")) {                                               /* the fit level on the canvas, then the full level of the SAME file (different tables): the cache must reload */
         tgy_level_t lf; static uint8_t ibuf2[65536]; memset(mem + plane, 0x55, 2400u * 720u); r = tgy_hw_show(&tf, &l, plane, tick, 0);
@@ -132,6 +137,7 @@ int main(int argc, char **argv)
     printf("run %d status %08x ticks %d starts %d loads %d order %d\n", r, tgy_hw_status(), ticks, hw.starts, hw.loads, hw.bad_order);
     FILE *o = fopen(argv[4], "wb");
     if (!strcmp(mode, "show") || !strcmp(mode, "two") || !strcmp(mode, "retry") || !strcmp(mode, "prefix") || !strcmp(mode, "reloc")) fwrite(mem + plane, 1, 2400u * 720u, o); else if (!strcmp(mode, "full") || !strcmp(mode, "sliced")) fwrite(mem + dst0, 1, (size_t)pitch_full * (l.h + 1u), o);
+    else if (!strcmp(mode, "rotfull")) { const uint32_t oo = argc > 5 ? (uint32_t)strtoul(argv[5], 0, 0) : 0u, dwr = gr_swaps(oo) ? l.h : l.w, dhr = gr_swaps(oo) ? l.w : l.h; fwrite(mem + dst0, 1, (size_t)(dwr * 3u + 5u) * (dhr + 1u), o); }
     else if (!strcmp(mode, "both")) { fwrite(mem + plane, 1, 2400u * 720u, o); fwrite(mem + dst0, 1, (size_t)(l.w * 3u + 5u) * (l.h + 1u), o); }
     fclose(o); return 0;
 }

@@ -29,14 +29,14 @@ module tau_tgy_unit #(parameter integer C444 = 0, parameter integer BUG = 0, par
     assign reg_hit = r_hit | h_hit; assign reg_rdata = r_rdata | h_rdata;
     tau_hist_if #(.BUG(BUG >= 31 ? BUG - 30 : 0)) hist (.clk_sys(clk_sys), .rst_sys(rst_sys), .reg_addr(reg_addr), .reg_we(reg_we), .reg_wdata(reg_wdata), .reg_hit(h_hit), .reg_rdata(h_rdata),
         .clk_dec(clk_dec), .px_valid(tap_valid), .px_x(tap_x), .px_y(tap_y), .px_r(tap_r), .px_g(tap_g), .px_b(tap_b));
-    wire [25:0] cfg_src, cfg_dst, cfg_qy, cfg_qc; wire [19:0] cfg_len; wire [15:0] cfg_pitch; wire [1:0] cfg_fmt; wire [7:0] cfg_w, cfg_h;
+    wire [25:0] cfg_src, cfg_dst, cfg_qy, cfg_qc; wire [19:0] cfg_len; wire [15:0] cfg_pitch; wire [1:0] cfg_fmt; wire cfg_scat; wire [17:0] cfg_stx, cfg_sty; wire [7:0] cfg_w, cfg_h;
     wire cmd_tile, cmd_tables, cmd_abort, busy, ev_done, ev_err, ev_tables; wire [3:0] err_code; wire [31:0] tile_cycles;
     tau_tgy_regs #(.BUG(BUG < 10 ? BUG : 0)) regs (.clk_sys(clk_sys), .rst_sys(rst_sys), .reg_addr(reg_addr), .reg_we(reg_we), .reg_wdata(reg_wdata), .reg_hit(r_hit), .reg_rdata(r_rdata), .irq(irq),
-        .clk_mem(clk_mem), .rst_mem(rst_mem), .cfg_src(cfg_src), .cfg_dst(cfg_dst), .cfg_qy(cfg_qy), .cfg_qc(cfg_qc), .cfg_len(cfg_len), .cfg_pitch(cfg_pitch), .cfg_fmt(cfg_fmt), .cfg_w(cfg_w), .cfg_h(cfg_h),
+        .clk_mem(clk_mem), .rst_mem(rst_mem), .cfg_src(cfg_src), .cfg_dst(cfg_dst), .cfg_qy(cfg_qy), .cfg_qc(cfg_qc), .cfg_len(cfg_len), .cfg_pitch(cfg_pitch), .cfg_fmt(cfg_fmt), .cfg_scat(cfg_scat), .cfg_stx(cfg_stx), .cfg_sty(cfg_sty), .cfg_w(cfg_w), .cfg_h(cfg_h),
         .cmd_tile(cmd_tile), .cmd_tables(cmd_tables), .cmd_abort(cmd_abort), .ev_done(ev_done), .ev_err(ev_err), .ev_tables(ev_tables), .err_code(err_code), .tile_cycles(tile_cycles));
     reg [2:0] rsd = 3'b111; always @(posedge clk_dec) rsd <= {rsd[1:0], rst_mem};      // reset released synchronously in the decoder clock domain
-    tau_tgy_dma #(.C444(C444), .BUG(BUG >= 11 ? BUG - 10 : 0), .TMO(TMO)) dma (.clk(clk_mem), .rst(rst_mem), .clk_dec(clk_dec), .rst_dec(rsd[2]), .cfg_src(cfg_src), .cfg_dst(cfg_dst), .cfg_qy(cfg_qy), .cfg_qc(cfg_qc), .cfg_len(cfg_len), .cfg_pitch(cfg_pitch),
-        .cfg_fmt(cfg_fmt), .cfg_w(cfg_w), .cfg_h(cfg_h), .cmd_tile(cmd_tile), .cmd_tables(cmd_tables), .cmd_abort(cmd_abort), .busy(busy), .ev_done(ev_done), .ev_err(ev_err), .ev_tables(ev_tables), .err_code(err_code), .tile_cycles(tile_cycles),
+    tau_tgy_dma #(.C444(C444), .BUG((BUG >= 11 && BUG < 40) ? BUG - 10 : 0), .SBUG(BUG >= 40 ? BUG - 40 : 0), .TMO(TMO)) dma (.clk(clk_mem), .rst(rst_mem), .clk_dec(clk_dec), .rst_dec(rsd[2]), .cfg_src(cfg_src), .cfg_dst(cfg_dst), .cfg_qy(cfg_qy), .cfg_qc(cfg_qc), .cfg_len(cfg_len), .cfg_pitch(cfg_pitch),
+        .cfg_fmt(cfg_fmt), .cfg_scat(cfg_scat), .cfg_stx(cfg_stx), .cfg_sty(cfg_sty), .cfg_w(cfg_w), .cfg_h(cfg_h), .cmd_tile(cmd_tile), .cmd_tables(cmd_tables), .cmd_abort(cmd_abort), .busy(busy), .ev_done(ev_done), .ev_err(ev_err), .ev_tables(ev_tables), .err_code(err_code), .tile_cycles(tile_cycles),
         .p_valid(p_valid), .p_ready(p_ready), .p_we(p_we), .p_addr(p_addr), .p_len(p_len), .p_next(p_next), .p_idx(p_idx), .p_wdata(p_wdata), .p_be(p_be), .p_r_valid(p_r_valid), .p_r_data(p_r_data), .p_r_last(p_r_last), .p_done(p_done),
         .tap_valid(tap_valid), .tap_x(tap_x), .tap_y(tap_y), .tap_r(tap_r), .tap_g(tap_g), .tap_b(tap_b));
 endmodule
