@@ -11,7 +11,7 @@ EXTRA = [ROOT / "sim/fullcore/altera_pll_model.v", ROOT / "work/quartus_sim_lib/
 
 def macros():
     defs = []
-    for f in (SRC / "ap_core.qsf", ROOT / "tools/gallery_m1e_qsf_append.txt"):
+    for f in (SRC / "ap_core.qsf", ROOT / "tools/gallery_m1f_qsf_append.txt"):
         for m in re.finditer(r'VERILOG_MACRO\s+"([A-Za-z0-9_]+)=([0-9]+)"', f.read_text()): defs.append(f"-D{m.group(1)}={m.group(2)}")
     return sorted(set(defs))
 
