@@ -19,7 +19,7 @@ Done and run on a Pocket: grid, held keys, fit view, v1 zoom and pan (smooth sin
 | E | Converter app for users | builds for macOS, Windows and Linux (so far a macOS bundle only); no Python install for users (bundle a runtime, or a compiled helper: a decision); optional `jpeglib` for the JPEG read (19 to 75 times faster, same coefficients, measured) with the pure-Python fallback; skip the coefficient read for 4:4:4 (free, about 50 s of 83 s on a 102 megapixel photo); progress and error messages; code signing and notarisation on macOS; a user guide | Python/helper decision, signing |
 | F | Release engineering | a release core (not `DEV NN`): name, id, platform folder, icon and cover art, `tau-compat` release manifest, a gallery `make_release`, checksums, release notes, `NOTICE` (numpy, Pillow, Tauri, the CPU core, Altera megafunctions), `PROVENANCE`, a card layout a user can copy | name, art, version number |
 | G | The bitstream | the shipped fit is the m1d **seed 1** (setup +0.659 ns, hold +0.084 ns; seed 2 misses hold by 49 ps): fragile. Run 3 to 4 seeds, choose with margin, record the Quartus report baseline (`make gate-report`) | VM fits (1h45 each, your yes and a stated finish time) |
-| H | Validation breadth | the Dock and a TV (never tried), other SD cards (sizes, brands, exFAT only?), a library of 500 to 1,000 pictures, sleep and wake, a card pulled during a read, a damaged picture, a long soak; the 128 KB RAM link has only 2,640 bytes of margin over its floor (B-1105), so every feature in B and C must give RAM back | the Pocket, cards, a TV |
+| H | Validation breadth | the Dock and a TV (never tried), other SD cards (sizes, brands, exFAT only?), a library of 500 to 1,000 pictures, sleep and wake, a card pulled during a read, a damaged picture, a long soak; the 128 KB RAM link has only about 2,000 bytes of margin over its floor (DEV 023: image end 0x17020 of 0x17c00, floor 1,024; 2,640 in DEV 022), so every feature in B and C must give RAM back | the Pocket, cards, a TV |
 | I | Test debt | `make verdict` on the final build, a long fuzz of the container and index readers (with the new card-resident index), the golden frame refreshed to cover a zoom, the whole-core run with a zoom, the wfifo error path | none |
 | J | Installer for media | `install_dev_core.py --add-media` (merge a converter output into the card's library, backup, verify), so the card is never written by hand again | none |
 
@@ -31,7 +31,7 @@ Done and run on a Pocket: grid, held keys, fit view, v1 zoom and pan (smooth sin
 5. **Name and version**: the release core's name and id, and whether 1.0.0 is the first public number.
 
 ## 5. Risks
-- **RAM**: 2,640 bytes of margin on the 128 KB link. Folder tables and details strings need RAM; plan to reclaim it (the 32 KB zoom index buffer is shared with boot already; the Info and pages code can share buffers).
+- **RAM**: about 2,000 bytes of margin on the 128 KB link (DEV 023). Folder tables and details strings need RAM; plan to reclaim it (the 32 KB zoom index buffer is shared with boot already; the Info and pages code can share buffers).
 - **Format change late**: B changes the index and the converter and the firmware together; do it once, early, with a version field, then freeze.
 - **The fit**: any RTL change restarts G. B and C need none; D none. Keep it that way for 1.0.
 - **Untested hardware paths**: the Dock, other cards, 1,000 pictures. H should start as soon as DEV 023 is proven, in parallel with B and C.
