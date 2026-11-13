@@ -11,17 +11,22 @@ Assets/tau_gallery/common/tau-library.tdb      the index (the thumbnails and the
 
 Copy the `Assets` folder to the root of the card (merge it with an existing `Assets` folder).
 
+## Format
+
+- **Hardware decoder** (the default): the compressed container the Tau Gallery core with the hardware decoder draws (DEV 013 and later). Pictures open quickly and zoom to their full size; the files are small. A picture larger than the screen also gets its full-size level automatically (a JPEG keeps its own data as it is, with no loss; any other picture is encoded at the **Zoom level quality**, default 92; the **Fit view quality** is the picture as first shown, default 90). Needs **numpy** besides Pillow; the Python line at the bottom says whether it was found. Converting a very large picture takes a long time (one 102 megapixel JPEG took about 18 minutes).
+- **Plain**: the raw tile format every Tau Gallery core reads; the files are large. The **Zoom levels** option below is for this format only.
+
 ## Options
 
 - **Add to the library already in this folder** (on): keeps what an earlier run converted, so one picture can be added to a library. A picture with the same name is replaced; a picture whose file was removed is dropped from the index. Off starts a new library.
-- **Zoom levels** (on): large pictures also get the half and 1:1 zoom stops for the pan and zoom. About 45 MB more on the card for each large picture; small ones add nothing.
+- **Zoom levels** (on; plain format only): large pictures also get the half and 1:1 zoom stops for the pan and zoom. About 45 MB more on the card for each large picture; small ones add nothing.
 - **Enlarge small pictures** (off): pictures smaller than the screen show at their own size unless this is on.
 
 Drag a picture or a folder onto the window to pick it. A folder is read one level deep (subfolders are not read). Pictures: JPEG, PNG, BMP, GIF, TIFF, WebP. File names on the card are ASCII only (anything else becomes `_` plus a short checksum); the name shown in the gallery keeps the original letters it can (Latin-1).
 
 ## What it needs
 
-Python 3 with Pillow (`python3 -m pip install Pillow`). The app looks for one by itself (the PATH, Homebrew, python.org); the **Python** line at the bottom shows what it found and takes a path if it has to be told. The converter (`tools/gallery/tgy.py`, `tgy_convert.py`) is copied into the app at build time (`npm run sync`), so the app always runs the tested converter.
+Python 3 with Pillow (`python3 -m pip install Pillow`), and numpy for the hardware-decoder format (`python3 -m pip install numpy`). The app looks for one by itself (the PATH, Homebrew, python.org); the **Python** line at the bottom shows what it found and takes a path if it has to be told. The converter (`tools/gallery/tgy_convert.py` and every module it imports, found by reading the import lines) is copied into the app at build time (`npm run sync`), so the app always runs the tested converter.
 
 ## Where it comes from
 

@@ -15,7 +15,7 @@ const EXT: [&str; 8] = ["jpg", "jpeg", "png", "bmp", "gif", "tif", "tiff", "webp
 struct Job(Mutex<Option<Child>>);
 
 #[derive(Serialize, Clone)]
-struct PyStatus { ok: bool, path: String, version: String, pillow: String, message: String }
+struct PyStatus { ok: bool, path: String, version: String, pillow: String, numpy: String, message: String }
 
 #[derive(Serialize)]
 struct Scan { kind: String, name: String, pictures: usize }
@@ -41,19 +41,20 @@ fn python_candidates(user: Option<&str>) -> Vec<String> {
 }
 
 fn probe_python(path: &str) -> Option<PyStatus> {
-    let out = Command::new(path).args(["-c", "import sys, PIL; print(sys.version.split()[0]); print(PIL.__version__)"]).output().ok()?;
+    let out = Command::new(path).args(["-c", "import sys, PIL\ntry:\n import numpy; n = numpy.__version__\nexcept Exception:\n n = ''\nprint(sys.version.split()[0]); print(PIL.__version__); print(n)"]).output().ok()?;
     if !out.status.success() { return None; }
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     let mut lines = text.lines();
     let version = lines.next()?.to_string();
     let pillow = lines.next()?.to_string();
-    Some(PyStatus { ok: true, path: path.to_string(), version, pillow, message: String::new() })
+    let numpy = lines.next().unwrap_or("").to_string();                                   // version 1 files (the hardware decoder's) need numpy; version 0 needs Pillow only
+    Some(PyStatus { ok: true, path: path.to_string(), version, pillow, numpy, message: String::new() })
 }
 
 #[tauri::command]
 fn python_status(user: Option<String>) -> PyStatus {
     for c in python_candidates(user.as_deref()) { if let Some(s) = probe_python(&c) { return s; } }
-    PyStatus { ok: false, path: String::new(), version: String::new(), pillow: String::new(),
+    PyStatus { ok: false, path: String::new(), version: String::new(), pillow: String::new(), numpy: String::new(),
         message: "No Python 3 with Pillow was found. Install Python 3 and run: python3 -m pip install Pillow. Or enter the full path of a Python that has it.".into() }
 }
 
@@ -165,15 +166,32 @@ fn kill_job(job: &Mutex<Option<Child>>) -> bool {
     match job.lock() { Ok(mut slot) => match slot.as_mut() { Some(c) => c.kill().is_ok(), None => false }, Err(_) => false }
 }
 
-#[tauri::command]
-async fn convert(app: AppHandle, input: String, output: String, levels: bool, upscale: bool, merge: bool, python: Option<String>) -> Result<Summary, String> {
-    let py = python_status(python);
-    if !py.ok { return Err(py.message); }
-    let script = converter_script(&app)?;
-    let mut args: Vec<String> = vec!["-u".into(), script.to_string_lossy().into_owned(), input, normalize_output(&output), "--card-layout".into()];
-    if levels { args.push("--levels".into()); }
+/// The converter's command line for one run. `format` is "v0" (the picture as raw tiles, every Tau Gallery core; `levels` adds the half and 1:1 zoom stops) or "v1" (the compressed container the hardware TGY decoder draws;
+/// its zoom level is written by the converter itself for a picture larger than the screen, so `levels` means nothing there; `quality` is the quality of that level for a picture that is not a JPEG, `fit_quality` the fit level's).
+fn convert_args(script: &Path, input: &str, output: &str, levels: bool, upscale: bool, merge: bool, format: &str, quality: u32, fit_quality: u32) -> Result<Vec<String>, String> {
+    if format != "v0" && format != "v1" { return Err(format!("Unknown format {format}.")); }
+    if !(1..=100).contains(&quality) || !(1..=100).contains(&fit_quality) { return Err("The quality is a number from 1 to 100.".into()); }
+    let mut args: Vec<String> = vec!["-u".into(), script.to_string_lossy().into_owned(), input.into(), normalize_output(output), "--card-layout".into()];
+    if format == "v1" { args.extend(["--format".into(), "v1".into(), "--quality".into(), quality.to_string(), "--fit-quality".into(), fit_quality.to_string()]); }
+    else if levels { args.push("--levels".into()); }
     if upscale { args.push("--upscale".into()); }
     if merge { args.push("--merge".into()); }
+    Ok(args)
+}
+
+/// Version 1 files (the hardware decoder's) need numpy in the chosen Python; version 0 needs Pillow only.
+fn python_fits(py: &PyStatus, format: &str) -> Result<(), String> {
+    if format == "v1" && py.numpy.is_empty() { return Err("The hardware-decoder format needs numpy. Install it with: python3 -m pip install numpy".into()); }
+    Ok(())
+}
+
+#[tauri::command]
+async fn convert(app: AppHandle, input: String, output: String, levels: bool, upscale: bool, merge: bool, format: String, quality: u32, fit_quality: u32, python: Option<String>) -> Result<Summary, String> {
+    let py = python_status(python);
+    if !py.ok { return Err(py.message); }
+    python_fits(&py, &format)?;
+    let script = converter_script(&app)?;
+    let args = convert_args(&script, &input, &output, levels, upscale, merge, &format, quality, fit_quality)?;
     let handle = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let job = handle.state::<Job>();
@@ -295,5 +313,42 @@ mod tests {
         let d = tmp("vols"); std::fs::create_dir(d.join("CARD")).unwrap(); std::fs::create_dir(d.join(".hidden")).unwrap(); std::fs::write(d.join("file.txt"), "x").unwrap();
         let v = volumes_in(&[d.to_str().unwrap(), "/no/such/root"]);
         assert_eq!(v.len(), 1); assert_eq!(v[0].name, "CARD"); assert!(v[0].free_gb > 0.0, "free space {}", v[0].free_gb);
+    }
+
+    #[test]
+    fn the_command_line_follows_the_format() {
+        let sc = Path::new("/s/tgy_convert.py");
+        let a = |levels, upscale, merge, f: &str, q, fq| convert_args(sc, "/in", "/Volumes/TauV/Assets/tau_gallery/common", levels, upscale, merge, f, q, fq).unwrap();
+        assert_eq!(a(true, false, true, "v0", 92, 90), ["-u", "/s/tgy_convert.py", "/in", "/Volumes/TauV", "--card-layout", "--levels", "--merge"]);
+        assert_eq!(a(false, true, false, "v0", 50, 50), ["-u", "/s/tgy_convert.py", "/in", "/Volumes/TauV", "--card-layout", "--upscale"], "the qualities are not passed for version 0");
+        assert_eq!(a(true, true, true, "v1", 85, 70), ["-u", "/s/tgy_convert.py", "/in", "/Volumes/TauV", "--card-layout", "--format", "v1", "--quality", "85", "--fit-quality", "70", "--upscale", "--merge"], "zoom levels mean nothing for version 1");
+        assert!(convert_args(sc, "/in", "/o", false, false, false, "v2", 92, 90).unwrap_err().contains("Unknown format"));
+        for (q, fq) in [(0, 90), (101, 90), (92, 0), (92, 101)] { assert!(convert_args(sc, "/in", "/o", false, false, false, "v1", q, fq).unwrap_err().contains("1 to 100"), "{q} {fq}"); }
+    }
+
+    #[test]
+    fn the_python_probe_reports_numpy_and_a_version_1_picture_converts() {
+        let d = tmp("v1"); let p = py();
+        if p.numpy.is_empty() { eprintln!("numpy is not installed here: the version 1 conversion is not run"); return; }
+        let src = d.join("in"); std::fs::create_dir(&src).unwrap(); let out = d.join("out");
+        let code = format!("from PIL import Image; import random; r = random.Random(3); im = Image.frombytes('RGB', (1000, 900), r.randbytes(1000 * 900 * 3)); im.save(r'{}', quality=90)", src.join("big.jpg").display());
+        assert!(Command::new(&p.path).args(["-c", &code]).status().unwrap().success());
+        let job = Mutex::new(None);
+        let args = convert_args(&script(), src.to_str().unwrap(), out.to_str().unwrap(), false, false, false, "v1", 92, 90).unwrap();
+        let s = run_converter(&job, &p.path, &args, |_| {}).unwrap();
+        assert_eq!((s.pictures, s.converted, s.skipped), (1, 1, 0));
+        let f = std::fs::read(out.join("Assets/tau_gallery/common/photos/big.tgy")).unwrap();
+        assert_eq!(&f[0..4], b"TGY\0"); assert_eq!(u16::from_le_bytes([f[4], f[5]]), 1, "a version 1 container");
+        let v0 = convert_args(&script(), src.to_str().unwrap(), d.join("out0").to_str().unwrap(), false, false, false, "v0", 92, 90).unwrap();
+        run_converter(&job, &p.path, &v0, |_| {}).unwrap();
+        let g = std::fs::read(d.join("out0/Assets/tau_gallery/common/photos/big.tgy")).unwrap();
+        assert_eq!(u16::from_le_bytes([g[4], g[5]]), 0, "version 0 stays version 0");
+    }
+
+    #[test]
+    fn version_1_needs_numpy_and_version_0_does_not() {
+        let mut p = PyStatus { ok: true, path: "p".into(), version: "3".into(), pillow: "1".into(), numpy: String::new(), message: String::new() };
+        assert!(python_fits(&p, "v1").unwrap_err().contains("numpy")); assert!(python_fits(&p, "v0").is_ok());
+        p.numpy = "2.0".into(); assert!(python_fits(&p, "v1").is_ok());
     }
 }

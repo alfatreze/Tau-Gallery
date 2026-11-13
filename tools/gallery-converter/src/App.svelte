@@ -10,6 +10,9 @@
   let output = $state<string>(saved.output ?? '');
   let merge = $state<boolean>(saved.merge ?? true);
   let levels = $state<boolean>(saved.levels ?? true);
+  let format = $state<'v0' | 'v1'>(saved.format === 'v0' ? 'v0' : 'v1');
+  let quality = $state<number>(Number(saved.quality) >= 1 && Number(saved.quality) <= 100 ? Number(saved.quality) : 92);
+  let fitQuality = $state<number>(Number(saved.fitQuality) >= 1 && Number(saved.fitQuality) <= 100 ? Number(saved.fitQuality) : 90);
   let upscale = $state<boolean>(saved.upscale ?? false);
   let pythonPath = $state<string>(saved.python ?? '');
   let py = $state<PyStatus | null>(null);
@@ -26,9 +29,10 @@
   let error = $state('');
   let stopping = $state(false);
 
-  $effect(() => { try { localStorage.setItem(KEY, JSON.stringify({ output, merge, levels, upscale, python: pythonPath })); } catch { /* no storage: fine */ } });
+  $effect(() => { try { localStorage.setItem(KEY, JSON.stringify({ output, merge, levels, upscale, format, quality, fitQuality, python: pythonPath })); } catch { /* no storage: fine */ } });
 
-  const canConvert = $derived(!busy && !!py?.ok && !!output && !!scanInfo && (scanInfo.kind === 'file' || scanInfo.kind === 'folder') && scanInfo.pictures > 0);
+  const needsNumpy = $derived(format === 'v1' && !!py?.ok && !py.numpy);
+  const canConvert = $derived(!busy && !!py?.ok && !needsNumpy && !!output && !!scanInfo && (scanInfo.kind === 'file' || scanInfo.kind === 'folder') && scanInfo.pictures > 0);
 
   async function setSource(path: string | null) {
     if (!path) return;
@@ -72,7 +76,7 @@
 
   async function convert() {
     busy = true; stopping = false; error = ''; summary = null; log = []; done = 0; total = scanInfo?.pictures ?? 0; kept = 0;
-    try { summary = await invoke<Summary>('convert', { input: source, output, levels, upscale, merge, python: pythonPath || null }); }
+    try { summary = await invoke<Summary>('convert', { input: source, output, levels, upscale, merge, format, quality, fitQuality, python: pythonPath || null }); }
     catch (e) { error = String(e); }
     finally { busy = false; stopping = false; }
   }
@@ -122,7 +126,21 @@
     </div>
     {#if output}<p class="note">The pictures go to <b>{output}/Assets/tau_gallery/common/</b>{usedRoot ? ' (the folder you chose was inside that tree, so its root is used)' : ''}. For a card that is all there is to do: eject it and put it in the Pocket. For another folder, copy its <b>Assets</b> folder to the root of the card.</p>{/if}
     <label class="opt"><input type="checkbox" bind:checked={merge} disabled={busy} /><span>Add to the library already in this folder<small>Keeps the pictures converted before; a picture with the same name is replaced. Turn off to start a new library.</small></span></label>
+    <fieldset class="fmt" disabled={busy}>
+      <legend>Format</legend>
+      <label class="opt"><input type="radio" name="format" value="v1" bind:group={format} /><span>Hardware decoder<small>For the Tau Gallery core with the hardware decoder (DEV 013 and later). Pictures open quickly and zoom to their full size, whatever the size; the files are small. Needs numpy.</small></span></label>
+      <label class="opt"><input type="radio" name="format" value="v0" bind:group={format} /><span>Plain (every Tau Gallery core)<small>Works on every build. The pictures are stored as raw tiles, so the files are large.</small></span></label>
+    </fieldset>
+    {#if format === 'v0'}
     <label class="opt"><input type="checkbox" bind:checked={levels} disabled={busy} /><span>Zoom levels (pan and zoom)<small>Large pictures keep their detail for zooming. About 45 MB more on the card for each large picture; small ones add nothing.</small></span></label>
+    {:else}
+    <p class="note">Zoom comes with the picture: a picture larger than the screen also gets its full-size level for panning and zooming, no setting needed. A very large picture takes a long time to convert (10 to 20 minutes for 100 megapixels on the test machine, so far one picture tried).</p>
+    <details class="adv"><summary>Quality ({fitQuality} fit view, {quality} zoom level)</summary>
+      <label class="opt"><span>Fit view quality: {fitQuality}<small>The picture as first shown (JPEG-style quality, 1 to 100).</small><input type="range" min="50" max="100" step="1" bind:value={fitQuality} disabled={busy} aria-label="Fit view quality" /></span></label>
+      <label class="opt"><span>Zoom level quality: {quality}<small>Only for pictures that are not JPEG (a JPEG's own data is kept as it is, with no loss).</small><input type="range" min="50" max="100" step="1" bind:value={quality} disabled={busy} aria-label="Zoom level quality" /></span></label>
+    </details>
+    {/if}
+    {#if needsNumpy}<p class="info bad" role="alert">The hardware-decoder format needs numpy. Install it with <b>python3 -m pip install numpy</b>, or choose the plain format.</p>{/if}
     <label class="opt"><input type="checkbox" bind:checked={upscale} disabled={busy} /><span>Enlarge small pictures to fill the screen<small>Off: pictures smaller than the screen show at their own size.</small></span></label>
   </section>
 
@@ -145,7 +163,7 @@
   {/if}
 
   <details open={!py?.ok}>
-    <summary>{py?.ok ? `Python ${py.version} · Pillow ${py.pillow}` : 'Python 3 with Pillow is needed'}</summary>
+    <summary>{py?.ok ? `Python ${py.version} · Pillow ${py.pillow}${py.numpy ? ' · numpy ' + py.numpy : ' · no numpy'}` : 'Python 3 with Pillow is needed'}</summary>
     {#if py && !py.ok}<p class="info bad">{py.message}</p>{/if}
     <div class="pick"><input type="text" bind:value={pythonPath} placeholder="Full path of python3 (optional)" aria-label="Python path" /><button type="button" onclick={checkPython}>Check</button></div>
   </details>
