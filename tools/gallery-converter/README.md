@@ -48,3 +48,7 @@ Tests: `src-tauri` has Rust tests that run the real converter (a folder, one pic
 ## Status
 
 0.1.0. The macOS build is not signed or notarized (right-click, Open the first time). Windows and Linux are not tried.
+
+
+## Tau Gallery 1.0 library (folders, details, sort)
+The converter writes the version 1 library index by default: the subfolders of the folder you choose (one level) become folders of the library (pictures directly in the chosen folder go to a folder named after it, or to ALL PICTURES when there are no subfolders), each picture keeps the EXIF details it has (camera, lens, date taken, shutter, aperture, ISO, focal length: nothing is stored for a field the picture does not have), and thumbnails are 96 x 96 squares cropped from the middle of the picture. The "Library" section sets the order inside a folder (by name, by date taken, as converted) and, for a gallery before 1.0, the old flat index. Adding to a library already on the card (version 0 or 1) keeps its pictures, thumbnails and details.

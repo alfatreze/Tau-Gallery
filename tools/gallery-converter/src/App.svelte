@@ -14,6 +14,8 @@
   let quality = $state<number>(Number(saved.quality) >= 1 && Number(saved.quality) <= 100 ? Number(saved.quality) : 92);
   let fitQuality = $state<number>(Number(saved.fitQuality) >= 1 && Number(saved.fitQuality) <= 100 ? Number(saved.fitQuality) : 90);
   let upscale = $state<boolean>(saved.upscale ?? false);
+  let sort = $state<'name' | 'taken' | 'converted'>(saved.sort === 'taken' || saved.sort === 'converted' ? saved.sort : 'name');
+  let oldIndex = $state<boolean>(saved.oldIndex ?? false);
   let pythonPath = $state<string>(saved.python ?? '');
   let py = $state<PyStatus | null>(null);
   let over = $state(false);
@@ -29,7 +31,7 @@
   let error = $state('');
   let stopping = $state(false);
 
-  $effect(() => { try { localStorage.setItem(KEY, JSON.stringify({ output, merge, levels, upscale, format, quality, fitQuality, python: pythonPath })); } catch { /* no storage: fine */ } });
+  $effect(() => { try { localStorage.setItem(KEY, JSON.stringify({ output, merge, levels, upscale, format, quality, fitQuality, sort, oldIndex, python: pythonPath })); } catch { /* no storage: fine */ } });
 
   const needsNumpy = $derived(format === 'v1' && !!py?.ok && !py.numpy);
   const canConvert = $derived(!busy && !!py?.ok && !needsNumpy && !!output && !!scanInfo && (scanInfo.kind === 'file' || scanInfo.kind === 'folder') && scanInfo.pictures > 0);
@@ -76,7 +78,7 @@
 
   async function convert() {
     busy = true; stopping = false; error = ''; summary = null; log = []; done = 0; total = scanInfo?.pictures ?? 0; kept = 0;
-    try { summary = await invoke<Summary>('convert', { input: source, output, levels, upscale, merge, format, quality, fitQuality, python: pythonPath || null }); }
+    try { summary = await invoke<Summary>('convert', { input: source, output, levels, upscale, merge, format, quality, fitQuality, sort, oldIndex, python: pythonPath || null }); }
     catch (e) { error = String(e); }
     finally { busy = false; stopping = false; }
   }
@@ -102,7 +104,7 @@
     {#if scanInfo}
       <p class="info" aria-live="polite">
         {#if scanInfo.kind === 'folder'}
-          {#if scanInfo.pictures > 0}<b>{scanInfo.name}</b> · folder with <b>{scanInfo.pictures}</b> {scanInfo.pictures === 1 ? 'picture' : 'pictures'} <span class="note">(JPEG, PNG, BMP, GIF, TIFF, WebP; subfolders are not read)</span>
+          {#if scanInfo.pictures > 0}<b>{scanInfo.name}</b> · folder with <b>{scanInfo.pictures}</b> {scanInfo.pictures === 1 ? 'picture' : 'pictures'}{scanInfo.folders ? ` in ${scanInfo.folders} ${scanInfo.folders === 1 ? 'subfolder' : 'subfolders'} (each becomes a folder of the library)` : ''} <span class="note">(JPEG, PNG, BMP, GIF, TIFF, WebP; subfolders are not read)</span>
           {:else}<span class="warn"><b>{scanInfo.name}</b> has no pictures this tool reads.</span>{/if}
         {:else if scanInfo.kind === 'file'}<b>{scanInfo.name}</b> · 1 picture
         {:else if scanInfo.kind === 'unsupported'}<span class="warn"><b>{scanInfo.name}</b> is not a picture this tool reads (JPEG, PNG, BMP, GIF, TIFF, WebP).</span>
@@ -126,6 +128,11 @@
     </div>
     {#if output}<p class="note">The pictures go to <b>{output}/Assets/tau_gallery/common/</b>{usedRoot ? ' (the folder you chose was inside that tree, so its root is used)' : ''}. For a card that is all there is to do: eject it and put it in the Pocket. For another folder, copy its <b>Assets</b> folder to the root of the card.</p>{/if}
     <label class="opt"><input type="checkbox" bind:checked={merge} disabled={busy} /><span>Add to the library already in this folder<small>Keeps the pictures converted before; a picture with the same name is replaced. Turn off to start a new library.</small></span></label>
+    <details class="adv"><summary>Library ({oldIndex ? 'index for a gallery before 1.0' : sort === 'name' ? 'folders, by name' : sort === 'taken' ? 'folders, by date taken' : 'folders, as converted'})</summary>
+      <label class="opt"><span>Order inside a folder<small>The date taken is the camera's EXIF date; pictures without one come last. "As converted" keeps the pictures added earlier first.</small>
+        <select bind:value={sort} disabled={busy || oldIndex} aria-label="Order of the pictures inside a folder"><option value="name">By name</option><option value="taken">By date taken</option><option value="converted">As converted</option></select></span></label>
+      <label class="opt"><input type="checkbox" bind:checked={oldIndex} disabled={busy} /><span>Index for a gallery before 1.0<small>A flat list with small thumbnails, no folders and no picture details. Leave this off for Tau Gallery 1.0.</small></span></label>
+    </details>
     <fieldset class="fmt" disabled={busy}>
       <legend>Format</legend>
       <label class="opt"><input type="radio" name="format" value="v1" bind:group={format} /><span>Hardware decoder<small>For the Tau Gallery core with the hardware decoder (DEV 013 and later). Pictures open quickly and zoom to their full size, whatever the size; the files are small. Needs numpy.</small></span></label>
@@ -155,7 +162,7 @@
       {/if}
       {#if log.length}<div class="log" role="log" aria-label="Converted pictures">{#each log as l}<div class:e={!l.ok}><span>{l.ok ? '✓' : '✕'} {l.name}</span><span>{l.detail}</span></div>{/each}</div>{/if}
       {#if summary}
-        <p class="info ok" role="status"><b>Done.</b> {summary.converted} converted{summary.skipped ? `, ${summary.skipped} skipped` : ''}. The library now has <b>{summary.pictures}</b> {summary.pictures === 1 ? 'picture' : 'pictures'}.</p>
+        <p class="info ok" role="status"><b>Done.</b> {summary.converted} converted{summary.skipped ? `, ${summary.skipped} skipped` : ''}. The library now has <b>{summary.pictures}</b> {summary.pictures === 1 ? 'picture' : 'pictures'}{summary.folders > 1 ? ` in ${summary.folders} folders` : ''}.</p>
         <div class="actions"><button type="button" onclick={showOutput}>Show output folder</button></div>
       {/if}
       {#if error}<p class="info bad" role="alert">{error}</p>{/if}

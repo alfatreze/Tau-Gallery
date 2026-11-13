@@ -18,10 +18,10 @@ struct Job(Mutex<Option<Child>>);
 struct PyStatus { ok: bool, path: String, version: String, pillow: String, numpy: String, message: String }
 
 #[derive(Serialize)]
-struct Scan { kind: String, name: String, pictures: usize }
+struct Scan { kind: String, name: String, pictures: usize, folders: usize }
 
 #[derive(Serialize, Debug)]
-struct Summary { pictures: u64, converted: u64, skipped: u64, out: String }
+struct Summary { pictures: u64, converted: u64, skipped: u64, folders: u64, out: String }
 
 fn is_picture(p: &Path) -> bool {
     p.extension().and_then(|e| e.to_str()).map(|e| EXT.contains(&e.to_ascii_lowercase().as_str())).unwrap_or(false)
@@ -62,12 +62,15 @@ fn python_status(user: Option<String>) -> PyStatus {
 fn scan(path: String) -> Scan {
     let p = Path::new(&path);
     let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.clone());
-    if p.is_file() { return Scan { kind: if is_picture(p) { "file".into() } else { "unsupported".into() }, name, pictures: usize::from(is_picture(p)) }; }
+    if p.is_file() { return Scan { kind: if is_picture(p) { "file".into() } else { "unsupported".into() }, name, pictures: usize::from(is_picture(p)), folders: 0 }; }
     if p.is_dir() {
-        let n = std::fs::read_dir(p).map(|rd| rd.filter_map(|e| e.ok()).filter(|e| e.path().is_file() && is_picture(&e.path())).count()).unwrap_or(0);
-        return Scan { kind: "folder".into(), name, pictures: n };
+        let count = |d: &Path| std::fs::read_dir(d).map(|rd| rd.filter_map(|e| e.ok()).filter(|e| e.path().is_file() && is_picture(&e.path())).count()).unwrap_or(0);
+        let top = count(p);
+        // one level of folders: a subfolder that holds pictures is a folder of the library (hidden ones are not looked at)
+        let subs: Vec<usize> = std::fs::read_dir(p).map(|rd| rd.filter_map(|e| e.ok()).filter(|e| e.path().is_dir() && !e.file_name().to_string_lossy().starts_with('.')).map(|e| count(&e.path())).filter(|n| *n > 0).collect()).unwrap_or_default();
+        return Scan { kind: "folder".into(), name, pictures: top + subs.iter().sum::<usize>(), folders: subs.len() };
     }
-    Scan { kind: "missing".into(), name, pictures: 0 }
+    Scan { kind: "missing".into(), name, pictures: 0, folders: 0 }
 }
 
 #[tauri::command]
@@ -145,7 +148,7 @@ fn run_converter(job: &Mutex<Option<Child>>, python: &str, args: &[String], mut 
     for line in BufReader::new(stdout).lines().map_while(Result::ok) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) {
             match v.get("event").and_then(|e| e.as_str()) {
-                Some("done") => done = Some(Summary { pictures: v["pictures"].as_u64().unwrap_or(0), converted: v["converted"].as_u64().unwrap_or(0), skipped: v["skipped"].as_u64().unwrap_or(0), out: v["out"].as_str().unwrap_or("").to_string() }),
+                Some("done") => done = Some(Summary { pictures: v["pictures"].as_u64().unwrap_or(0), converted: v["converted"].as_u64().unwrap_or(0), skipped: v["skipped"].as_u64().unwrap_or(0), folders: v["folders"].as_u64().unwrap_or(0), out: v["out"].as_str().unwrap_or("").to_string() }),
                 Some("error") => last_error = v["error"].as_str().unwrap_or("").to_string(),
                 _ => {}
             }
@@ -168,14 +171,17 @@ fn kill_job(job: &Mutex<Option<Child>>) -> bool {
 
 /// The converter's command line for one run. `format` is "v0" (the picture as raw tiles, every Tau Gallery core; `levels` adds the half and 1:1 zoom stops) or "v1" (the compressed container the hardware TGY decoder draws;
 /// its zoom level is written by the converter itself for a picture larger than the screen, so `levels` means nothing there; `quality` is the quality of that level for a picture that is not a JPEG, `fit_quality` the fit level's).
-fn convert_args(script: &Path, input: &str, output: &str, levels: bool, upscale: bool, merge: bool, format: &str, quality: u32, fit_quality: u32) -> Result<Vec<String>, String> {
+fn convert_args(script: &Path, input: &str, output: &str, levels: bool, upscale: bool, merge: bool, format: &str, quality: u32, fit_quality: u32, sort: &str, old_index: bool) -> Result<Vec<String>, String> {
     if format != "v0" && format != "v1" { return Err(format!("Unknown format {format}.")); }
+    if sort != "name" && sort != "taken" && sort != "converted" { return Err(format!("Unknown sort order {sort}.")); }
     if !(1..=100).contains(&quality) || !(1..=100).contains(&fit_quality) { return Err("The quality is a number from 1 to 100.".into()); }
     let mut args: Vec<String> = vec!["-u".into(), script.to_string_lossy().into_owned(), input.into(), normalize_output(output), "--card-layout".into()];
     if format == "v1" { args.extend(["--format".into(), "v1".into(), "--quality".into(), quality.to_string(), "--fit-quality".into(), fit_quality.to_string()]); }
     else if levels { args.push("--levels".into()); }
     if upscale { args.push("--upscale".into()); }
     if merge { args.push("--merge".into()); }
+    if old_index { args.extend(["--index-format".into(), "v0".into()]); }              // the flat index of a gallery before 1.0 (no folders, no details)
+    else if sort != "name" { args.extend(["--sort".into(), sort.to_string()]); }
     Ok(args)
 }
 
@@ -186,12 +192,12 @@ fn python_fits(py: &PyStatus, format: &str) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn convert(app: AppHandle, input: String, output: String, levels: bool, upscale: bool, merge: bool, format: String, quality: u32, fit_quality: u32, python: Option<String>) -> Result<Summary, String> {
+async fn convert(app: AppHandle, input: String, output: String, levels: bool, upscale: bool, merge: bool, format: String, quality: u32, fit_quality: u32, sort: String, old_index: bool, python: Option<String>) -> Result<Summary, String> {
     let py = python_status(python);
     if !py.ok { return Err(py.message); }
     python_fits(&py, &format)?;
     let script = converter_script(&app)?;
-    let args = convert_args(&script, &input, &output, levels, upscale, merge, &format, quality, fit_quality)?;
+    let args = convert_args(&script, &input, &output, levels, upscale, merge, &format, quality, fit_quality, &sort, old_index)?;
     let handle = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let job = handle.state::<Job>();
@@ -247,7 +253,8 @@ mod tests {
         make_png(&p.path, &d.join("one.png"), 40, 30); make_png(&p.path, &d.join("two.PNG"), 40, 30); std::fs::write(d.join("notes.txt"), "x").unwrap(); std::fs::create_dir(d.join("sub")).unwrap(); make_png(&p.path, &d.join("sub").join("deep.png"), 10, 10);
         let f = scan(d.join("one.png").to_string_lossy().into_owned()); assert_eq!((f.kind.as_str(), f.pictures), ("file", 1));
         let t = scan(d.join("notes.txt").to_string_lossy().into_owned()); assert_eq!((t.kind.as_str(), t.pictures), ("unsupported", 0));
-        let dir = scan(d.to_string_lossy().into_owned()); assert_eq!((dir.kind.as_str(), dir.pictures), ("folder", 2), "subfolders are not counted");
+        let dir = scan(d.to_string_lossy().into_owned()); assert_eq!((dir.kind.as_str(), dir.pictures, dir.folders), ("folder", 3, 1), "a subfolder with pictures is a folder of the library and its pictures count");
+        let flat = scan(d.join("sub").to_string_lossy().into_owned()); assert_eq!((flat.kind.as_str(), flat.pictures, flat.folders), ("folder", 1, 0));
         let m = scan(d.join("nope").to_string_lossy().into_owned()); assert_eq!((m.kind.as_str(), m.pictures), ("missing", 0));
     }
 
@@ -318,12 +325,17 @@ mod tests {
     #[test]
     fn the_command_line_follows_the_format() {
         let sc = Path::new("/s/tgy_convert.py");
-        let a = |levels, upscale, merge, f: &str, q, fq| convert_args(sc, "/in", "/Volumes/TauV/Assets/tau_gallery/common", levels, upscale, merge, f, q, fq).unwrap();
+        let a = |levels, upscale, merge, f: &str, q, fq| convert_args(sc, "/in", "/Volumes/TauV/Assets/tau_gallery/common", levels, upscale, merge, f, q, fq, "name", false).unwrap();
         assert_eq!(a(true, false, true, "v0", 92, 90), ["-u", "/s/tgy_convert.py", "/in", "/Volumes/TauV", "--card-layout", "--levels", "--merge"]);
         assert_eq!(a(false, true, false, "v0", 50, 50), ["-u", "/s/tgy_convert.py", "/in", "/Volumes/TauV", "--card-layout", "--upscale"], "the qualities are not passed for version 0");
         assert_eq!(a(true, true, true, "v1", 85, 70), ["-u", "/s/tgy_convert.py", "/in", "/Volumes/TauV", "--card-layout", "--format", "v1", "--quality", "85", "--fit-quality", "70", "--upscale", "--merge"], "zoom levels mean nothing for version 1");
-        assert!(convert_args(sc, "/in", "/o", false, false, false, "v2", 92, 90).unwrap_err().contains("Unknown format"));
-        for (q, fq) in [(0, 90), (101, 90), (92, 0), (92, 101)] { assert!(convert_args(sc, "/in", "/o", false, false, false, "v1", q, fq).unwrap_err().contains("1 to 100"), "{q} {fq}"); }
+        assert!(convert_args(sc, "/in", "/o", false, false, false, "v2", 92, 90, "name", false).unwrap_err().contains("Unknown format"));
+        assert!(convert_args(sc, "/in", "/o", false, false, false, "v1", 92, 90, "size", false).unwrap_err().contains("Unknown sort"));
+        let tail = |sort: &str, old: bool| { let v = convert_args(sc, "/in", "/o", false, false, false, "v1", 92, 90, sort, old).unwrap(); v[v.len().saturating_sub(2)..].to_vec() };
+        assert_eq!(tail("taken", false), ["--sort", "taken"]); assert_eq!(tail("converted", false), ["--sort", "converted"]);
+        assert!(!convert_args(sc, "/in", "/o", false, false, false, "v1", 92, 90, "name", false).unwrap().contains(&"--sort".to_string()), "the default sort is the converter's own");
+        assert_eq!(tail("name", true), ["--index-format", "v0"]); assert_eq!(tail("taken", true), ["--index-format", "v0"], "the old index has no sort mode");
+        for (q, fq) in [(0, 90), (101, 90), (92, 0), (92, 101)] { assert!(convert_args(sc, "/in", "/o", false, false, false, "v1", q, fq, "name", false).unwrap_err().contains("1 to 100"), "{q} {fq}"); }
     }
 
     #[test]
@@ -334,12 +346,12 @@ mod tests {
         let code = format!("from PIL import Image; import random; r = random.Random(3); im = Image.frombytes('RGB', (1000, 900), r.randbytes(1000 * 900 * 3)); im.save(r'{}', quality=90)", src.join("big.jpg").display());
         assert!(Command::new(&p.path).args(["-c", &code]).status().unwrap().success());
         let job = Mutex::new(None);
-        let args = convert_args(&script(), src.to_str().unwrap(), out.to_str().unwrap(), false, false, false, "v1", 92, 90).unwrap();
+        let args = convert_args(&script(), src.to_str().unwrap(), out.to_str().unwrap(), false, false, false, "v1", 92, 90, "name", false).unwrap();
         let s = run_converter(&job, &p.path, &args, |_| {}).unwrap();
         assert_eq!((s.pictures, s.converted, s.skipped), (1, 1, 0));
         let f = std::fs::read(out.join("Assets/tau_gallery/common/photos/big.tgy")).unwrap();
         assert_eq!(&f[0..4], b"TGY\0"); assert_eq!(u16::from_le_bytes([f[4], f[5]]), 1, "a version 1 container");
-        let v0 = convert_args(&script(), src.to_str().unwrap(), d.join("out0").to_str().unwrap(), false, false, false, "v0", 92, 90).unwrap();
+        let v0 = convert_args(&script(), src.to_str().unwrap(), d.join("out0").to_str().unwrap(), false, false, false, "v0", 92, 90, "name", false).unwrap();
         run_converter(&job, &p.path, &v0, |_| {}).unwrap();
         let g = std::fs::read(d.join("out0/Assets/tau_gallery/common/photos/big.tgy")).unwrap();
         assert_eq!(u16::from_le_bytes([g[4], g[5]]), 0, "version 0 stays version 0");

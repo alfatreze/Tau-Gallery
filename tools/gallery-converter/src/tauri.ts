@@ -7,9 +7,9 @@ import { getCurrentWebview } from '@tauri-apps/api/webview';
 export const inTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 export type Ev = { event: string; [k: string]: unknown };
 export type PyStatus = { ok: boolean; path: string; version: string; pillow: string; numpy: string; message: string };
-export type Scan = { kind: 'file' | 'folder' | 'unsupported' | 'missing'; name: string; pictures: number };
+export type Scan = { kind: 'file' | 'folder' | 'unsupported' | 'missing'; name: string; pictures: number; folders: number };
 export type Volume = { name: string; path: string; free_gb: number };
-export type Summary = { pictures: number; converted: number; skipped: number; out: string };
+export type Summary = { pictures: number; converted: number; skipped: number; folders: number; out: string };
 
 const handlers: ((e: Ev) => void)[] = [];
 let mockRun = 0;
@@ -18,13 +18,13 @@ async function mockInvoke(cmd: string, args: Record<string, unknown> = {}): Prom
   if (cmd === 'list_volumes') return [{ name: 'TauV', path: '/Volumes/TauV', free_gb: 59.8 }, { name: 'BACKUP', path: '/Volumes/BACKUP', free_gb: 410.2 }] satisfies Volume[];
   if (cmd === 'normalized') { const p = String(args.path).replace(/\/+$/, ''); const i = p.indexOf('/Assets/tau_gallery'); return i >= 0 ? p.slice(0, i) : p; }
   if (cmd === 'default_output') return '/Users/you/Documents/Tau Gallery';
-  if (cmd === 'scan') { const p = String(args.path); return { kind: p.endsWith('/') || !p.includes('.') ? 'folder' : 'file', name: p.split('/').filter(Boolean).pop() ?? p, pictures: p.includes('.') ? 1 : 12 } satisfies Scan; }
+  if (cmd === 'scan') { const p = String(args.path); return { kind: p.endsWith('/') || !p.includes('.') ? 'folder' : 'file', name: p.split('/').filter(Boolean).pop() ?? p, pictures: p.includes('.') ? 1 : 12, folders: p.includes('.') ? 0 : 3 } satisfies Scan; }
   if (cmd === 'convert') {
     const run = ++mockRun, n = String(args.input).includes('.') ? 1 : 12;
     const emit = (e: Ev) => handlers.forEach((h) => h(e));
     emit({ event: 'plan', files: n, kept: args.merge ? 3 : 0 });
     for (let i = 0; i < n; i++) await new Promise((r) => setTimeout(r, 350)), run === mockRun && emit(i === 4 ? { event: 'skip', file: 'broken.jpg', error: 'cannot identify image file' } : { event: 'converted', file: `IMG_${1000 + i}.jpg`, tgy: `IMG_${1000 + i}.tgy`, size: 1748992 + i * 1000, width: 800, height: 600 });
-    return { pictures: n + 3, converted: n - (n > 4 ? 1 : 0), skipped: n > 4 ? 1 : 0, out: String(args.output) } satisfies Summary;
+    return { pictures: n + 3, converted: n - (n > 4 ? 1 : 0), skipped: n > 4 ? 1 : 0, folders: args.oldIndex ? 1 : n > 1 ? 3 : 1, out: String(args.output) } satisfies Summary;
   }
   return null;
 }
