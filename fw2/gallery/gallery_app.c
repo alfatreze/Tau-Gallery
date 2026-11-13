@@ -260,6 +260,35 @@ static void res_clear(uint32_t w) { for (uint32_t i = 0; i < GV_WIN_TX * GV_WIN_
 #define V1Z_STREAM_MAX 122880u                   /* a stream longer than this (a tile of noise at the highest quality is about 60 KB) is not decoded */
 #define V1Z_IDX_MAX 32768u                       /* the full level's tile index: 12 bytes a tile, 2,730 tiles (a 44 megapixel picture) */
 static tgy_file_t v1fz; static tgy_level_t v1z; static uint8_t v1z_idx[V1Z_IDX_MAX]; static uint32_t v1z_idx_ok, v1z_cap = V1Z_IDX_MAX, v1z_smax = V1Z_STREAM_MAX;      /* v1z_cap: the index size accepted (a variable so the host test can lower it) */
+/* An index that does not fit the buffer (more than 2,730 tiles) stays on the card: its checksum is checked once in pieces, and each tile's 12 byte entry is read through a small block cache over the same buffer (v1c_n blocks of v1c_bs bytes,
+ * least recently used out; variables so the host test can make them tiny). The index is row by row, so the entries a window needs are a few blocks. Above V1Z_VERIFY_MAX the checksum is not checked (reading it would take seconds):
+ * an entry that is out of range is refused when it is used, as a damaged stream is stopped by the decoder. */
+#define V1Z_VERIFY_MAX 262144u
+static uint32_t v1c_bs = 4096u, v1c_n = 8u, v1c_pos[16], v1c_age[16], v1c_clock, v1c_reads;
+static uint8_t *v1c_get(uint32_t pos)                                                        /* the block that starts at file offset pos (a multiple of v1c_bs), read from the card on a miss; 0 when the read failed */
+{
+    uint32_t victim = 0u;
+    for (uint32_t i = 0; i < v1c_n; i++) {
+        if (v1c_pos[i] == pos) { v1c_age[i] = ++v1c_clock; return v1z_idx + i * v1c_bs; }
+        if (v1c_pos[i] == 0xFFFFFFFFu) { victim = i; break; }
+        if (v1c_age[i] < v1c_age[victim]) victim = i;
+    }
+    const uint32_t end = v1z.idx_off + v1z.idx_len, len = end - pos < v1c_bs ? end - pos : v1c_bs;
+    if (pos >= end || !read_bytes(SLOT_PIC, pos, len, v1z_idx + victim * v1c_bs)) return 0;
+    v1c_pos[victim] = pos; v1c_age[victim] = ++v1c_clock; v1c_reads++;
+    return v1z_idx + victim * v1c_bs;
+}
+static int v1_idx_entry(void *ctx, uint32_t off, uint8_t *out)                               /* the 12 bytes at file offset off (a block boundary may fall inside them) */
+{
+    (void)ctx;
+    for (uint32_t done = 0; done < 12u; ) {
+        const uint32_t a = off + done, bp = a - a % v1c_bs; const uint8_t *b = v1c_get(bp); if (!b) return 0;
+        uint32_t n = v1c_bs - (a - bp); if (n > 12u - done) n = 12u - done;
+        for (uint32_t k = 0; k < n; k++) out[done + k] = b[a - bp + k];
+        done += n;
+    }
+    return 1;
+}
 typedef struct { uint32_t valid, buf, off_in_buf; int32_t tx, ty; } v1_pre_t;
 static v1_pre_t v1_pre;
 typedef struct { uint32_t valid, tw; int col, row; int32_t tx, ty; } v1_next_t;
@@ -271,7 +300,6 @@ static void v1_zoom_list(void)                                                  
     if (!v1_on || h4[18] != 1u) return;                                                      /* the header's EXIF orientation of the full level: only upright is shown (a rotated one needs a transposing decode) */
     const uint32_t fsize = (uint32_t)h4[48] | (uint32_t)h4[49] << 8 | (uint32_t)h4[50] << 16 | (uint32_t)h4[51] << 24;
     if (tgy_open(&v1fz, h4, fsize, GAL_LAND_BASE * 2u) != TH_OK || tgy_find_level(&v1fz, 1u, &v1z) != TH_OK) return;      /* with the whole file in view, to read the level table */
-    if (v1z.idx_len > v1z_cap) return;                                                       /* an index that does not fit the buffer (the converter writes the full level only for a picture larger than the canvas; a panorama shorter than the screen is centred by the window rules, as for version 0) */
     gt_zoom_t z; z.layout = 2u; z.w = v1z.w; z.h = v1z.h; z.off = v1z.data_off; z.len = v1z.data_len; z.stride = 0u; z.ntx = v1z.cols; z.nty = v1z.rows; z.scale_q16 = 65536u; z.rx = z.ry = z.rw = z.rh = 0u;
     zs[zn++] = z; v1z_idx_ok = 0u;
 }
@@ -335,7 +363,13 @@ static void zoom_leave(void)
 static void zoom_open(int k, int32_t nx, int32_t ny)
 {
     if (zs[k].layout == 2u && !v1z_idx_ok) {                                                  /* the first zoom of a version 1 picture: its tile index (checksum checked) */
-        if (tgy_load_index(&v1fz, &v1z, v1_read_idx, 0, v1z_idx, V1Z_IDX_MAX) != TH_OK) { say("ZOOM INDEX READ FAILED", BAD); zk = -1; return; }
+        int ir;
+        if (v1z.idx_len <= v1z_cap) ir = tgy_load_index(&v1fz, &v1z, v1_read_idx, 0, v1z_idx, V1Z_IDX_MAX);                    /* it fits: the whole index in RAM */
+        else {                                                                                  /* it stays on the card: checked once, then read an entry at a time through the block cache */
+            ir = v1z.idx_len <= V1Z_VERIFY_MAX ? tgy_verify_index(&v1fz, &v1z, v1_read_idx, 0, v1z_idx, V1Z_IDX_MAX) : TH_OK;
+            v1z.idx = 0; v1z.fetch = v1_idx_entry; v1z.fctx = 0; v1c_clock = 0u; for (uint32_t i = 0; i < 16u; i++) { v1c_pos[i] = 0xFFFFFFFFu; v1c_age[i] = 0u; }
+        }
+        if (ir != TH_OK) { say("ZOOM INDEX READ FAILED", BAD); zk = -1; return; }
         v1z_idx_ok = 1u;
     }
     info.zt_n = info.zt_land_sum = info.zt_land_max = info.zt_dec_n = info.zt_dec_sum = info.zt_dec_max = info.zt_pass_max = info.zt_catch = info.zt_moved = info.zt_stall_run_max = info.zt_sp = info.zt_sc = info.zt_sn = info.zt_sj = info.zt_ss = 0u; v1_pre.valid = 0u; z_stall_run = 0u;      /* the tile statistics are those of this zoom */
@@ -762,18 +796,46 @@ static void frame_box(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t c
 #define DET_HY1 246u
 #define DET_HW 190u
 #define DET_HH 76u
-/* The picture details page (gallery_pages.h gd_*): the index's facts, placeholders for what is not read yet, and four empty histogram frames. */
-static void draw_details(const gd_t *d)
+/* The histograms are counted from the picture's thumbnail in the index (the CPU does not read the viewer plane): the same 4 KB reads as draw_thumb, two pixels a word. Returns 0 when a read failed. */
+static hs_t det_hist;
+static int thumb_hist(uint32_t off, hs_t *h)
+{
+    hs_clear(h);
+    for (uint32_t pos = off & ~4095u; pos < off + GX_THUMB_BYTES; pos += 4096u) {
+        if (!slot_read_blocking(SLOT_IDX, pos, (uint32_t)(uintptr_t)_tag_start, 4096u, CLK_HZ)) return 0;
+        const volatile uint32_t *w = GAL_TAGWIN;
+        for (uint32_t i = 0; i < 1024u; i++) {
+            const uint32_t a = pos + 4u * i;
+            if (a < off || a >= off + GX_THUMB_BYTES) continue;
+            const uint32_t v = w[i]; hs_add(h, (uint16_t)(v & 0xFFFFu)); hs_add(h, (uint16_t)(v >> 16));
+        }
+    }
+    return 1;
+}
+#define DET_BX 15u                                       /* the bars: 32 bins of 5 pixels, 15 pixels in from the frame, 50 pixels high, 4 above its bottom edge */
+#define DET_BW 5u
+#define DET_BH 50u
+#define DET_BB 4u
+/* The picture details page (gallery_pages.h gd_*): the index's facts, placeholders for what is not read yet, and four histograms of the thumbnail. */
+static void draw_details(const gd_t *d, const hs_t *hist)
 {
     gd_row_t r[GD_ROWS]; gd_format(d, r); page_clear("DETAILS");
     for (uint32_t i = 0; i < GD_ROWS; i++) {
         const uint32_t y = PAGE_Y0 + i * DET_LINE, pending = i >= 4u;
         gfx_text(6, y, r[i].label, DIM, BG); gfx_text(110, y, r[i].value, pending ? DIM : FG, BG);
     }
+    static const uint16_t bar_col[GD_HIST_N] = { 0xFFFFu, 0xF800u, 0x07E0u, 0x001Fu };
     for (uint32_t h = 0; h < GD_HIST_N; h++) {
         const uint32_t x = (h & 1u) ? DET_HX1 : DET_HX0, y = (h & 2u) ? DET_HY1 : DET_HY0;
-        frame_box(x, y, DET_HW, DET_HH, DIM); gfx_text(x + 6u, y + 6u, gd_hist_labels[h], ACC, BG); gfx_text(x + 6u, y + 34u, GD_HIST_NOTE, DIM, BG);
+        frame_box(x, y, DET_HW, DET_HH, DIM); gfx_text(x + 6u, y + 6u, gd_hist_labels[h], ACC, BG);
+        if (!hist) { gfx_text(x + 6u, y + 34u, GD_HIST_NOTE, DIM, BG); continue; }
+        const uint32_t m = hs_max(hist, h);
+        for (uint32_t i = 0; i < HS_BINS; i++) {
+            const uint32_t bh = hs_height(hist->bin[h][i], m, DET_BH);
+            if (bh) gfx_rect(x + DET_BX + i * DET_BW, y + DET_HH - DET_BB - bh, DET_BW - 1u, bh, bar_col[h]);
+        }
     }
+    gfx_text(6, 324, hist ? GD_HIST_SRC : GD_HIST_NOTE, DIM, BG);
     page_foot("B OR SELECT BACK", 0, 0);
 }
 /* Waits for the next key press (an edge) and returns it. */
@@ -785,7 +847,7 @@ static uint32_t next_edge(uint32_t *prev)
 static void run_details(void)
 {
     const gx_entry_t *e = &ent[sel - page * PER_PAGE]; const gd_t d = { e->name, sel, head.count, e->size, e->width, e->height };
-    uint32_t prev = REG_RD(R_INPUT) & 0xFFFFu; draw_details(&d);
+    uint32_t prev = REG_RD(R_INPUT) & 0xFFFFu; draw_details(&d, thumb_hist(gx_thumb_off(&head, e->thumb), &det_hist) ? &det_hist : 0);
     while (!gd_input(next_edge(&prev))) { }
 }
 static void run_pages(void)

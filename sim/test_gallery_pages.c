@@ -145,6 +145,30 @@ int main(void)
         chk("details: A, Up, Down, Left, Right and Start do not close", gd_input(GP_KEY_A) == 0 && gd_input(GP_KEY_UP) == 0 && gd_input(GP_KEY_DOWN) == 0 && gd_input(GP_KEY_LEFT) == 0 && gd_input(1u << 3) == 0 && gd_input(GP_KEY_START) == 0);
         chk("details: four histogram frames, in the order luma, red, green, blue", GD_HIST_N == 4u && !strcmp(gd_hist_labels[0], "LUMA") && !strcmp(gd_hist_labels[1], "RED") && !strcmp(gd_hist_labels[2], "GREEN") && !strcmp(gd_hist_labels[3], "BLUE"));
         chk("details: the histogram note fits a frame (16 characters)", strlen(GD_HIST_NOTE) <= 16u);
+        { /* histograms: every RGB565 value against a separate, floating-point statement of the rule */
+            int okb = 1; hs_t h;
+            for (uint32_t px = 0; px < 65536u; px++) {
+                hs_clear(&h); hs_add(&h, (uint16_t)px);
+                const double R = ((px >> 11) & 31u) * 255.0 / 31.0, G = ((px >> 5) & 63u) * 255.0 / 63.0, B = (px & 31u) * 255.0 / 31.0;
+                const uint32_t rb = (px >> 11) & 31u, gb = ((px >> 5) & 63u) >> 1, bb = px & 31u;
+                const uint32_t yb = (uint32_t)((0.30078125 * R + 0.5859375 * G + 0.11328125 * B) / 8.0 + 1e-9);          /* 77/256, 150/256, 29/256 of the channels expanded to 255 (the integer expansion differs from this by under 1/255) */
+                uint32_t hits = 0u; for (uint32_t k = 0; k < GD_HIST_N; k++) for (uint32_t i = 0; i < HS_BINS; i++) hits += h.bin[k][i];
+                if (h.n != 1u || hits != 4u || h.bin[1][rb] != 1u || h.bin[2][gb] != 1u || h.bin[3][bb] != 1u) okb = 0;
+                uint32_t yi = 99u; for (uint32_t i = 0; i < HS_BINS; i++) if (h.bin[0][i]) yi = i;
+                if (yi > 31u || (yi != yb && yi + 1u != yb && yi != yb + 1u)) okb = 0;                                   /* the luma bin: the integer rule may sit one bin from the real-valued one at a bin edge, never more */
+            }
+            chk("histogram: each of the 65,536 pixel values lands in one bin per histogram (red and blue their 5 bits, green its top 5, luma within a bin of the weighted sum)", okb);
+            hs_clear(&h); hs_add(&h, 0xFFFFu); hs_add(&h, 0x0000u); hs_add(&h, 0xF800u); hs_add(&h, 0x07E0u); hs_add(&h, 0x001Fu);
+            chk("histogram: white is the last luma bin and black the first; pure red counts in the last red bin and none in green or blue", h.bin[0][31] >= 1u && h.bin[0][0] >= 1u && h.bin[1][31] == 2u && h.bin[1][0] == 3u && h.bin[2][31] == 2u && h.bin[3][31] == 2u && h.n == 5u);
+            hs_clear(&h); hs_add(&h, 0xF800u); chk("histogram: pure red is bright in red only: red bin 31, green bin 0, blue bin 0, a luma bin between 8 and 10 (0.30 of 255)", h.bin[1][31] == 1u && h.bin[2][0] == 1u && h.bin[3][0] == 1u && (h.bin[0][9] == 1u || h.bin[0][8] == 1u));
+            hs_clear(&h); hs_add(&h, 0x07E0u); chk("histogram: pure green has the largest luma weight: luma bin 18 or 19 (0.59 of 255)", h.bin[0][18] == 1u || h.bin[0][19] == 1u);
+            hs_clear(&h); hs_add(&h, 0x001Fu); chk("histogram: pure blue has the smallest luma weight: luma bin 3 or 4 (0.11 of 255)", h.bin[0][3] == 1u || h.bin[0][4] == 1u);
+            int okh = 1; for (uint32_t max = 1u; max <= 7000u; max += 37u) { uint32_t last = 0u; for (uint32_t c = 0u; c <= max; c += (max / 60u) + 1u) { const uint32_t v = hs_height(c, max, 50u); if (v < last || v > 50u || (c > 0u && v < 1u) || (c == 0u && v != 0u)) okh = 0; last = v; } if (hs_height(max, max, 50u) != 50u || hs_height(1u, max, 50u) < 1u) okh = 0; }
+            chk("histogram: a bar is 0 for an empty bin, at least 1 pixel for any other, never more than the plot, grows with the count, and the tallest bin fills the plot", okh);
+            chk("histogram: half the tallest is half the plot, and 6,912 counts of 6,912 do not overflow", hs_height(25u, 50u, 50u) == 25u && hs_height(6912u, 6912u, 50u) == 50u && hs_height(3456u, 6912u, 50u) == 25u);
+            hs_clear(&h); for (uint32_t i = 0; i < 6912u; i++) hs_add(&h, 0x1234u); chk("histogram: a whole thumbnail of one colour (6,912 pixels) counts in 16 bits without wrapping", h.bin[3][0x1234u & 31u] == 6912u && hs_max(&h, 3u) == 6912u && hs_max(&h, 0u) == 6912u);
+            chk("histogram: the source note fits under the frames (19 characters)", strlen(GD_HIST_SRC) <= 24u);
+        }
         { uint32_t found = 0; for (uint32_t i = 0; i < GC_N; i++) if (!strcmp(gc_rows[i].key, "SELECT") && !strcmp(gc_rows[i].what, "PICTURE DETAILS")) found++; chk("controls: SELECT is listed for the grid and for the picture view", found == 2u); }
     }
     int ok = 1;

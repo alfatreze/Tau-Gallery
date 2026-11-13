@@ -67,12 +67,15 @@ void REG_WR(uint32_t a, uint32_t v)
 #include "../fw2/gallery/gallery_fmt.c"
 static uint32_t card_base; static int rd_card(void *c, uint32_t off, uint32_t len, uint8_t *dst) { (void)c; memcpy(dst, mem + card_base + off, len); return 1; }
 static int ticks; static int tick(void *c, uint32_t tx, uint32_t ty) { (void)c; (void)tx; (void)ty; ticks++; return 0; }
+static uint32_t fetch_calls, fetch_fail_at;
+static int fetch_entry(void *c, uint32_t off, uint8_t *out) { (void)c; fetch_calls++; if (fetch_fail_at && fetch_calls == fetch_fail_at) return 0; memcpy(out, mem + card_base + off, 12); return 1; }
+static int rd_fail(void *c, uint32_t off, uint32_t len, uint8_t *dst) { (void)c; (void)off; (void)len; (void)dst; return 0; }
 int main(int argc, char **argv)
 {
     if (argc < 5) return 2; const char *mode = argv[1]; FILE *f = fopen(argv[2], "rb"); if (!f) return 2; uint32_t base = (uint32_t)strtoul(argv[3], 0, 0);
     mem = calloc(MEM_SIZE, 1); if (!mem) return 2;
     fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET); if (fread(mem + base, 1, (size_t)n, f) != (size_t)n) return 2; fclose(f);
-    card_base = base; hw.present = strcmp(mode, "absent") != 0; hw.force_busy = !strcmp(mode, "busy"); const char *fm = !strcmp(mode, "showfull") ? "full" : mode;
+    card_base = base; hw.present = strcmp(mode, "absent") != 0; hw.force_busy = !strcmp(mode, "busy"); const char *fm = (!strcmp(mode, "showfull") || !strcmp(mode, "sliced")) ? "full" : mode;
     if (!strcmp(mode, "badhdr")) mem[base + 9] ^= 0x40;
     if (!strcmp(mode, "prefix") && argc > 5) { n = strtol(argv[5], 0, 0); memset(mem + base + n, 0, (size_t)(MEM_SIZE - base - n)); }          /* only the first n bytes of the file are resident */
     tgy_file_t tf; int r = tgy_open(&tf, mem + base, (uint32_t)n, base);          /* the CPU's RAM copy of the header is the file's own first bytes here */
@@ -81,11 +84,25 @@ int main(int argc, char **argv)
     tgy_level_t l; r = tgy_find_level(&tf, !strcmp(fm, "full") ? 1u : 2u, &l); printf("find %d\n", r); if (r != TH_OK) return 0;
     printf("level %ux%u fmt %u tiles %ux%u rect %u,%u %ux%u\n", l.w, l.h, l.fmt, l.cols, l.rows, l.rx, l.ry, l.rw, l.rh);
     if (!strcmp(mode, "badidx")) mem[base + l.idx_off + 5] ^= 1;
-    static uint8_t ibuf[65536]; r = tgy_load_index(&tf, &l, rd_card, 0, ibuf, sizeof ibuf); printf("index %d\n", r); if (r != TH_OK) return 0;
+    static uint8_t ibuf[65536];
+    if (!strcmp(mode, "sliced")) {                                                  /* the index stays on the card: every entry through fetch equals the resident index, the checks around it, then the whole level decodes through it */
+        tgy_level_t res = l; r = tgy_load_index(&tf, &res, rd_card, 0, ibuf, sizeof ibuf); printf("index %d\n", r); if (r != TH_OK) return 0;
+        tgy_level_t sl = l; sl.idx = 0; sl.fetch = fetch_entry; uint32_t bad = 0, cnt = 0;
+        for (uint32_t ty = 0; ty < l.rows; ty++) for (uint32_t tx = 0; tx < l.cols; tx++) { uint32_t o1 = 1, n1 = 1, o2 = 2, n2 = 2; const int ra = tgy_tile_loc(&res, tx, ty, &o1, &n1), rb = tgy_tile_loc(&sl, tx, ty, &o2, &n2); cnt++; if (ra != rb || (ra == TH_OK && (o1 != o2 || n1 != n2))) bad++; }
+        printf("sliced same %u of %u calls %u\n", cnt - bad, cnt, fetch_calls);
+        { uint32_t o, n2; tgy_level_t none = l; none.idx = 0; none.fetch = 0; printf("range %d %d %d noidx %d\n", tgy_tile_loc(&sl, l.cols, 0, &o, &n2), tgy_tile_loc(&sl, 0, l.rows, &o, &n2), tgy_tile_loc(&sl, 0xFFFFFFFFu, 0, &o, &n2), tgy_tile_loc(&none, 0, 0, &o, &n2)); }
+        { uint32_t o, n2; fetch_fail_at = fetch_calls + 1; printf("fetchfail %d\n", tgy_tile_loc(&sl, 0, 0, &o, &n2)); fetch_fail_at = 0; }
+        { static uint8_t vb[4096]; printf("verify %d small %d", tgy_verify_index(&tf, &l, rd_card, 0, vb, sizeof vb), tgy_verify_index(&tf, &l, rd_card, 0, vb, 100u));
+          printf(" readfail %d zerocap %d", tgy_verify_index(&tf, &l, rd_fail, 0, vb, sizeof vb), tgy_verify_index(&tf, &l, rd_card, 0, vb, 0u));
+          mem[base + l.idx_off + l.idx_len - 1u] ^= 0x80; printf(" lastbyte %d", tgy_verify_index(&tf, &l, rd_card, 0, vb, sizeof vb)); mem[base + l.idx_off + l.idx_len - 1u] ^= 0x80;
+          mem[base + l.idx_off + 7u] ^= 1; printf(" firstbyte %d", tgy_verify_index(&tf, &l, rd_card, 0, vb, 4096u)); mem[base + l.idx_off + 7u] ^= 1; printf(" again %d\n", tgy_verify_index(&tf, &l, rd_card, 0, vb, sizeof vb)); }
+        l = sl; fetch_calls = 0;
+    } else {
+    r = tgy_load_index(&tf, &l, rd_card, 0, ibuf, sizeof ibuf); printf("index %d\n", r); if (r != TH_OK) return 0; }
     if (!strcmp(mode, "hwerr")) { uint32_t ent = base + l.idx_off, off = mem[ent] | mem[ent + 1] << 8 | mem[ent + 2] << 16 | (uint32_t)mem[ent + 3] << 24; memset(mem + base + l.data_off + off, 0xFF, 40); }
     const uint32_t plane = 0x600000u, pitch_full = l.w * 3u + 5u, dst0 = 0x1000000u;
     if (!strcmp(mode, "show")) { memset(mem + plane, 0x55, 2400u * 720u); r = tgy_hw_show(&tf, &l, plane, tick, 0); }
-    else if (!strcmp(mode, "full")) { memset(mem + dst0, 0x55, (size_t)(pitch_full) * (l.h + 1u)); r = tgy_hw_level(&tf, &l, dst0 + 1u, pitch_full, tick, 0); }
+    else if (!strcmp(mode, "full") || !strcmp(mode, "sliced")) { memset(mem + dst0, 0x55, (size_t)(pitch_full) * (l.h + 1u)); r = tgy_hw_level(&tf, &l, dst0 + 1u, pitch_full, tick, 0); }
     else if (!strcmp(mode, "odd")) { tgy_file_t t2 = tf; t2.base |= 1u; r = tgy_hw_tables(&t2, &l); }
     else if (!strcmp(mode, "both")) {                                               /* the fit level on the canvas, then the full level of the SAME file (different tables): the cache must reload */
         tgy_level_t lf; static uint8_t ibuf2[65536]; memset(mem + plane, 0x55, 2400u * 720u); r = tgy_hw_show(&tf, &l, plane, tick, 0);
@@ -114,7 +131,7 @@ int main(int argc, char **argv)
     }
     printf("run %d status %08x ticks %d starts %d loads %d order %d\n", r, tgy_hw_status(), ticks, hw.starts, hw.loads, hw.bad_order);
     FILE *o = fopen(argv[4], "wb");
-    if (!strcmp(mode, "show") || !strcmp(mode, "two") || !strcmp(mode, "retry") || !strcmp(mode, "prefix") || !strcmp(mode, "reloc")) fwrite(mem + plane, 1, 2400u * 720u, o); else if (!strcmp(mode, "full")) fwrite(mem + dst0, 1, (size_t)pitch_full * (l.h + 1u), o);
+    if (!strcmp(mode, "show") || !strcmp(mode, "two") || !strcmp(mode, "retry") || !strcmp(mode, "prefix") || !strcmp(mode, "reloc")) fwrite(mem + plane, 1, 2400u * 720u, o); else if (!strcmp(mode, "full") || !strcmp(mode, "sliced")) fwrite(mem + dst0, 1, (size_t)pitch_full * (l.h + 1u), o);
     else if (!strcmp(mode, "both")) { fwrite(mem + plane, 1, 2400u * 720u, o); fwrite(mem + dst0, 1, (size_t)(l.w * 3u + 5u) * (l.h + 1u), o); }
     fclose(o); return 0;
 }

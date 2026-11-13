@@ -3,12 +3,12 @@
 static uint32_t rd16(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8; }
 static uint32_t rd32(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
 
-uint32_t gf_crc32(const uint8_t *b, uint32_t n)
+uint32_t gf_crc32_step(uint32_t c, const uint8_t *b, uint32_t n)
 {
-    uint32_t c = 0xFFFFFFFFu;
     for (uint32_t i = 0; i < n; i++) { c ^= b[i]; for (int k = 0; k < 8; k++) c = (c >> 1) ^ (0xEDB88320u & (0u - (c & 1u))); }
-    return ~c;
+    return c;
 }
+uint32_t gf_crc32(const uint8_t *b, uint32_t n) { return ~gf_crc32_step(0xFFFFFFFFu, b, n); }
 
 int gx_parse_head(const uint8_t *b, uint32_t n, gx_head_t *h)
 {

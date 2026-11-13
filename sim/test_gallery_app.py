@@ -133,7 +133,7 @@ def mutants(setdir, tail=None):
             ("gallery_app.c", "path[0] = '/';", "path[0] = 'x';"),
             ("gallery_app.c", "if (edge & KEY_B) { gal_view_off();", "if (edge & KEY_B) { "),
             ("gallery_app.c", "if (!v1_on || h4[18] != 1u) return;", "if (!v1_on) return;"),                                                                          # a rotated picture would zoom
-            ("gallery_app.c", "v1z.idx_len > v1z_cap", "v1z.idx_len > v1z_cap * 99u"),                                                                                      # an index larger than the buffer is accepted
+            ("gallery_app.c", "if (v1z.idx_len <= v1z_cap) ir =", "if (v1z.idx_len <= v1z_cap * 99u) ir ="),                                                                                      # an index larger than the buffer is accepted
             ("gallery_app.c", "if (zs[k].layout == 2u && !v1z_idx_ok) {", "if (zs[k].layout == 2u && 0) {"),                                                                 # the tile index is never loaded
             ("gallery_app.c", "{ say(\"ZOOM INDEX READ FAILED\", BAD); zk = -1; return; }", "{ say(\"ZOOM INDEX READ FAILED\", BAD); zk = -1; }"),                              # a failed index read goes on to zoom
             ("gallery_app.c", "        v1z_idx_ok = 1u;\n    }", "    }"),                                                                                                                   # the index is read again at every zoom
@@ -312,6 +312,29 @@ def mutants(setdir, tail=None):
         ("gallery_app.c", "dk == KEY_UP ? 2u : 3u", "dk == KEY_UP ? 3u : 2u"),
         ("gallery_app.c", "rep_next = cycles() + (fresh ? REP_DELAY : REP_RATE);", "rep_next = now + (fresh ? REP_DELAY : REP_RATE);"),
     ]
+    muts += [                                                                                                      # an index kept on the card (the block cache)
+        ("gallery_app.c", "if (v1c_age[i] < v1c_age[victim]) victim = i;", "if (v1c_age[i] > v1c_age[victim]) victim = i;"),
+        ("gallery_app.c", "if (v1c_pos[i] == pos) { v1c_age[i] = ++v1c_clock; return v1z_idx + i * v1c_bs; }", "if (v1c_pos[i] == pos) { return v1z_idx + i * v1c_bs; }"),
+        ("gallery_app.c", "uint32_t n = v1c_bs - (a - bp); if (n > 12u - done) n = 12u - done;", "uint32_t n = 12u - done;"),
+        ("gallery_app.c", "const uint32_t a = off + done, bp = a - a % v1c_bs;", "const uint32_t a = off + done, bp = a - a % 4096u;"),
+        ("gallery_app.c", "out[done + k] = b[a - bp + k];", "out[done + k] = b[k];"),
+        ("gallery_app.c", "v1c_pos[victim] = pos; v1c_age[victim] = ++v1c_clock; v1c_reads++;", "v1c_age[victim] = ++v1c_clock; v1c_reads++;"),
+        ("gallery_app.c", "v1z.idx = 0; v1z.fetch = v1_idx_entry; v1z.fctx = 0; v1c_clock = 0u; for (uint32_t i = 0; i < 16u; i++) { v1c_pos[i] = 0xFFFFFFFFu; v1c_age[i] = 0u; }", "v1z.idx = 0; v1z.fetch = v1_idx_entry; v1z.fctx = 0; v1c_clock = 0u;"),
+        ("gallery_app.c", "ir = v1z.idx_len <= V1Z_VERIFY_MAX ? tgy_verify_index(&v1fz, &v1z, v1_read_idx, 0, v1z_idx, V1Z_IDX_MAX) : TH_OK;", "ir = TH_OK;"),
+        ("gallery_app.c", "const uint32_t end = v1z.idx_off + v1z.idx_len, len = end - pos < v1c_bs ? end - pos : v1c_bs;", "const uint32_t end = v1z.idx_off + v1z.idx_len, len = v1c_bs;"),
+    ]
+    muts += [                                                                                                      # the details page's histograms
+        ("gallery_app.c", "gfx_rect(x + DET_BX + i * DET_BW, y + DET_HH - DET_BB - bh, DET_BW - 1u, bh, bar_col[h]);", "gfx_rect(x + DET_BX + i * DET_BW + 1u, y + DET_HH - DET_BB - bh, DET_BW - 1u, bh, bar_col[h]);"),
+        ("gallery_app.c", "gfx_rect(x + DET_BX + i * DET_BW, y + DET_HH - DET_BB - bh, DET_BW - 1u, bh, bar_col[h]);", "gfx_rect(x + DET_BX + i * DET_BW, y + DET_HH - DET_BB - bh + 1u, DET_BW - 1u, bh, bar_col[h]);"),
+        ("gallery_app.c", "gfx_rect(x + DET_BX + i * DET_BW, y + DET_HH - DET_BB - bh, DET_BW - 1u, bh, bar_col[h]);", "gfx_rect(x + DET_BX + i * DET_BW, y + DET_HH - DET_BB - bh, DET_BW, bh, bar_col[h]);"),
+        ("gallery_app.c", "{ 0xFFFFu, 0xF800u, 0x07E0u, 0x001Fu }", "{ 0xFFFFu, 0x07E0u, 0xF800u, 0x001Fu }"),
+        ("gallery_app.c", "const uint32_t m = hs_max(hist, h);", "const uint32_t m = hs_max(hist, 0u);"),
+        ("gallery_app.c", "gh_clear(h);" if False else "    hs_clear(h);\n    for (uint32_t pos = off & ~4095u;", "    for (uint32_t pos = off & ~4095u;"),
+        ("gallery_app.c", "hs_add(h, (uint16_t)(v & 0xFFFFu)); hs_add(h, (uint16_t)(v >> 16));", "hs_add(h, (uint16_t)(v & 0xFFFFu));"),
+        ("gallery_app.c", "if (a < off || a >= off + GX_THUMB_BYTES) continue;\n            const uint32_t v = w[i];", "if (a >= off + GX_THUMB_BYTES) continue;\n            const uint32_t v = w[i];"),
+        ("gallery_app.c", "if (!hist) { gfx_text(x + 6u, y + 34u, GD_HIST_NOTE, DIM, BG); continue; }", ""),
+        ("gallery_app.c", "gfx_text(6, 324, hist ? GD_HIST_SRC : GD_HIST_NOTE, DIM, BG);", ""),
+    ]
     muts += [                                                                                                      # the version 1 path (open_v1, the hardware decoder)
         ("gallery_app.c", "REG_WR(R_LAND_BASE, GAL_LAND_BASE); REG_WR(R_LAND_CTRL, 1u);", "REG_WR(R_LAND_BASE, GAL_LAND_BASE + 2u); REG_WR(R_LAND_CTRL, 1u);"),
         ("gallery_app.c", "if (!tgy_hw_present()) return 7;", ""),
@@ -321,6 +344,8 @@ def mutants(setdir, tail=None):
         ("gallery_app.c", "r = tgy_hw_show(&v1f, &v1l, GAL_PLANE_BASE * 2u, v1_tick, &show);", "r = tgy_hw_show(&v1f, &v1l, GAL_LAND_BASE * 2u, v1_tick, &show);"),
         ("gallery_app.c", "const uint32_t fsize = (uint32_t)h4[48] | (uint32_t)h4[49] << 8 | (uint32_t)h4[50] << 16 | (uint32_t)h4[51] << 24, base = GAL_LAND_BASE * 2u;", "const uint32_t fsize = (uint32_t)h4[48] | (uint32_t)h4[49] << 8 | (uint32_t)h4[50] << 16 | (uint32_t)h4[51] << 24, base = GAL_LAND_BASE * 2u + 2u;"),
     ]
+    only = sys.argv[sys.argv.index("--only") + 1] if "--only" in sys.argv else None                                   # --only TEXT: just the mutants whose original code contains TEXT (Tier B of CLAUDE.md section 4: the mutants of the code you changed)
+    if only: muts = [m for m in muts if only in m[1]]; assert muts, "no mutant matches --only"
     if tail: muts = muts[-tail:]                                                                                # --v1-mutants: only the version 1 path's
     bad = 0
     for i, (f, a, b) in enumerate(muts):
@@ -333,7 +358,7 @@ def mutants(setdir, tail=None):
 
 if __name__ == "__main__":
     setdir = Path(tempfile.mkdtemp()); make_set(setdir)
-    if "--mutants" in sys.argv: sys.exit(1 if mutants(setdir) else 0)
+    if "--mutants" in sys.argv or "--only" in sys.argv: sys.exit(1 if mutants(setdir) else 0)
     if "--v1-mutants" in sys.argv: sys.exit(1 if mutants(setdir, int(sys.argv[sys.argv.index("--v1-mutants") + 1]) if len(sys.argv) > sys.argv.index("--v1-mutants") + 1 else 7) else 0)
     w = Path(tempfile.mkdtemp())
     if not build(w): sys.exit(1)

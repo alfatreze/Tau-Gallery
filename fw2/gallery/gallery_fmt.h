@@ -39,4 +39,5 @@ int gt_zoom_level(const uint8_t *b, uint32_t n, uint32_t k, gt_zoom_t *z);
 uint32_t gt_row_off(const gt_zoom_t *z, uint32_t row);                      /* a raster level's row: its byte offset in the file, 0xFFFFFFFF past the last row */
 uint32_t gt_tile_off(const gt_zoom_t *z, uint32_t tx, uint32_t ty);       /* the byte offset of a tile in the file, 0xFFFFFFFF when the tile is not in the level */
 uint32_t gf_crc32(const uint8_t *b, uint32_t n);
+uint32_t gf_crc32_step(uint32_t state, const uint8_t *b, uint32_t n);      /* the same in pieces: start with 0xFFFFFFFF, feed the pieces, the checksum is ~state */
 #endif

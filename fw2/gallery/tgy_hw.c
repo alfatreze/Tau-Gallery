@@ -42,7 +42,7 @@ int tgy_level(const tgy_file_t *f, uint32_t i, tgy_level_t *l)
     if (qy >= f->ntables || (fmt != 0u && qc >= f->ntables)) return TH_RANGE;
     l->w = w; l->h = h; l->cols = cols; l->rows = rows; l->data_off = doff; l->data_len = dlen; l->idx_off = ioff; l->idx_len = ilen; l->idx_crc = th32(e + 40);
     l->rx = (uint16_t)th16(e + 8); l->ry = (uint16_t)th16(e + 10); l->rw = (uint16_t)th16(e + 12); l->rh = (uint16_t)th16(e + 14);
-    l->fmt = (uint8_t)fmt; l->kind = (uint8_t)kind; l->qy = (uint8_t)qy; l->qc = (uint8_t)(fmt != 0u ? qc : qy); l->idx = 0;
+    l->fmt = (uint8_t)fmt; l->kind = (uint8_t)kind; l->qy = (uint8_t)qy; l->qc = (uint8_t)(fmt != 0u ? qc : qy); l->idx = 0; l->fetch = 0; l->fctx = 0;
     return TH_OK;
 }
 
@@ -59,6 +59,19 @@ int tgy_load_index(const tgy_file_t *f, tgy_level_t *l, tgy_read_fn rd, void *ct
     if (gf_crc32(buf, l->idx_len) != l->idx_crc) return TH_CRC;
     l->idx = buf;
     return TH_OK;
+}
+
+int tgy_verify_index(const tgy_file_t *f, const tgy_level_t *l, tgy_read_fn rd, void *ctx, uint8_t *buf, uint32_t cap)
+{
+    (void)f;
+    if (cap == 0u) return TH_RANGE;
+    uint32_t c = 0xFFFFFFFFu;
+    for (uint32_t pos = 0; pos < l->idx_len; ) {
+        const uint32_t n = l->idx_len - pos < cap ? l->idx_len - pos : cap;
+        if (!rd(ctx, l->idx_off + pos, n, buf)) return TH_SHORT;
+        c = gf_crc32_step(c, buf, n); pos += n;
+    }
+    return ~c == l->idx_crc ? TH_OK : TH_CRC;
 }
 
 int tgy_hw_present(void) { return (REG_RD(R_TGY_STATUS) >> 31) & 1u; }
@@ -89,8 +102,11 @@ int tgy_hw_tables(const tgy_file_t *f, const tgy_level_t *l)
 
 int tgy_tile_loc(const tgy_level_t *l, uint32_t tx, uint32_t ty, uint32_t *off, uint32_t *len)
 {
-    if (tx >= l->cols || ty >= l->rows || !l->idx) return TH_RANGE;
-    const uint8_t *ent = l->idx + (ty * l->cols + tx) * TH_IDX;
+    if (tx >= l->cols || ty >= l->rows || (!l->idx && !l->fetch)) return TH_RANGE;
+    uint8_t tmp[TH_IDX]; const uint8_t *ent;
+    if (l->idx) ent = l->idx + (ty * l->cols + tx) * TH_IDX;
+    else if (l->fetch(l->fctx, l->idx_off + (ty * l->cols + tx) * TH_IDX, tmp)) ent = tmp;      /* an index kept on the card: one entry through the caller's cache */
+    else return TH_SHORT;
     const uint32_t o = th32(ent), n = th32(ent + 4);
     if (o > l->data_len || n > l->data_len - o || n >= (1u << 20)) return TH_RANGE;
     *off = l->data_off + o; *len = n;                                             /* a file offset: where the tile's stream starts in the file */

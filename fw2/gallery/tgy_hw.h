@@ -9,7 +9,8 @@
 enum { TH_OK = 0, TH_SHORT = 1, TH_MAGIC = 2, TH_VERSION = 3, TH_CRC = 4, TH_RANGE = 5, TH_NOLEVEL = 6, TH_UNSUPPORTED = 7, TH_ABSENT = 8, TH_BUSY = 9, TH_TIMEOUT = 10, TH_HWERR = 11, TH_ODD = 12, TH_ABORT = 13 };
 #define TH_TILE 128u
 typedef struct { const uint8_t *hdr; uint32_t base, n, size, width, height, nlevels, level_off, tables_off, ntables; } tgy_file_t;
-typedef struct { uint32_t w, h, data_off, data_len, idx_off, idx_len, idx_crc, cols, rows; uint16_t rx, ry, rw, rh; uint8_t fmt, kind, qy, qc; const uint8_t *idx; } tgy_level_t;      /* fmt: 0 grey, 1 4:4:4, 2 4:2:0; kind: 1 full, 2 fit */
+typedef int (*tgy_entry_fn)(void *ctx, uint32_t file_off, uint8_t *out12);      /* reads the 12 bytes of one tile index entry at that FILE offset; non-zero when it did */
+typedef struct { uint32_t w, h, data_off, data_len, idx_off, idx_len, idx_crc, cols, rows; uint16_t rx, ry, rw, rh; uint8_t fmt, kind, qy, qc; const uint8_t *idx; tgy_entry_fn fetch; void *fctx; } tgy_level_t;      /* fmt: 0 grey, 1 4:4:4, 2 4:2:0; kind: 1 full, 2 fit */
 /* Opens the file: img = a RAM copy of its first 4,096 bytes, n = how many bytes of the file are resident in SDRAM (all of it, or a prefix: the fit level comes first, so landing the first part is enough to show the picture),
  * base = the SDRAM byte address of file byte 0 (even). Checks magic, version, header size, header checksum, n <= the file size, the level table and the tables section (both inside the first 4 KB); a level that is not entirely
  * inside the n bytes is not offered by tgy_level / tgy_find_level. */
@@ -17,6 +18,9 @@ int tgy_open(tgy_file_t *f, const uint8_t *img, uint32_t n, uint32_t base);
 /* Reads a level's tile index into buf (cap bytes) through rd(ctx, file offset, length, dst) (the app reads it from the card), checks its checksum; l->idx points at buf afterwards. rd returns non-zero when it read. */
 typedef int (*tgy_read_fn)(void *ctx, uint32_t off, uint32_t len, uint8_t *dst);
 int tgy_load_index(const tgy_file_t *f, tgy_level_t *l, tgy_read_fn rd, void *ctx, uint8_t *buf, uint32_t cap);
+/* The same checksum check for an index that does NOT fit in RAM: reads it in pieces of cap bytes (a multiple of 4,096) into buf and checks the whole index's checksum. l->idx stays 0; the caller sets l->fetch to a reader of single entries
+ * (a block cache over the card), and tgy_tile_loc then asks it for each tile. TH_SHORT when a read failed, TH_CRC on a mismatch. */
+int tgy_verify_index(const tgy_file_t *f, const tgy_level_t *l, tgy_read_fn rd, void *ctx, uint8_t *buf, uint32_t cap);
 /* Level i as a tile level the decoder can run (layout 1, mode 1, tile size 128, 4:2:0 or grey), checked; TH_UNSUPPORTED for another kind of level (a RAW level, 4:4:4 on this core), TH_RANGE for a damaged one. */
 int tgy_level(const tgy_file_t *f, uint32_t i, tgy_level_t *l);
 int tgy_find_level(const tgy_file_t *f, unsigned kind, tgy_level_t *l);      /* the first supported tile level of that kind (1 full, 2 fit), TH_NOLEVEL if none */

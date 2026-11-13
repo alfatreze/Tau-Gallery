@@ -272,7 +272,8 @@ static inline int gi_input(uint32_t edge) { return (edge & (GP_KEY_LEFT | GP_KEY
 #define GD_ROWS 8u
 #define GD_HIST_N 4u
 #define GD_NOT_READ "NOT READ YET"
-#define GD_HIST_NOTE "NOT COMPUTED YET"
+#define GD_HIST_NOTE "NOT COMPUTED YET"                                            /* a frame without a thumbnail to count (its read failed) */
+#define GD_HIST_SRC "FROM THE THUMBNAIL"
 static const char *const gd_hist_labels[GD_HIST_N] = { "LUMA", "RED", "GREEN", "BLUE" };
 typedef struct { const char *name; uint32_t index, count, size, width, height; } gd_t;          /* index is 0-based; size is the file's bytes; width and height 0 when the index does not say */
 typedef struct { const char *label; char value[28]; } gd_row_t;
@@ -310,6 +311,40 @@ static inline void gd_format(const gd_t *d, gd_row_t r[GD_ROWS])
     r[5].label = "CAMERA";   q = gi_s(r[5].value, GD_NOT_READ); *q = 0;
     r[6].label = "TAKEN";    q = gi_s(r[6].value, GD_NOT_READ); *q = 0;
     r[7].label = "EXPOSURE"; q = gi_s(r[7].value, GD_NOT_READ); *q = 0;
+}
+/* The histograms: 32 bins each of luma, red, green and blue, counted from the 96 x 72 thumbnail in RGB565 (the CPU does not read the picture plane). Red and blue use their 5 bits as they are, green its top 5 of 6, luma
+ * (77 R + 150 G + 29 B) / 256 on the 8-bit expanded channels, then / 8. A bar is as tall as its count is to the tallest bin of the same histogram (at least 1 pixel for a bin that has any). */
+#define HS_BINS 32u
+typedef struct { uint16_t bin[GD_HIST_N][HS_BINS]; uint32_t n; } hs_t;
+static inline void hs_clear(hs_t *h) { for (uint32_t k = 0; k < GD_HIST_N; k++) for (uint32_t i = 0; i < HS_BINS; i++) h->bin[k][i] = 0u; h->n = 0u; }
+static inline void hs_add(hs_t *h, uint16_t px)
+{
+    const uint32_t r5 = (px >> 11) & 31u, g6 = (px >> 5) & 63u, b5 = px & 31u;
+    const uint32_t r8 = (r5 << 3) | (r5 >> 2), g8 = (g6 << 2) | (g6 >> 4), b8 = (b5 << 3) | (b5 >> 2);
+#if BUG == 17
+    const uint32_t y = (r8 + g8 + b8) / 3u;                                                                                          /* a plain average, not the weights */
+#else
+    const uint32_t y = (77u * r8 + 150u * g8 + 29u * b8) >> 8;
+#endif
+#if BUG == 18
+    h->bin[0][y >> 3]++; h->bin[1][b5]++; h->bin[2][g6 >> 1]++; h->bin[3][r5]++;                                                    /* red and blue swapped */
+#else
+    h->bin[0][y >> 3]++; h->bin[1][r5]++; h->bin[2][g6 >> 1]++; h->bin[3][b5]++;
+#endif
+    h->n++;
+}
+static inline uint32_t hs_max(const hs_t *h, uint32_t k) { uint32_t m = 0u; for (uint32_t i = 0; i < HS_BINS; i++) if (h->bin[k][i] > m) m = h->bin[k][i]; return m; }
+/* Height in pixels of a bar of `count` when the tallest bin is `max` and the plot is `hmax` pixels high. */
+static inline uint32_t hs_height(uint32_t count, uint32_t max, uint32_t hmax)
+{
+    if (count == 0u || max == 0u) return 0u;
+#if BUG == 19
+    const uint32_t v = count * hmax / max;                                                                                           /* a small bin vanishes */
+    return v;
+#else
+    const uint32_t v = (uint32_t)(((uint64_t)count * hmax) / max);
+    return v < 1u ? 1u : v;
+#endif
 }
 /* One key edge: returns 1 when the page should close. */
 #if BUG == 13

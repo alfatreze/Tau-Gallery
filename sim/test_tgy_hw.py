@@ -47,6 +47,13 @@ def suite(exe):
     check("fit level: driver ran clean (order errors 0, one table load)", "run 0" in out and "order 0" in out and "loads 1" in out)
     out, got2 = run(exe, "reloc", data)
     check("tiles decoded from streams copied to odd addresses of their own (the zoom's staging) equal the in-place decode, original streams wiped", "run 0" in out and got2 == run(exe, "show", data)[1] and len(got2) == 2400 * 720)
+    out, got = run(exe, "sliced", data); full_out, full_got = run(exe, "full", data); ntiles = c.levels[full]["cols"] * c.levels[full]["rows"] if "cols" in c.levels[full] else ((c.levels[full]["w"] + 127) // 128) * ((c.levels[full]["h"] + 127) // 128)
+    check("an index kept on the card: every tile's entry through the entry reader equals the resident index (offset, length and result), one reader call per tile", f"sliced same {ntiles} of {ntiles} calls {ntiles}" in out)
+    check("sliced: a tile outside the level (column, row, huge) is TH_RANGE (5) and a level with neither index nor reader is refused (5)", "range 5 5 5 noidx 5" in out)
+    check("sliced: a failing entry read is TH_SHORT (1), not a guess", "fetchfail 1" in out)
+    check("sliced: the whole-index checksum is verified in pieces (4,096 and an odd 100 byte piece both pass), a failed read is TH_SHORT, a zero piece size TH_RANGE, a flipped bit in the first or the last byte TH_CRC (4), and the index passes again once restored",
+          "verify 0 small 0 readfail 1 zerocap 5 lastbyte 4 firstbyte 4 again 0" in out)
+    check("sliced: the whole level decodes through the entry reader to the same pixels as with the resident index", "run 0" in out and got == full_got and len(got) > 0)
     out, got = run(exe, "full", data); e = c.levels[full]; want = c.pixels(full); pitch = e["w"] * 3 + 5
     buf = np.frombuffer(got, np.uint8); rows = buf.reshape(e["h"] + 1, pitch)
     pic = rows[:e["h"], 1:1 + e["w"] * 3].reshape(e["h"], e["w"], 3)
@@ -105,6 +112,14 @@ MUTANTS = [
     ("stream offset not added", "*off = l->data_off + o;", "*off = l->data_off;"), ("table address of Cb/Cr wrong", "128u * l->qc;\n    if ((qy | qc) & 1u)", "128u * l->qy;\n    if ((qy | qc) & 1u)"),
     ("tables skipped when cached wrongly (always)", "if (qy == g_loaded_y && qc == g_loaded_c) return TH_OK;", "if (g_loaded_y != 0xFFFFFFFFu) return TH_OK;"),
     ("index CRC not compared", "if (gf_crc32(buf, l->idx_len) != l->idx_crc) return TH_CRC;", ""),
+    ("a failed entry read is ignored", "    else return TH_SHORT;", "    else ent = tmp;"),
+    ("entry position by column then row", "l->fetch(l->fctx, l->idx_off + (ty * l->cols + tx) * TH_IDX, tmp)", "l->fetch(l->fctx, l->idx_off + (tx * l->rows + ty) * TH_IDX, tmp)"),
+    ("a card-resident level is refused", "(!l->idx && !l->fetch))", "(!l->idx))"),
+    ("verify: the pieces are not summed", "c = gf_crc32_step(c, buf, n); pos += n;", "pos += n;"),
+    ("verify: the result is not compared", "return ~c == l->idx_crc ? TH_OK : TH_CRC;", "return TH_OK;"),
+    ("verify: a failed read is ignored", "if (!rd(ctx, l->idx_off + pos, n, buf)) return TH_SHORT;", "rd(ctx, l->idx_off + pos, n, buf);"),
+    ("verify: the last piece is a whole piece", "const uint32_t n = l->idx_len - pos < cap ? l->idx_len - pos : cap;", "const uint32_t n = cap;"),
+    ("verify: every piece read from the start of the index", "rd(ctx, l->idx_off + pos, n, buf)", "rd(ctx, l->idx_off, n, buf)"),
     ("header CRC not checked", "if (gf_crc32(img, 52u) != th32(img + 52)) return TH_CRC;", ""),
     ("hardware error ignored", "if (g_status & 4u) return TH_HWERR;", ""),
     ("rejected start ignored", "if (g_status & 0x10u) return TH_BUSY;", ""),
