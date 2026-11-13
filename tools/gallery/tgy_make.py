@@ -41,7 +41,7 @@ def from_image(img, quality=92, fit_quality=90):
 def canvas_container(path, prep, quality=92, fit_quality=90, upscale=False, full=True, jobs=0):
     """The container for the gallery APP (docs/TGY_HW_DMA.md): the fit level is the WHOLE 800 x 720 canvas (the picture fitted and centred on black, the black bars are part of the encoded picture), so the hardware decoder writes every
     byte of the viewer plane and the firmware never clears it. `prep` = tgy.prepare(Image) (oriented, sRGB). A picture larger than the canvas also gets its full-resolution level (a JPEG file losslessly, anything else encoded at
-    `quality`) for later zoom; `full=False` omits it. Returns (container bytes, thumbnail RGB565 bytes, (width, height))."""
+    `quality`) for later zoom; `full=False` omits it. A 4:4:4 JPEG is the exception: its full level is encoded again (4:2:0, `quality`), because the core's decoder has no 4:4:4. Returns (container bytes, thumbnail RGB565 bytes, (width, height))."""
     canvas, rect, thumb, size = tgy.render_prepared(prep, upscale=upscale)
     rgb = np.frombuffer(canvas, np.uint8).reshape(tgy.CANVAS_H, tgy.CANVAS_W, 3)
     levels = [dict(kind=C.KIND_FIT, pic=E.encode_rgb(rgb, fit_quality, 2), rect=(0, 0, tgy.CANVAS_W, tgy.CANVAS_H))]; orient = 1
@@ -53,6 +53,7 @@ def canvas_container(path, prep, quality=92, fit_quality=90, upscale=False, full
             elif orient != 1: orient = 1
             pic = j
             if (j.width, j.height) not in ((prep.width, prep.height), (prep.height, prep.width)): pic = None
+            if pic is not None and C.sub_of(pic) == C.SUB_444: pic = None      # the hardware decoder of this core draws 4:2:0 and grey only: a 4:4:4 JPEG's zoom level is encoded again as 4:2:0 (from the sRGB picture) so it zooms at all; its chroma resolution is halved
         except (ValueError, IndexError, StopIteration, KeyError, AssertionError, OSError): pic = None
         if pic is None: orient = 1; pic = E.encode_rgb(np.asarray(prep), quality, 2)
         levels.append(dict(kind=C.KIND_FULL, pic=pic, rect=(0, 0, prep.width, prep.height)))

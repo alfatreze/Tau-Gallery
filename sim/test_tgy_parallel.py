@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Tests the parallel tile encoder of tools/gallery/tgy_container.py (encode_tiles, the --jobs option of the converter): coding the tiles of a picture on several processes must give the SAME file, byte for byte, as one process,
-for a JPEG source (the lossless full level), a picture that is not a JPEG (encoded here), a picture with a partial last window of tiles, and when jobs is more than the tiles. `--mutants` edits copies of the module: an unordered
+for a JPEG source (the lossless full level), a picture that is not a JPEG (encoded here), a picture with a partial last window of tiles, and when jobs is more than the tiles. Also the zoom level of a 4:4:4 JPEG (the core's decoder has no 4:4:4: it is encoded as 4:2:0). `--mutants` edits copies of the module: an unordered
 result, a lost last window, a window that is never flushed and a tile handed to the wrong coder must each fail. Run: python3 sim/test_tgy_parallel.py [--mutants]"""
 import io, sys, tempfile, importlib, shutil
 from pathlib import Path
@@ -42,6 +42,11 @@ def suite(C, MK, tgy, tmp):
     got = list(C.encode_tiles(((g, s) for _, _, g, s in list(C.R.split_tiles(C.jpegcoef.read_jpeg(jp.read_bytes())))[:5]), 2))
     check("five tiles through two processes come back in order", got == seq)
     check("auto_jobs is between 1 and 8", 1 <= C.auto_jobs() <= 8)
+    def full_fmt(sub, grey=False, kind=1):
+        f = tmp / f"s{sub}{grey}.jpg"; im = picture(1000, 900, 9); (im.convert("L") if grey else im).save(f, quality=90, **({} if grey else {"subsampling": sub}))
+        data, _, _ = MK.canvas_container(f, tgy.prepare(Image.open(f)), 92, 90, False, jobs=1); c = C.Container(data); return [e["pixfmt"] for e in c.levels if e["kind"] == kind]
+    check("a 4:4:4 JPEG's zoom level is stored as 4:2:0 (the core's decoder has no 4:4:4); 4:2:0 stays 4:2:0; grey stays grey; 4:2:2 is stored as 4:2:0 too",
+          full_fmt(0) == [C.SUB_420] and full_fmt(2) == [C.SUB_420] and full_fmt(0, grey=True) == [C.SUB_GREY] and full_fmt(1) == [C.SUB_420])
     import multiprocessing
     real_pool = multiprocessing.Pool
     def no_pool(*a, **k): raise AssertionError("a pool was started")
@@ -55,14 +60,19 @@ if __name__ == "__main__":
     tmp = Path(tempfile.mkdtemp())
     C, MK, tgy = build(); suite(C, MK, tgy, tmp)
     if "--mutants" in sys.argv:
-        src = (ROOT / "tools/gallery/tgy_container.py").read_text(); bad = 0
-        for name, a, b in (("the windows come back reversed", "if len(window) >= jobs * 16: yield from pool.map(_encode_one, window, chunksize=4); window = []", "if len(window) >= jobs * 16: yield from reversed(pool.map(_encode_one, window, chunksize=4)); window = []"),
+        src = (ROOT / "tools/gallery/tgy_container.py").read_text(); mksrc = (ROOT / "tools/gallery/tgy_make.py").read_text(); bad = 0
+        for name, a, b in (("a 4:4:4 JPEG keeps its 4:4:4 level", "if pic is not None and C.sub_of(pic) == C.SUB_444: pic = None", "pass"),
+                           ("a 4:2:0 JPEG is encoded again as well", "if pic is not None and C.sub_of(pic) == C.SUB_444: pic = None", "if pic is not None: pic = None"),
+                           ("a grey JPEG is encoded again as well", "if pic is not None and C.sub_of(pic) == C.SUB_444: pic = None", "if pic is not None and C.sub_of(pic) != C.SUB_420: pic = None"),
+                           ("the windows come back reversed", "if len(window) >= jobs * 16: yield from pool.map(_encode_one, window, chunksize=4); window = []", "if len(window) >= jobs * 16: yield from reversed(pool.map(_encode_one, window, chunksize=4)); window = []"),
                            ("the last window is dropped", "        if window: yield from pool.map(_encode_one, window, chunksize=4)\n", ""),
                            ("a full window is dropped", "if len(window) >= jobs * 16: yield from pool.map(_encode_one, window, chunksize=4); window = []", "if len(window) >= jobs * 16: window = []"),
                            ("each tile is coded with the next tile's shapes", "def _encode_one(t): return V.encode_tile(t[0], t[1])", "def _encode_one(t): return V.encode_tile(t[0], t[1][::-1])"),
                            ("one process is not serial: it always uses a pool of 2", "    if jobs <= 1:\n        for t in tiles: yield _encode_one(t)\n        return", "    jobs = max(jobs, 2)")):
-            assert a in src, name
-            d = Path(tempfile.mkdtemp()); [shutil.copy(p, d / p.name) for p in (ROOT / "tools/gallery").glob("*.py")]; (d / "tgy_container.py").write_text(src.replace(a, b, 1))
+            assert a in src or a in mksrc, name
+            d = Path(tempfile.mkdtemp()); [shutil.copy(p, d / p.name) for p in (ROOT / "tools/gallery").glob("*.py")]
+            if a in mksrc: (d / "tgy_make.py").write_text(mksrc.replace(a, b, 1))
+            else: (d / "tgy_container.py").write_text(src.replace(a, b, 1))
             before = fails; buf = io.StringIO(); old = sys.stdout; sys.stdout = buf
             try: C2, MK2, tgy2 = build(d); suite(C2, MK2, tgy2, tmp)
             except Exception as e: fails += 1; print("exception", repr(e)[:80])
