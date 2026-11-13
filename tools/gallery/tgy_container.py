@@ -48,9 +48,9 @@ def auto_jobs():
     import os
     return max(1, min(os.cpu_count() or 1, 8))
 
-def encode_tiles(tiles, jobs=0):
+def encode_tiles(tiles, jobs=1):
     """The stream of each (grids, shapes) tile, in the order given. Every tile is coded as a stream of its own (the symbol layer's contexts start afresh at a tile), so coding them on several processes gives the SAME bytes as one process
-    (tested); jobs 0 = automatic, 1 = this process only. The tiles are handed over in windows of 16 per process so a very large picture never has all its tiles waiting in memory at once."""
+    (tested); jobs 0 = automatic, 1 = this process only (the default: a script that calls this library at the top level, without `if __name__ == "__main__":`, cannot start worker processes; the converter's command line, which has the guard, asks for automatic). The tiles are handed over in windows of 16 per process so a very large picture never has all its tiles waiting in memory at once."""
     jobs = auto_jobs() if not jobs else jobs
     if jobs <= 1:
         for t in tiles: yield _encode_one(t)
@@ -63,7 +63,7 @@ def encode_tiles(tiles, jobs=0):
             if len(window) >= jobs * 16: yield from pool.map(_encode_one, window, chunksize=4); window = []
         if window: yield from pool.map(_encode_one, window, chunksize=4)
 
-def write_container(width, height, orientation, thumb565, levels, jobs=0):
+def write_container(width, height, orientation, thumb565, levels, jobs=1):
     """levels: list of dicts: kind, pic (a jpegcoef.Jpeg-like coefficient picture; for KIND_FIT_RAW the RGB888 canvas bytes under 'raw'), rect (x, y, w, h placement in the 800 x 720 canvas for the fit levels, else (0, 0, w, h)).
     The level order in the file is the list order (put the fit level first: it is the first thing a viewer reads)."""
     assert len(thumb565) == THUMB_BYTES and 0 < len(levels) <= MAX_LEVELS

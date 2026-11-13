@@ -38,7 +38,7 @@ def from_image(img, quality=92, fit_quality=90):
     levels = ([lvl] if lvl else []) + [dict(kind=C.KIND_FULL, pic=full, rect=rect if not lvl else (0, 0, rgb.shape[1], rgb.shape[0]))]
     return C.write_container(rgb.shape[1], rgb.shape[0], 1, thumb_of(small), levels)
 
-def canvas_container(path, prep, quality=92, fit_quality=90, upscale=False, full=True, jobs=0):
+def canvas_container(path, prep, quality=92, fit_quality=90, upscale=False, full=True, jobs=1):
     """The container for the gallery APP (docs/TGY_HW_DMA.md): the fit level is the WHOLE 800 x 720 canvas (the picture fitted and centred on black, the black bars are part of the encoded picture), so the hardware decoder writes every
     byte of the viewer plane and the firmware never clears it. `prep` = tgy.prepare(Image) (oriented, sRGB). A picture larger than the canvas also gets its full-resolution level (a JPEG file losslessly, anything else encoded at
     `quality`) for later zoom; `full=False` omits it. A 4:4:4 JPEG is the exception: its full level is encoded again (4:2:0, `quality`), because the core's decoder has no 4:4:4. Returns (container bytes, thumbnail RGB565 bytes, (width, height))."""
@@ -48,7 +48,9 @@ def canvas_container(path, prep, quality=92, fit_quality=90, upscale=False, full
     if full and (prep.width > tgy.CANVAS_W or prep.height > tgy.CANVAS_H):
         pic = None; data = Path(path).read_bytes() if path is not None else b""
         try:
-            j = jpegcoef.read_jpeg(data); orient = int(Image.open(io.BytesIO(data)).getexif().get(0x0112, 1) or 1)
+            src_img = Image.open(io.BytesIO(data))
+            if tgy.needs_srgb(src_img): raise ValueError("a wide-gamut profile: the fit view is converted to sRGB, so the zoom level is encoded from the converted picture to keep the colours")
+            j = jpegcoef.read_jpeg(data); orient = int(src_img.getexif().get(0x0112, 1) or 1)
             if orient in ORIENT: assert (j.width, j.height) == (prep.height, prep.width) or orient in (2, 3, 4)
             elif orient != 1: orient = 1
             pic = j

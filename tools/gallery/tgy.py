@@ -82,14 +82,27 @@ def tile_data(img):
     assert len(out) == ntx * nty * TILE_BYTES
     return bytes(out), ntx, nty
 
-def to_srgb(img):
-    """An image with an ICC profile other than sRGB (Display P3 is common from phones) converted to sRGB; the Pocket's panel and every viewer assume sRGB. A missing, unreadable or sRGB profile leaves the pixels alone."""
+def _icc_profile(img):
+    """The ImageCms profile of an RGB image whose ICC profile is readable and is not sRGB, else None (the case to_srgb leaves alone)."""
     icc = img.info.get("icc_profile")
-    if not icc or img.mode not in ("RGB", "RGBA"): return img
+    if not icc or img.mode not in ("RGB", "RGBA"): return None
     try:
         from PIL import ImageCms
         prof = ImageCms.ImageCmsProfile(io.BytesIO(icc))
-        if "srgb" in ImageCms.getProfileDescription(prof).lower(): return img
+        return None if "srgb" in ImageCms.getProfileDescription(prof).lower() else prof
+    except Exception:
+        return None
+
+def needs_srgb(img):
+    """True when to_srgb will change this image's colours (a readable ICC profile that is not sRGB). A zoom level that keeps a JPEG's own coefficients cannot be converted, so such a picture's zoom level is encoded again from the converted picture."""
+    return _icc_profile(img) is not None
+
+def to_srgb(img):
+    """An image with an ICC profile other than sRGB (Display P3 is common from phones) converted to sRGB; the Pocket's panel and every viewer assume sRGB. A missing, unreadable or sRGB profile leaves the pixels alone."""
+    prof = _icc_profile(img)
+    if prof is None: return img
+    try:
+        from PIL import ImageCms
         out = ImageCms.profileToProfile(img.convert("RGB"), prof, ImageCms.createProfile("sRGB"), outputMode="RGB")
         return out if out is not None else img
     except Exception:
