@@ -142,8 +142,7 @@ int main(void)
         chk("details: the position is 1-based (index 4 of 52 is picture 5)", !strcmp(r[1].label, "PICTURE") && !strcmp(r[1].value, "5 OF 52"));
         chk("details: the size is width X height", !strcmp(r[2].label, "SIZE") && !strcmp(r[2].value, "2560 X 1705"));
         chk("details: 2,592,768 bytes is 2.4 MB", !strcmp(r[3].label, "FILE") && !strcmp(r[3].value, "2.4 MB"));
-        chk("details: the rows that need unread data say so", !strcmp(r[4].value, GD_NOT_READ) && !strcmp(r[5].value, GD_NOT_READ) && !strcmp(r[6].value, GD_NOT_READ) && !strcmp(r[7].value, GD_NOT_READ)
-            && !strcmp(r[4].label, "FORMAT") && !strcmp(r[5].label, "CAMERA") && !strcmp(r[6].label, "TAKEN") && !strcmp(r[7].label, "EXPOSURE"));
+        chk("details: gd_format fills the four rows every picture has (NAME, PICTURE, SIZE, FILE)", !strcmp(r[0].label, "NAME") && !strcmp(r[1].label, "PICTURE") && !strcmp(r[2].label, "SIZE") && !strcmp(r[3].label, "FILE"));
         char b[28]; gd_size(b, 0u) [0] = 0; chk("details: 0 bytes", !strcmp(b, "0 B")); *gd_size(b, 1023u) = 0; chk("details: 1023 bytes stays in bytes", !strcmp(b, "1023 B"));
         *gd_size(b, 1024u) = 0; chk("details: 1024 bytes is 1 KB", !strcmp(b, "1 KB")); *gd_size(b, 1048575u) = 0; chk("details: just under 1 MiB is 1023 KB", !strcmp(b, "1023 KB"));
         *gd_size(b, 1048576u) = 0; chk("details: 1 MiB is 1.0 MB", !strcmp(b, "1.0 MB")); *gd_size(b, 4294967295u) = 0; chk("details: the largest size does not overflow (4095.9 MB)", !strcmp(b, "4095.9 MB"));
@@ -151,7 +150,46 @@ int main(void)
         d.width = 800u; d.height = 0u; gd_format(&d, r); chk("details: so does a missing height", !strcmp(r[2].value, "UNKNOWN"));
         gd_t longn = { "0123456789012345678901234567890123456789", 0u, 1u, 10u, 1u, 1u }; gd_format(&longn, r);
         chk("details: a long name is cut to the column (26) and ends", strlen(r[0].value) == 26u && !strncmp(r[0].value, "01234567890123456789012345", 26));
-        { uint32_t okw = 1; gd_t w = { "N", 4294967294u, 4294967295u, 4294967295u, 4294967295u, 4294967295u }; gd_format(&w, r); for (uint32_t i = 0; i < GD_ROWS; i++) if (strlen(r[i].value) > 27u) okw = 0; chk("details: the widest values fit the 28 byte value field", okw); }
+        { uint32_t okw = 1; gd_t w = { "N", 4294967294u, 4294967295u, 4294967295u, 4294967295u, 4294967295u }; gd_format(&w, r); for (uint32_t i = 0; i < 4u; i++) if (strlen(r[i].value) > 27u) okw = 0; chk("details: the widest values fit the 28 byte value field", okw); }
+        {   /* Gallery 1.0 details: the items of a picture (bytes as tools/gallery/tgy.py pack_details writes them), the INFO and SHOT rows, the pages */
+            static const uint8_t full[] = { 1, 4, 'J', 'P', 'E', 'G', 2, 12, 'C','a','n','o','n',' ','E','O','S',' ','R','5', 3, 14, 'R','F','2','4','-','7','0','m','m',' ','F','2','.','8', 4, 7, 0xE8, 0x07, 5, 17, 13, 4, 59,
+                                            5, 8, 1, 0, 0, 0, 250, 0, 0, 0, 6, 2, 28, 0, 7, 4, 0x90, 0x01, 0, 0, 8, 2, 0x5E, 0x01 };
+            gd_meta_t m; gd_row_t ir[GD_ROWS], sr[GD_ROWS]; gd_t dd = { "Sunset", 4u, 52u, 2592768u, 2560u, 1705u };
+            gd_meta_parse(full, sizeof full, &m);
+            chk("details meta: every field of a full run is found", m.has == (GDM_FORMAT | GDM_CAMERA | GDM_LENS | GDM_TAKEN | GDM_SHUTTER | GDM_APERTURE | GDM_ISO | GDM_FOCAL) && !strcmp(m.format, "JPEG") && !strcmp(m.camera, "Canon EOS R5") && !strcmp(m.lens, "RF24-70mm F2.8"));
+            chk("details meta: date, shutter, aperture, ISO and focal length values", m.year == 2024u && m.mon == 5u && m.day == 17u && m.hour == 13u && m.min == 4u && m.sec == 59u && m.shutter_n == 1u && m.shutter_d == 250u && m.aperture10 == 28u && m.iso == 400u && m.focal10 == 350u);
+            uint32_t n = gdi_rows(&dd, &m, ir);
+            chk("details INFO: eight rows, the four always there and then FORMAT, CAMERA, LENS, TAKEN", n == 8u && !strcmp(ir[4].label, "FORMAT") && !strcmp(ir[4].value, "JPEG") && !strcmp(ir[5].label, "CAMERA") && !strcmp(ir[5].value, "Canon EOS R5") && !strcmp(ir[6].label, "LENS") && !strcmp(ir[6].value, "RF24-70mm F2.8") && !strcmp(ir[7].label, "TAKEN") && !strcmp(ir[7].value, "2024-05-17 13:04"));
+            n = gds_rows(&m, sr);
+            chk("details SHOT: shutter 1/250 S, aperture F/2.8, ISO 400, focal length 35 MM", n == 4u && !strcmp(sr[0].label, "SHUTTER") && !strcmp(sr[0].value, "1/250 S") && !strcmp(sr[1].label, "APERTURE") && !strcmp(sr[1].value, "F/2.8") && !strcmp(sr[2].label, "ISO") && !strcmp(sr[2].value, "400") && !strcmp(sr[3].label, "FOCAL LENGTH") && !strcmp(sr[3].value, "35 MM"));
+            { static const uint8_t sh[] = { 5, 8, 2, 0, 0, 0, 1, 0, 0, 0, 8, 2, 0xAF, 0x00 }, sh2[] = { 5, 8, 5, 0, 0, 0, 2, 0, 0, 0 }, sh3[] = { 5, 8, 1, 0, 0, 0, 3, 0, 0, 0, 6, 2, 0xFF, 0x00 }; gd_meta_t q;
+              gd_meta_parse(sh, sizeof sh, &q); n = gds_rows(&q, sr); chk("details SHOT: 2 S for a whole number of seconds, 17.5 MM for a fractional focal length", n == 2u && !strcmp(sr[0].value, "2 S") && !strcmp(sr[1].value, "17.5 MM"));
+              gd_meta_parse(sh2, sizeof sh2, &q); n = gds_rows(&q, sr); chk("details SHOT: 5/2 is 2.5 S", n == 1u && !strcmp(sr[0].value, "2.5 S"));
+              gd_meta_parse(sh3, sizeof sh3, &q); n = gds_rows(&q, sr); chk("details SHOT: 1/3 S and a three-digit aperture (F/25.5)", n == 2u && !strcmp(sr[0].value, "1/3 S") && !strcmp(sr[1].value, "F/25.5")); }
+            { static const uint8_t none[] = { 99, 3, 1, 2, 3 }, bad_date[] = { 4, 7, 0xE8, 0x07, 13, 17, 13, 4, 59 }, zero_den[] = { 5, 8, 1, 0, 0, 0, 0, 0, 0, 0 }, wrong_size[] = { 7, 3, 1, 2, 3 }, over[] = { 7, 4, 0x90, 0x01, 0, 0, 2, 40, 'x', 'y' }, trunc[] = { 7 };
+              gd_meta_t q;
+              gd_meta_parse(none, sizeof none, &q); chk("details meta: an unknown tag is skipped and nothing is found", q.has == 0u);
+              gd_meta_parse(bad_date, sizeof bad_date, &q); chk("details meta: a date with month 13 is not a date", !(q.has & GDM_TAKEN));
+              gd_meta_parse(zero_den, sizeof zero_den, &q); chk("details meta: a shutter with a zero denominator is not a shutter", !(q.has & GDM_SHUTTER));
+              gd_meta_parse(wrong_size, sizeof wrong_size, &q); chk("details meta: an ISO item of the wrong size is ignored", !(q.has & GDM_ISO));
+              gd_meta_parse(over, sizeof over, &q); chk("details meta: an item reaching past the run ends the parse, what came before it counts", q.has == GDM_ISO && q.iso == 400u);
+              gd_meta_parse(trunc, sizeof trunc, &q); chk("details meta: a run cut after a tag byte is harmless", q.has == 0u);
+              gd_meta_parse(none, 0u, &q); chk("details meta: an empty run has nothing", q.has == 0u);
+              n = gdi_rows(&dd, &q, ir); chk("details INFO: a picture with no details has exactly the four rows (no empty fields)", n == 4u);
+              n = gds_rows(&q, sr); chk("details SHOT: no exposure fields, no rows", n == 0u); }
+            { static uint8_t longcam[44]; gd_meta_t q; longcam[0] = 2; longcam[1] = 40; for (uint32_t i = 0; i < 40u; i++) longcam[2 + i] = 'x'; gd_meta_parse(longcam, sizeof longcam, &q); n = gdi_rows(&dd, &q, ir);
+              chk("details INFO: a 40 character camera name is cut to the 27 character column", n == 5u && strlen(ir[4].value) == 26u); }
+            { gdp_t p; gd_meta_t q; static const uint8_t isoonly[] = { 7, 4, 100, 0, 0, 0 }, fmtonly[] = { 1, 3, 'P', 'N', 'G' };
+              gdp_open(&p, &m); chk("details pages: a full picture has INFO, SHOT, HISTOGRAMS", p.n == 3u && p.id[0] == GDP_INFO && p.id[1] == GDP_SHOT && p.id[2] == GDP_HIST && p.cur == 0u);
+              gd_meta_parse(fmtonly, sizeof fmtonly, &q); gdp_open(&p, &q); chk("details pages: with no exposure field the SHOT page is not offered", p.n == 2u && p.id[0] == GDP_INFO && p.id[1] == GDP_HIST);
+              gd_meta_parse(isoonly, sizeof isoonly, &q); gdp_open(&p, &q); chk("details pages: one exposure field is enough to offer it", p.n == 3u);
+              gdp_open(&p, &m); char b[12];
+              gdp_indicator(b, &p); chk("details indicator: 1/3 on the first page", !strcmp(b, "1/3"));
+              chk("details pages: Right turns to SHOT (2/3) then HISTOGRAMS (3/3) then wraps to INFO", gdp_input(&p, GP_KEY_RIGHT) == 0 && p.cur == 1u && (gdp_indicator(b, &p), !strcmp(b, "2/3")) && gdp_input(&p, GP_KEY_RIGHT) == 0 && p.cur == 2u && gdp_input(&p, GP_KEY_RIGHT) == 0 && p.cur == 0u);
+              chk("details pages: Left from the first page wraps to the last", gdp_input(&p, GP_KEY_LEFT) == 0 && p.cur == 2u && gdp_input(&p, GP_KEY_LEFT) == 0 && p.cur == 1u);
+              chk("details pages: B and Select close, Up, Down, A and Start do not, the page stays", gdp_input(&p, GP_KEY_B) == 1 && gdp_input(&p, GP_KEY_SELECT) == 1 && gdp_input(&p, GP_KEY_UP) == 0 && gdp_input(&p, GP_KEY_DOWN) == 0 && gdp_input(&p, GP_KEY_A) == 0 && gdp_input(&p, GP_KEY_START) == 0 && p.cur == 1u);
+              gd_meta_parse(fmtonly, sizeof fmtonly, &q); gdp_open(&p, &q); gdp_input(&p, GP_KEY_RIGHT); gdp_indicator(b, &p); chk("details indicator: 2/2 on the last page of a two page picture", !strcmp(b, "2/2")); }
+        }
         chk("details: B closes", gd_input(GP_KEY_B) == 1); chk("details: Select closes (it opens the page, so it toggles)", gd_input(GP_KEY_SELECT) == 1);
         chk("details: A, Up, Down, Left, Right and Start do not close", gd_input(GP_KEY_A) == 0 && gd_input(GP_KEY_UP) == 0 && gd_input(GP_KEY_DOWN) == 0 && gd_input(GP_KEY_LEFT) == 0 && gd_input(1u << 3) == 0 && gd_input(GP_KEY_START) == 0);
         chk("details: four histogram frames, in the order luma, red, green, blue", GD_HIST_N == 4u && !strcmp(gd_hist_labels[0], "LUMA") && !strcmp(gd_hist_labels[1], "RED") && !strcmp(gd_hist_labels[2], "GREEN") && !strcmp(gd_hist_labels[3], "BLUE"));

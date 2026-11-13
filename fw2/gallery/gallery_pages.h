@@ -13,6 +13,7 @@
 #define GP_KEY_UP    (1u << 0)
 #define GP_KEY_DOWN  (1u << 1)
 #define GP_KEY_LEFT  (1u << 2)
+#define GP_KEY_RIGHT (1u << 3)
 #define GP_KEY_A     (1u << 4)
 #define GP_KEY_B     (1u << 5)
 #define GP_KEY_SELECT (1u << 14)
@@ -320,11 +321,84 @@ static inline void gd_format(const gd_t *d, gd_row_t r[GD_ROWS])
 #else
     q = gd_size(r[3].value, d->size); *q = 0;
 #endif
-    r[4].label = "FORMAT";   q = gi_s(r[4].value, GD_NOT_READ); *q = 0;
-    r[5].label = "CAMERA";   q = gi_s(r[5].value, GD_NOT_READ); *q = 0;
-    r[6].label = "TAKEN";    q = gi_s(r[6].value, GD_NOT_READ); *q = 0;
-    r[7].label = "EXPOSURE"; q = gi_s(r[7].value, GD_NOT_READ); *q = 0;
 }
+/* ---- Gallery 1.0 details: the items the index has for a picture (docs/features/TGIX_V1_SPEC.md 2.4: `tag, length, bytes`, only the fields the picture has) as text, in pages. Nothing is drawn for a field the picture lacks. ---- */
+#define GDM_FORMAT 1u
+#define GDM_CAMERA 2u
+#define GDM_LENS 4u
+#define GDM_TAKEN 8u
+#define GDM_SHUTTER 16u
+#define GDM_APERTURE 32u
+#define GDM_ISO 64u
+#define GDM_FOCAL 128u
+#define GDM_SHOT (GDM_SHUTTER | GDM_APERTURE | GDM_ISO | GDM_FOCAL)
+typedef struct { uint32_t has; char format[16], camera[41], lens[41]; uint16_t year; uint8_t mon, day, hour, min, sec; uint32_t shutter_n, shutter_d, iso; uint16_t aperture10, focal10; } gd_meta_t;
+static inline uint32_t gd_le(const uint8_t *p, uint32_t n) { uint32_t v = 0; for (uint32_t i = 0; i < n; i++) v |= (uint32_t)p[i] << (8u * i); return v; }
+static inline void gd_cp(char *d, const uint8_t *s, uint32_t n, uint32_t max) { uint32_t i = 0; while (i < n && i < max && s[i]) { d[i] = (char)s[i]; i++; } d[i] = 0; }
+/* The items of a details run. An unknown tag is skipped, an item of the wrong size is ignored, an item that reaches past the run ends the parse (what came before it counts). */
+static inline void gd_meta_parse(const uint8_t *d, uint32_t n, gd_meta_t *m)
+{
+    m->has = 0u; m->format[0] = m->camera[0] = m->lens[0] = 0;
+    uint32_t i = 0;
+    while (i + 2u <= n) {
+        const uint32_t tag = d[i], len = d[i + 1u];
+        if (i + 2u + len > n) break;
+        const uint8_t *v = d + i + 2u;
+        if (tag == 1u) { gd_cp(m->format, v, len, 15u); if (m->format[0]) m->has |= GDM_FORMAT; }
+        else if (tag == 2u) { gd_cp(m->camera, v, len, 40u); if (m->camera[0]) m->has |= GDM_CAMERA; }
+        else if (tag == 3u) { gd_cp(m->lens, v, len, 40u); if (m->lens[0]) m->has |= GDM_LENS; }
+        else if (tag == 4u && len == 7u) { m->year = (uint16_t)gd_le(v, 2u); m->mon = v[2]; m->day = v[3]; m->hour = v[4]; m->min = v[5]; m->sec = v[6]; if (m->year >= 1990u && m->mon >= 1u && m->mon <= 12u && m->day >= 1u && m->day <= 31u && m->hour < 24u && m->min < 60u) m->has |= GDM_TAKEN; }
+        else if (tag == 5u && len == 8u) { m->shutter_n = gd_le(v, 4u); m->shutter_d = gd_le(v + 4, 4u); if (m->shutter_n && m->shutter_d) m->has |= GDM_SHUTTER; }
+        else if (tag == 6u && len == 2u) { m->aperture10 = (uint16_t)gd_le(v, 2u); if (m->aperture10) m->has |= GDM_APERTURE; }
+        else if (tag == 7u && len == 4u) { m->iso = gd_le(v, 4u); if (m->iso) m->has |= GDM_ISO; }
+        else if (tag == 8u && len == 2u) { m->focal10 = (uint16_t)gd_le(v, 2u); if (m->focal10) m->has |= GDM_FOCAL; }
+        i += 2u + len;
+    }
+}
+static inline char *gd_u2(char *q, uint32_t v) { *q++ = (char)('0' + (v / 10u) % 10u); *q++ = (char)('0' + v % 10u); return q; }
+/* The INFO page: NAME, PICTURE, SIZE, FILE always; FORMAT, CAMERA, LENS, TAKEN only when the picture has them. Returns the number of rows. */
+static inline uint32_t gdi_rows(const gd_t *d, const gd_meta_t *m, gd_row_t r[GD_ROWS])
+{
+    gd_format(d, r); uint32_t n = 4u; char *q;
+    if (m->has & GDM_FORMAT) { r[n].label = "FORMAT"; q = gi_s(r[n].value, m->format); *q = 0; n++; }
+    if (m->has & GDM_CAMERA) { r[n].label = "CAMERA"; q = r[n].value; for (uint32_t i = 0; m->camera[i] && i < 26u; i++) *q++ = m->camera[i]; *q = 0; n++; }
+    if (m->has & GDM_LENS) { r[n].label = "LENS"; q = r[n].value; for (uint32_t i = 0; m->lens[i] && i < 26u; i++) *q++ = m->lens[i]; *q = 0; n++; }
+    if (m->has & GDM_TAKEN) {
+        r[n].label = "TAKEN"; q = gi_u(r[n].value, m->year); *q++ = '-'; q = gd_u2(q, m->mon); *q++ = '-'; q = gd_u2(q, m->day); *q++ = ' '; q = gd_u2(q, m->hour); *q++ = ':'; q = gd_u2(q, m->min); *q = 0; n++;
+    }
+    return n;
+}
+/* The SHOT page: SHUTTER, APERTURE, ISO, FOCAL LENGTH, the ones the picture has. 1/250 S, 2 S, 2.5 S; F/2.8; 400; 35 MM or 17.5 MM. */
+static inline uint32_t gds_rows(const gd_meta_t *m, gd_row_t r[GD_ROWS])
+{
+    uint32_t n = 0; char *q;
+    if (m->has & GDM_SHUTTER) {
+        r[n].label = "SHUTTER"; q = r[n].value;
+        if (m->shutter_n == 1u) { q = gi_s(q, "1/"); q = gi_u(q, m->shutter_d); }
+        else if (m->shutter_d == 1u) q = gi_u(q, m->shutter_n);
+        else { const uint32_t t = (uint32_t)(((uint64_t)m->shutter_n * 10u + m->shutter_d / 2u) / m->shutter_d); q = gi_u(q, t / 10u); *q++ = '.'; q = gi_u(q, t % 10u); }
+        q = gi_s(q, " S"); *q = 0; n++;
+    }
+    if (m->has & GDM_APERTURE) { r[n].label = "APERTURE"; q = gi_s(r[n].value, "F/"); q = gi_u(q, m->aperture10 / 10u); *q++ = '.'; q = gi_u(q, m->aperture10 % 10u); *q = 0; n++; }
+    if (m->has & GDM_ISO) { r[n].label = "ISO"; q = gi_u(r[n].value, m->iso); *q = 0; n++; }
+    if (m->has & GDM_FOCAL) { r[n].label = "FOCAL LENGTH"; q = gi_u(r[n].value, m->focal10 / 10u); if (m->focal10 % 10u) { *q++ = '.'; q = gi_u(q, m->focal10 % 10u); } q = gi_s(q, " MM"); *q = 0; n++; }
+    return n;
+}
+/* The pages: INFO, SHOT (only when the picture has an exposure field) and HISTOGRAMS; Left and Right turn them (wrapping), B or Select closes. The indicator is "page/pages" with one dot a page. */
+enum { GDP_INFO = 0, GDP_SHOT, GDP_HIST };
+typedef struct { uint8_t n, cur, id[3]; } gdp_t;
+static inline void gdp_open(gdp_t *p, const gd_meta_t *m)
+{
+    p->n = 0u; p->id[p->n++] = GDP_INFO;
+    if (m->has & GDM_SHOT) p->id[p->n++] = GDP_SHOT;
+    p->id[p->n++] = GDP_HIST; p->cur = 0u;
+}
+static inline int gdp_input(gdp_t *p, uint32_t edge)
+{
+    if (edge & (GP_KEY_LEFT | GP_KEY_RIGHT)) { p->cur = (uint8_t)hl_wrap(p->cur, p->n, (edge & GP_KEY_LEFT) != 0); return 0; }
+    return (edge & (GP_KEY_B | GP_KEY_SELECT)) != 0;
+}
+static inline char *gdp_indicator(char *q, const gdp_t *p) { q = gi_u(q, (uint32_t)p->cur + 1u); *q++ = '/'; q = gi_u(q, p->n); *q = 0; return q; }
 /* The histograms: 32 bins each of luma, red, green and blue, counted from the 96 x 72 thumbnail in RGB565 (the CPU does not read the picture plane). Red and blue use their 5 bits as they are, green its top 5 of 6, luma
  * (77 R + 150 G + 29 B) / 256 on the 8-bit expanded channels, then / 8. A bar is as tall as its count is to the tallest bin of the same histogram (at least 1 pixel for a bin that has any). */
 #define HS_BINS 32u

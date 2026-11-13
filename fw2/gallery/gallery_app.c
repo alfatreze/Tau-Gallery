@@ -907,38 +907,59 @@ static int thumb_hist(uint32_t off, hs_t *h, uint32_t pw, uint32_t ph)       /* 
 #define DET_BH 50u
 #define DET_BB 4u
 /* The picture details page (gallery_pages.h gd_*): the index's facts, placeholders for what is not read yet, and four histograms of the thumbnail. */
-static void draw_details(const gd_t *d, const hs_t *hist)
+/* The details pages (gallery_pages.h gdp_*): INFO (the index's facts and the EXIF items the picture has), SHOT (shutter, aperture, ISO, focal length: only when it has one of them) and HISTOGRAMS (counted from the thumbnail). The
+ * indicator at the top right is the page number over the page count with a dot for each page. */
+static const char *const gdp_titles[3] = { "DETAILS  INFO", "DETAILS  SHOT", "DETAILS  HISTOGRAMS" };
+static void draw_indicator(const gdp_t *p)
 {
-    gd_row_t r[GD_ROWS]; gd_format(d, r); page_clear("DETAILS");
-    for (uint32_t i = 0; i < GD_ROWS; i++) {
-        const uint32_t y = PAGE_Y0 + i * DET_LINE, pending = i >= 4u;
-        gfx_text(6, y, r[i].label, DIM, BG); gfx_text(110, y, r[i].value, pending ? DIM : FG, BG);
-    }
-    static const uint16_t bar_col[GD_HIST_N] = { 0xFFFFu, 0xF800u, 0x07E0u, 0x001Fu };
-    for (uint32_t h = 0; h < GD_HIST_N; h++) {
-        const uint32_t x = (h & 1u) ? DET_HX1 : DET_HX0, y = (h & 2u) ? DET_HY1 : DET_HY0;
-        frame_box(x, y, DET_HW, DET_HH, DIM); gfx_text(x + 6u, y + 6u, gd_hist_labels[h], ACC, BG);
-        if (!hist) { gfx_text(x + 6u, y + 34u, GD_HIST_NOTE, DIM, BG); continue; }
-        const uint32_t m = hs_max(hist, h);
-        for (uint32_t i = 0; i < HS_BINS; i++) {
-            const uint32_t bh = hs_height(hist->bin[h][i], m, DET_BH);
-            if (bh) gfx_rect(x + DET_BX + i * DET_BW, y + DET_HH - DET_BB - bh, DET_BW - 1u, bh, bar_col[h]);
+    char b[12]; gdp_indicator(b, p);
+    const uint32_t x = GFX_W - 16u - gfx_text_width(b);
+    gfx_text(x, 2, b, DIM, BG);
+    for (uint32_t i = 0; i < p->n; i++) gfx_rect(x - 6u - (uint32_t)(p->n - i) * 8u, 7, 5, 5, i == p->cur ? ACC : DIM);
+}
+static void draw_dpage(const gdp_t *p, const gd_t *d, const gd_meta_t *m, const hs_t *hist)
+{
+    const uint32_t id = p->id[p->cur];
+    page_clear(gdp_titles[id]);
+    if (id != GDP_HIST) {
+        gd_row_t r[GD_ROWS]; const uint32_t n = id == GDP_INFO ? gdi_rows(d, m, r) : gds_rows(m, r);
+        for (uint32_t i = 0; i < n; i++) { const uint32_t y = PAGE_Y0 + i * DET_LINE; gfx_text(6, y, r[i].label, DIM, BG); gfx_text(110, y, r[i].value, FG, BG); }
+    } else {
+        static const uint16_t bar_col[GD_HIST_N] = { 0xFFFFu, 0xF800u, 0x07E0u, 0x001Fu };
+        for (uint32_t h = 0; h < GD_HIST_N; h++) {
+            const uint32_t x = (h & 1u) ? DET_HX1 : DET_HX0, y = (h & 2u) ? DET_HY1 : DET_HY0;
+            frame_box(x, y, DET_HW, DET_HH, DIM); gfx_text(x + 6u, y + 6u, gd_hist_labels[h], ACC, BG);
+            if (!hist) { gfx_text(x + 6u, y + 34u, GD_HIST_NOTE, DIM, BG); continue; }
+            const uint32_t mx = hs_max(hist, h);
+            for (uint32_t i = 0; i < HS_BINS; i++) {
+                const uint32_t bh = hs_height(hist->bin[h][i], mx, DET_BH);
+                if (bh) gfx_rect(x + DET_BX + i * DET_BW, y + DET_HH - DET_BB - bh, DET_BW - 1u, bh, bar_col[h]);
+            }
         }
+        gfx_text(6, 324, hist ? GD_HIST_SRC : GD_HIST_NOTE, DIM, BG);
     }
-    gfx_text(6, 324, hist ? GD_HIST_SRC : GD_HIST_NOTE, DIM, BG);
-    page_foot("B OR SELECT BACK", 0, 0);
+    draw_indicator(p);
+    page_foot("LEFT RIGHT PAGE   B OR SELECT BACK", 0, 0);
 }
 /* Waits for the next key press (an edge) and returns it. */
 static uint32_t next_edge(uint32_t *prev)
 {
     for (;;) { const uint32_t keys = REG_RD(R_INPUT) & 0xFFFFu, edge = keys & ~*prev; *prev = keys; if (edge) { last_act = cycles(); return edge; } settings_tick(); }
 }
-/* The details page of the selected picture; returns when B or Select closes it. The caller redraws what was under it. */
+/* The details pages of the selected picture; returns when B or Select closes them. The caller redraws what was under them. The picture's details (at most 255 bytes) are read from the index when the pages open, its histograms when
+ * the HISTOGRAMS page is first shown. */
 static void run_details(void)
 {
     const gx_entry_t *e = &EN(sel); const gd_t d = { e->name, sel - cur_first, cur_count, e->size, e->width, e->height };
-    uint32_t prev = REG_RD(R_INPUT) & 0xFFFFu; draw_details(&d, thumb_hist(gx_thumb_off(&head, e->thumb), &det_hist, e->width, e->height) ? &det_hist : 0);
-    while (!gd_input(next_edge(&prev))) { }
+    gd_meta_t m; m.has = 0u;
+    if (head.version == 1u && e->details_len) { uint8_t db[GX_MAX_DETAILS]; if (read_bytes(SLOT_IDX, gx_details_abs(&head, e), e->details_len, db)) gd_meta_parse(db, e->details_len, &m); }
+    gdp_t pg; gdp_open(&pg, &m);
+    uint32_t prev = REG_RD(R_INPUT) & 0xFFFFu; int hist_ok = -1;
+    for (;;) {
+        if (pg.id[pg.cur] == GDP_HIST && hist_ok < 0) hist_ok = thumb_hist(gx_thumb_off(&head, e->thumb), &det_hist, e->width, e->height);
+        draw_dpage(&pg, &d, &m, hist_ok > 0 ? &det_hist : 0);
+        if (gdp_input(&pg, next_edge(&prev))) break;
+    }
 }
 static void run_pages(void)
 {

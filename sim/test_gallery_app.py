@@ -82,7 +82,8 @@ def make_lib1_set(d):
     ents, ths = [], []
     for i in range(36):
         f = 0 if i < 20 else 1 if i < 23 else 2
-        ents.append(dict(path=f"Assets/tau_gallery/common/photos/l{i:02d}.tgy", name=f"Img {i:02d}", size=1000 + i, width=640, height=480, folder=f))
+        det = dict(format="JPEG", camera="Canon EOS R5", lens="RF24-70mm F2.8", taken=(2024, 5, 17, 13, 4, 59), shutter=(1, 250), aperture=28, iso=400, focal=350) if i % 3 == 0 else {"format": "PNG"} if i % 3 == 1 else {}
+        ents.append(dict(path=f"Assets/tau_gallery/common/photos/l{i:02d}.tgy", name=f"Img {i:02d}", size=1000 + i, width=640, height=480, folder=f, details=det))
         ths.append(lib1_thumb(i))
     (d / "tau-library.tdb").write_bytes(tgy.pack_index_v1(ents, ths, [dict(name="Alpha"), dict(name="Beta"), dict(name="Gamma")]))
     for i in (20, 21, 22):
@@ -139,7 +140,7 @@ def run(workdir, setdir):
         else: out += "\n" + r.stdout
     global L1SET
     if L1SET is None: L1SET = Path(tempfile.mkdtemp()); make_lib1_set(L1SET)
-    for sc in ("lib1", "lib1resume", "lib1resumeA", "lib1resumeC"):
+    for sc in ("lib1", "lib1resume", "lib1resumeA", "lib1resumeC", "lib1details"):
         r = subprocess.run([str(workdir / "t"), str(L1SET), sc], capture_output=True, text=True, timeout=900)
         if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
     r = subprocess.run([str(workdir / "t"), str(L1SET), "lib1light"], capture_output=True, text=True, timeout=900)
@@ -373,7 +374,7 @@ def mutants(setdir, tail=None):
         ("gallery_app.c", "gfx_rect(x + DET_BX + i * DET_BW, y + DET_HH - DET_BB - bh, DET_BW - 1u, bh, bar_col[h]);", "gfx_rect(x + DET_BX + i * DET_BW, y + DET_HH - DET_BB - bh + 1u, DET_BW - 1u, bh, bar_col[h]);"),
         ("gallery_app.c", "gfx_rect(x + DET_BX + i * DET_BW, y + DET_HH - DET_BB - bh, DET_BW - 1u, bh, bar_col[h]);", "gfx_rect(x + DET_BX + i * DET_BW, y + DET_HH - DET_BB - bh, DET_BW, bh, bar_col[h]);"),
         ("gallery_app.c", "{ 0xFFFFu, 0xF800u, 0x07E0u, 0x001Fu }", "{ 0xFFFFu, 0x07E0u, 0xF800u, 0x001Fu }"),
-        ("gallery_app.c", "const uint32_t m = hs_max(hist, h);", "const uint32_t m = hs_max(hist, 0u);"),
+        ("gallery_app.c", "const uint32_t mx = hs_max(hist, h);", "const uint32_t mx = hs_max(hist, 0u);"),
         ("gallery_app.c", "gh_clear(h);" if False else "    hs_clear(h); const hs_rect_t rc = head.version == 1u ? (hs_rect_t){ 0u, 0u, HS_TW, 96u } : hs_rect(pw, ph);", "    const hs_rect_t rc = head.version == 1u ? (hs_rect_t){ 0u, 0u, HS_TW, 96u } : hs_rect(pw, ph);"),
         ("gallery_app.c", "if (!hist) { gfx_text(x + 6u, y + 34u, GD_HIST_NOTE, DIM, BG); continue; }", ""),
         ("gallery_app.c", "if (hs_inside(&rc, row, col)) hs_add(h, (uint16_t)(v & 0xFFFFu));", "hs_add(h, (uint16_t)(v & 0xFFFFu));"),
@@ -431,6 +432,15 @@ def mutants(setdir, tail=None):
         ("gallery_app.c", "gr_dims(o, cw, ch, &pw, &ph);", "pw = cw; ph = ch;"),
         ("gallery_app.c", "if (rot_o == 0u) { REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16); REG_WR(R_VIEW_BASE, GAL_PLANE_BASE); } else rot_view();", "rot_view();"),
         ("gallery_app.c", "            if (!v1_on) continue;\n            rot_o = gr_turn", "            rot_o = gr_turn"),
+    ]
+    muts += [                                                                                                      # the details pages
+        ("gallery_app.c", "if (head.version == 1u && e->details_len) {", "if (0) {"),
+        ("gallery_app.c", "read_bytes(SLOT_IDX, gx_details_abs(&head, e), e->details_len, db)", "read_bytes(SLOT_IDX, head.details_off, e->details_len, db)"),
+        ("gallery_app.c", "gd_meta_parse(db, e->details_len, &m);", "gd_meta_parse(db, 0u, &m);"),
+        ("gallery_app.c", "i == p->cur ? ACC : DIM);", "DIM);"),
+        ("gallery_app.c", "    gfx_text(x, 2, b, DIM, BG);\n", ""),
+        ("gallery_app.c", "const uint32_t n = id == GDP_INFO ? gdi_rows(d, m, r) : gds_rows(m, r);", "const uint32_t n = gdi_rows(d, m, r);"),
+        ("gallery_app.c", "gdp_t pg; gdp_open(&pg, &m);", "gdp_t pg; m.has &= ~GDM_SHOT; gdp_open(&pg, &m);"),
     ]
     only = sys.argv[sys.argv.index("--only") + 1] if "--only" in sys.argv else None                                   # --only TEXT: just the mutants whose original code contains TEXT (Tier B of CLAUDE.md section 4: the mutants of the code you changed)
     if only: muts = [m for m in muts if only in m[1]]; assert muts, "no mutant matches --only"

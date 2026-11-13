@@ -507,6 +507,16 @@ static void lib1_cp(int n)
     case 450: { uint32_t sx, sy; sx = LG[0].x0; sy = 22u + LG[0].y0; const uint16_t dk = (uint16_t)((th_role[TR_BG_BOTTOM] >> 1) & 0x7BEFu);
               chk(450, level == 1u && th_role[TR_BG_BOTTOM] != 0u && dk != th_role[TR_BG_BOTTOM] && lib1_cell_ok(0, 0, thumb1_of(0), 1) && fb[(sy + 90u) * 512u + sx + 90u] == dk && fb[(sy + 79u) * 512u + sx + 90u] != dk); break; }   /* a folder tile in the light theme: the name strip is darker than the background and the cover above it is not */
     case 451: { const uint32_t per = LG[1].cols * LG[1].rows; chk(451, level == 0u && gi == 1u && pp == per && sel == 48u && page == 2u && n_on_page == 20u && lib1_page_ok(1, 40, 20) && lib1_ring_ok(1, 20, 8) && !strcmp(last_text(), "49/60")); break; }   /* the grid size changed in Settings (4 x 3 to 5 x 4): the same picture stays selected, on its page of the new grid */
+    case 490: chk(490, level == 0u && sel == 0u && lib1_page_ok(0, 0, 12)); clear_texts(); break;
+    case 491: chk(491, said("DETAILS  INFO") && said("Canon EOS R5") && said("RF24-70mm F2.8") && said("2024-05-17 13:04") && said("JPEG") && said("1/3") && said("Img 00") && fb[9u * 512u + 332u] == th_role[TR_ACCENT] && fb[9u * 512u + 340u] == th_role[TR_TEXT_SECONDARY] && fb[9u * 512u + 348u] == th_role[TR_TEXT_SECONDARY]); clear_texts(); break;      /* Select on a picture with every detail (the three dots: the first, current page, in the accent colour): INFO has FORMAT, CAMERA, LENS, TAKEN; three pages */
+    case 492: chk(492, said("DETAILS  SHOT") && said("1/250 S") && said("F/2.8") && said("400") && said("35 MM") && said("2/3") && !said("Canon")); clear_texts(); break;      /* Right: the SHOT page */
+    case 493: chk(493, said("DETAILS  HISTOGRAMS") && said("3/3") && det_hist.n == 96u * 96u); clear_texts(); break;                                      /* Right: the histograms count every pixel of the square thumbnail */
+    case 494: chk(494, said("DETAILS  INFO") && said("1/3")); clear_texts(); break;                                                                       /* Right wraps to the first page */
+    case 495: chk(495, said("DETAILS  HISTOGRAMS") && said("3/3")); clear_texts(); break;                                                                  /* Left from the first wraps to the last */
+    case 496: chk(496, level == 0u && sel == 0u && lib1_page_ok(0, 0, 12) && !said("DETAILS")); clear_texts(); break;                                         /* B: the grid again */
+    case 497: chk(497, said("DETAILS  INFO") && said("PNG") && !said("CAMERA") && !said("LENS") && !said("TAKEN") && said("1/2") && said("Img 01")); clear_texts(); break;      /* a picture that has only its format: FORMAT and nothing else, two pages (no SHOT) */
+    case 498: chk(498, said("DETAILS  HISTOGRAMS") && said("2/2")); clear_texts(); break;
+    case 499: chk(499, said("DETAILS  INFO") && !said("FORMAT") && !said("CAMERA") && !said("TAKEN") && said("1/2") && said("Img 02")); clear_texts(); break;      /* a picture with no details: the four rows only */
     case 421: chk(421, level == 0u && cur_first == 0u && cur_count == 20u && sel == 5u && !strcmp(last_text(), "6/20") && lib1_page_ok(0, 0, 12)); break;                  /* resume on a picture of the FIRST folder */
     case 422: chk(422, level == 0u && cur_first == 23u && cur_count == 13u && sel == 30u && page == 0u && !strcmp(last_text(), "8/13") && lib1_page_ok(0, 23, 12)); break;      /* resume on a picture of the LAST folder */
     case 420: chk(420, level == 0u && cur_first == 20u && cur_count == 3u && sel == 21u && !strcmp(last_text(), "2/3") && lib1_page_ok(0, 20, 3)); break;      /* the resume scenario: boots inside the folder of the saved picture, on it */
@@ -647,15 +657,17 @@ static void checkpoint(int n)
     case 481: chk(481, rot_o == 0u && vbase == GAL_PLANE_BASE); break;                                                                 /* a version 0 picture cannot be turned: X and Y do nothing */
     case 300: chk(300, thumbs_on_screen(0, 16u) && !strcmp(last_text(), "1/18")); break;                                                                               /* the details scenario: the grid, picture 1 selected */
     case 310: fail_idx = 1u; clear_texts(); break;
-    case 311: chk(311, said("DETAILS") && count_text("NOT COMPUTED YET") == 5 && !said("FROM THE THUMBNAIL") && said("Picture 01")); fail_idx = 0u; clear_texts(); break;      /* the thumbnail cannot be read: the page still opens, the frames say so */
+    case 311: chk(311, said("DETAILS  HISTOGRAMS") && count_text("NOT COMPUTED YET") == 5 && !said("FROM THE THUMBNAIL") && said("2/2")); fail_idx = 0u; clear_texts(); break;      /* the thumbnail cannot be read: the histograms page still opens, the frames say so */
     case 312: chk(312, thumbs_on_screen(0, 16u) && sel == 1u); break;
     case 309: chk(309, vid_bus == 1u && plane_is(3) && sel == 3u && !said("DETAILS")); break;                                                                  /* Select + Right together is the next picture, not the page */
-    case 301: chk(301, said("DETAILS") && said("NAME") && said("Picture 00") && said("1 OF 18") && said("SIZE") && said("FILE") && said("NOT READ YET") && !said("NOT COMPUTED YET") && said("FROM THE THUMBNAIL") && hist_screen_ok(0u) && det_hist.n < 6912u && said("LUMA") && said("RED") && said("GREEN") && said("BLUE") && said("B OR SELECT BACK") && !thumbs_on_screen(0, 16u)); clear_texts(); break;      /* Select on the grid: the page of the selected picture */
+    case 301: chk(301, said("DETAILS  INFO") && said("NAME") && said("Picture 00") && said("1 OF 18") && said("SIZE") && said("FILE") && !said("CAMERA") && !said("NOT READ YET") && said("1/2") && said("B OR SELECT BACK") && !thumbs_on_screen(0, 16u)); clear_texts(); break;      /* Select on the grid: the INFO page of the selected picture (a version 0 index has no details: four rows), two pages */
+    case 313: chk(313, said("DETAILS  HISTOGRAMS") && said("2/2") && !said("NOT COMPUTED YET") && said("FROM THE THUMBNAIL") && hist_screen_ok(0u) && det_hist.n < 6912u && said("LUMA") && said("RED") && said("GREEN") && said("BLUE")); clear_texts(); break;      /* Right: the histograms page, counted from the thumbnail */
     case 302: chk(302, thumbs_on_screen(0, 16u) && !strcmp(last_text(), "1/18") && !said("DETAILS")); clear_texts(); break;                                                                  /* B: the grid again, nothing changed */
-    case 303: chk(303, said("DETAILS") && said("Picture 01") && said("2 OF 18") && !said("Picture 00") && hist_screen_ok(1u)); clear_texts(); break;                                               /* Right, Select: the next picture's page */
+    case 303: chk(303, said("DETAILS  INFO") && said("Picture 01") && said("2 OF 18") && !said("Picture 00")); clear_texts(); break;                                               /* Right, Select: the next picture's INFO page */
+    case 314: chk(314, said("DETAILS  HISTOGRAMS") && hist_screen_ok(1u)); clear_texts(); break;
     case 304: chk(304, thumbs_on_screen(0, 16u) && !strcmp(last_text(), "2/18") && sel == 1u); break;                                                                          /* Select closes it too */
     case 305: chk(305, vid_bus == 1u && vbase == GAL_PLANE_BASE && plane_is(1) && land_ovf == 0u); break;                                                                      /* A: the picture view */
-    case 306: chk(306, vid_bus == 0u && said("DETAILS") && said("Picture 01") && said("2 OF 18") && hist_screen_ok(1u)); clear_texts(); break;                                                       /* Select in the picture view: the page replaces it (the viewer is off) */
+    case 306: chk(306, vid_bus == 0u && said("DETAILS  INFO") && said("Picture 01") && said("2 OF 18")); clear_texts(); break;                                                       /* Select in the picture view: the page replaces it (the viewer is off) */
     case 307: chk(307, vid_bus == 1u && vbase == GAL_PLANE_BASE && plane_is(1) && land_ovf == 0u && !said("DETAILS")); break;                                                  /* B: the same picture is back on screen */
     case 308: chk(308, vid_bus == 1u && plane_is(2) && sel == 2u); clear_texts(); break;                                                                                                     /* and the view still steps to the next picture */
     case 1: chk(50, th_role[TR_TEXT_PRIMARY] == 0xFFFFu && th_role[TR_BG_BOTTOM] == 0u && text_mode == 0u); chk(1, thumbs_on_screen(0, count < 16u ? count : 16u)); snprintf(want, sizeof want, "1/%u", count); chk(2, said(want)); chk(3, said("TAU GALLERY") && !said("FAILED")); break;
@@ -853,6 +865,13 @@ int main(int argc, char **argv)
         if (!setjmp(done)) gallery_app_main();
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
     }
+    if (argc > 2 && !strcmp(argv[2], "lib1details")) {                                                       /* the details pages of a version 1 library: every detail, only the format, none */
+        lib1_on = 1;
+        const uint32_t SX[] = { KEY_A, 0, CP(490), KEY_SELECT, 0, CP(491), KEY_RIGHT, 0, CP(492), KEY_RIGHT, 0, CP(493), KEY_RIGHT, 0, CP(494), KEY_LEFT, 0, CP(495), KEY_B, 0, CP(496), KEY_RIGHT, 0, KEY_SELECT, 0, CP(497), KEY_RIGHT, 0, CP(498), KEY_B, 0, KEY_RIGHT, 0, KEY_SELECT, 0, CP(499), END };
+        nscript = (int)(sizeof SX / sizeof SX[0]); memcpy(script, SX, sizeof SX);
+        if (!setjmp(done)) gallery_app_main();
+        printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
+    }
     if (argc > 2 && !strcmp(argv[2], "lib1light")) {                                                           /* the folder level in the light theme (its background is not 0, so the darkened strip shows) */
         lib1_on = 1; setw[1] = 0x40000000u | 2u | (1u << 5) | (1u << 11);
         const uint32_t SL[] = { CP(450), END }; nscript = 2; memcpy(script, SL, sizeof SL);
@@ -889,7 +908,7 @@ int main(int argc, char **argv)
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
     }
     if (argc > 2 && !strcmp(argv[2], "details")) {                                                       /* the picture details page: from the grid and from the picture view */
-        const uint32_t SD[] = { CP(300), KEY_SELECT, 0, CP(301), KEY_B, 0, CP(302), KEY_RIGHT, 0, KEY_SELECT, 0, CP(303), KEY_SELECT, 0, CP(304), CP(310), KEY_SELECT, 0, CP(311), KEY_B, 0, CP(312), KEY_A, 0, CP(305), KEY_SELECT, 0, CP(306), KEY_B, 0, CP(307), KEY_RIGHT, 0, CP(308), KEY_SELECT | KEY_RIGHT, 0, CP(309), END };
+        const uint32_t SD[] = { CP(300), KEY_SELECT, 0, CP(301), KEY_RIGHT, 0, CP(313), KEY_B, 0, CP(302), KEY_RIGHT, 0, KEY_SELECT, 0, CP(303), KEY_RIGHT, 0, CP(314), KEY_SELECT, 0, CP(304), CP(310), KEY_SELECT, 0, KEY_RIGHT, 0, CP(311), KEY_B, 0, CP(312), KEY_A, 0, CP(305), KEY_SELECT, 0, CP(306), KEY_B, 0, CP(307), KEY_RIGHT, 0, CP(308), KEY_SELECT | KEY_RIGHT, 0, CP(309), END };
         nscript = (int)(sizeof SD / sizeof SD[0]); memcpy(script, SD, sizeof SD);
         if (!setjmp(done)) gallery_app_main();
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
