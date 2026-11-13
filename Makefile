@@ -224,7 +224,9 @@ test-rtl-fb-mutation: | $(RTL_BUILD_DIR)
 	run -Ptb_mp3_fb.BUG_SBLIT_NO_SCALE=1; \
 	run -Ptb_mp3_fb.BUG_BLEND_ALWAYS_SRC=1; \
 	run -Ptb_mp3_fb.BUG_IGNORE_RC_CUT=1; \
-	run -Ptb_mp3_fb.BUG_IGNORE_BAR_HI=1
+	run -Ptb_mp3_fb.BUG_IGNORE_BAR_HI=1; \
+	run -Ptb_mp3_fb.BUG_CORNERS_FILL=1; \
+	run -Ptb_mp3_fb.BUG_CORNERS_BG=1
 
 # PHASE_F_SPEC.md section 12: software reference renderer + pixel-diff
 # fixtures, run the whole scene through the RTL sim and through

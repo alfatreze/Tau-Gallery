@@ -108,6 +108,10 @@ module tau_talos #(
     // silently does nothing, not just that an RRECT with a real table still draws a fill. Never
     // set outside that test.
     parameter BUG_IGNORE_RC_CUT = 0,
+    // Mutation-test hooks only (make test-rtl-fb-mutation): BUG_CORNERS_FILL = 1 lets OP_CORNERS also do OP_RRECT's main fill (it would paint over the picture it is meant to round),
+    // BUG_CORNERS_BG = 1 paints the corners with the foreground colour instead of the background colour. Never set outside that test.
+    parameter BUG_CORNERS_FILL = 0,
+    parameter BUG_CORNERS_BG = 0,
     // Mutation-test hook only (-PBUG_IGNORE_BAR_HI=1, make test-rtl-fb-mutation): 1 forces
     // pre_bar_lit_raw's high 2 bits (cmd_glyph_hi) to always read 0, degenerating BAR's lit-row
     // count back to its old 7-bit-only behaviour -- proves the test actually exercises a lit count
@@ -334,7 +338,8 @@ module tau_talos #(
     localparam [3:0] OP_FENCE = 4'd9;   // Talos 2 T3: retires when every earlier command has; bumps the fence counter
     localparam [3:0] OP_RUN = 4'd0, OP_RECT = 4'd1, OP_CHAR = 4'd2, OP_COPY = 4'd3,
                      OP_BLIT = 4'd4, OP_BAR = 4'd5, OP_SBLIT = 4'd6, OP_CBLIT = 4'd7,
-                     OP_RRECT = 4'd8;
+                     OP_RRECT = 4'd8,
+                     OP_CORNERS = 4'd10;     // K3 (Tau Gallery 1.0): only the four corner cuts of an OP_RRECT, painted over what is already there (no main fill)
     // B11 (PHASE_F_SPEC.md section 5): hardware rounded-rect, the first opcode past the original
     // 3-bit field's 0-7 range -- cmd_op widened to 4 bits (the FIFO word already reserved 5 bits
     // of padding, see the cmd_mem pack below; this claims one of them, purely additive, every
@@ -1369,6 +1374,31 @@ module tau_talos #(
                                 rrect_bg   <= q_bg;
                                 rrect_row  <= 4'd0;
                                 rrect_seg  <= 2'd0;
+                            end
+                            // K3: the corner cuts alone. The same registers as OP_RRECT are captured, but there is no main fill (rect_active stays 0) and the corner sequencer starts at once:
+                            // rrect_active is set here and q_rrect_cut / q_rrect_seg_addr are registered for row 0 segment 0 from the command's own fields (the captured copies are not
+                            // valid until the next cycle). A_IDLE then drives it exactly as it drives the tail of an OP_RRECT. The cut table is the same (rc_cut_lut, dy = r - row).
+                            // Used to round a picture that was drawn first: the corners get the background colour (cmd_bg), the picture inside them is not touched.
+                            OP_CORNERS: begin
+                                rect_addr   <= q_addr;
+                                rect_w      <= q_w;
+                                rect_rows   <= q_h;
+                                rect_active <= BUG_CORNERS_FILL ? ((q_h != 9'd0) && (q_w != 9'd0)) : 1'b0;
+                                blit_mode   <= 1'b0;
+                                bar2_pending <= 1'b0;
+                                sblit_mode   <= 1'b0;
+                                cblit_mode   <= 1'b0;
+                                rrect_pending <= BUG_CORNERS_FILL ? ((q_h != 9'd0) && (q_w != 9'd0) && (q_glyph_r != 4'd0)) : 1'b0;
+                                rrect_active  <= (!BUG_CORNERS_FILL) && (q_h != 9'd0) && (q_w != 9'd0) && (q_glyph_r != 4'd0);
+                                rrect_r    <= q_glyph_r;
+                                rrect_x0   <= q_addr;
+                                rrect_w    <= q_w;
+                                rrect_h    <= q_h;
+                                rrect_bg   <= BUG_CORNERS_BG ? q_fg : q_bg;
+                                rrect_row  <= 4'd0;
+                                rrect_seg  <= 2'd0;
+                                q_rrect_cut      <= f_rrect_cut(q_glyph_r, 4'd0);
+                                q_rrect_seg_addr <= f_rrect_seg_addr(q_addr, q_w, q_h, 4'd0, 2'd0, f_rrect_cut(q_glyph_r, 4'd0));
                             end
                             OP_COPY: begin
                                 copy_src  <= {q_fg[2:0], q_bg};

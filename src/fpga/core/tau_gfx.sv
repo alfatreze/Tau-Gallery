@@ -57,6 +57,9 @@ module tau_gfx #(
     // silently does nothing, not just that an RRECT with a real table still draws a fill. Never
     // set outside that test.
     parameter BUG_IGNORE_RC_CUT = 0,
+    // Mutation-test hooks only (make test-rtl-fb-mutation): see tau_talos.sv (OP_CORNERS). Never set outside that test.
+    parameter BUG_CORNERS_FILL = 0,
+    parameter BUG_CORNERS_BG = 0,
     // Mutation-test hook only (-PBUG_IGNORE_BAR_HI=1, make test-rtl-fb-mutation): 1 forces
     // pre_bar_lit_raw's high 2 bits (cmd_glyph_hi) to always read 0, degenerating BAR's lit-row
     // count back to its old 7-bit-only behaviour -- proves the test actually exercises a lit count
@@ -262,6 +265,8 @@ module tau_gfx #(
         .BUG_IGNORE_REINDEX(BUG_IGNORE_REINDEX),
         .BUG_IGNORE_TEXT_LIGHT(BUG_IGNORE_TEXT_LIGHT),
         .BUG_IGNORE_RC_CUT(BUG_IGNORE_RC_CUT),
+        .BUG_CORNERS_FILL(BUG_CORNERS_FILL),
+        .BUG_CORNERS_BG(BUG_CORNERS_BG),
         .BUG_IGNORE_BAR_HI(BUG_IGNORE_BAR_HI),
         .DBUF_ENABLE(DBUF_ENABLE),
         .FONT_RAM_ENABLE(FONT_RAM_ENABLE),

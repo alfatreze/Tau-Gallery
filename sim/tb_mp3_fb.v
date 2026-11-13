@@ -25,6 +25,8 @@ module tb_mp3_fb;
     parameter BUG_BLEND_ALWAYS_SRC = 0;     // mutation hook: 1 must fail this bench (make test-rtl-fb-mutation)
     parameter BUG_IGNORE_RC_CUT = 0;        // mutation hook: 1 must fail this bench (make test-rtl-fb-mutation)
     parameter BUG_IGNORE_BAR_HI = 0;        // mutation hook: 1 must fail this bench (make test-rtl-fb-mutation)
+    parameter BUG_CORNERS_FILL = 0;         // mutation hook: 1 must fail this bench (make test-rtl-fb-mutation)
+    parameter BUG_CORNERS_BG = 0;           // mutation hook: 1 must fail this bench (make test-rtl-fb-mutation)
 
     reg clk_sdram = 0, clk_sys = 0, clk_vid = 0, reset = 1;
     always #5    clk_sdram = ~clk_sdram;   // 100 MHz
@@ -76,7 +78,7 @@ module tb_mp3_fb;
     tau_gfx #(.BUG_IGNORE_BLIT_STRIDE(BUG_IGNORE_BLIT_STRIDE), .BUG_IGNORE_KEY(BUG_IGNORE_KEY),
              .BUG_SBLIT_NO_SCALE(BUG_SBLIT_NO_SCALE), .BLIT_BLEND_ENABLE(1),
              .BUG_BLEND_ALWAYS_SRC(BUG_BLEND_ALWAYS_SRC),
-             .BUG_IGNORE_RC_CUT(BUG_IGNORE_RC_CUT),
+             .BUG_IGNORE_RC_CUT(BUG_IGNORE_RC_CUT), .BUG_CORNERS_FILL(BUG_CORNERS_FILL), .BUG_CORNERS_BG(BUG_CORNERS_BG),
              .BUG_IGNORE_BAR_HI(BUG_IGNORE_BAR_HI)) dut (
         .reset(reset), .clk_sys(clk_sys), .clk_sdram(clk_sdram), .clk_vid(clk_vid),
         .cmd_push(cmd_push), .cmd_op(cmd_op), .cmd_addr(cmd_addr),
@@ -490,6 +492,45 @@ module tb_mp3_fb;
         push(4'd8, 19'd6000, 9'd4, 9'd4, 7'd0, 2'd0, 2'd0);   // r=0
         repeat (100) @(posedge clk_sdram);
         check(rows_written == 4, "RRECT r=0: 4-row fill only, no corner segments");
+
+        // ---- CORNERS (K3): only the four corner cuts, no main fill, in the background colour --------
+        // Same cut table as RRECT. r=2, cut(dy=2)=1 (row 0 paints), cut(dy=1)=0 (row 1 skipped): exactly the 4 segments of row 0 and nothing else.
+        rc_cut_lut = 80'd0; rc_cut_lut[2*5 +: 5] = 5'd1; rc_cut_lut[1*5 +: 5] = 5'd0;
+        rows_written = 0;
+        cmd_fg <= 16'hAAAA; cmd_bg <= 16'hBBBB;
+        push(4'd10, 19'd7000, 9'd10, 9'd6, 7'd2, 2'd0, 2'd0);   // w=10 h=6 r=2
+        repeat (200) @(posedge clk_sdram);
+        check(rows_written == 4, "CORNERS: 4 corner segments, no main fill");
+        check(row_addr[0] == 19'd7000        && row_len[0] == 1, "CORNERS: TL at x0, width=cut");
+        check(row_addr[1] == 19'd7009        && row_len[1] == 1, "CORNERS: TR at x0+w-cut");
+        check(row_addr[2] == 19'd7000+5*512  && row_len[2] == 1, "CORNERS: BL on row h-1");
+        check(row_addr[3] == 19'd7009+5*512  && row_len[3] == 1, "CORNERS: BR on row h-1, x0+w-cut");
+        check(row_pix[0][0] == 16'hBBBB && row_pix[1][0] == 16'hBBBB && row_pix[2][0] == 16'hBBBB && row_pix[3][0] == 16'hBBBB, "CORNERS: the background colour, not the foreground");
+        // A larger radius with real cuts on two rows: r=3, cut(dy=3)=3 (row 0), cut(dy=2)=1 (row 1), cut(dy=1)=0 (row 2 skipped): 8 segments in row order.
+        rc_cut_lut = 80'd0; rc_cut_lut[3*5 +: 5] = 5'd3; rc_cut_lut[2*5 +: 5] = 5'd1; rc_cut_lut[1*5 +: 5] = 5'd0;
+        rows_written = 0;
+        cmd_fg <= 16'h1111; cmd_bg <= 16'h2222;
+        push(4'd10, 19'd8000, 9'd20, 9'd9, 7'd3, 2'd0, 2'd0);   // w=20 h=9 r=3
+        repeat (300) @(posedge clk_sdram);
+        check(rows_written == 8, "CORNERS r=3: two painted rows of four segments, the third row skipped");
+        check(row_addr[0] == 19'd8000 && row_len[0] == 3 && row_addr[1] == 19'd8000+17 && row_len[1] == 3, "CORNERS r=3 row 0: TL and TR, cut 3");
+        check(row_addr[2] == 19'd8000+8*512 && row_len[2] == 3 && row_addr[3] == 19'd8000+8*512+17 && row_len[3] == 3, "CORNERS r=3 row 0: BL and BR on row h-1, cut 3");
+        check(row_addr[4] == 19'd8000+512 && row_len[4] == 1 && row_addr[5] == 19'd8000+512+19 && row_len[5] == 1, "CORNERS r=3 row 1: TL and TR, cut 1");
+        check(row_addr[6] == 19'd8000+7*512 && row_len[6] == 1 && row_addr[7] == 19'd8000+7*512+19 && row_len[7] == 1, "CORNERS r=3 row 1: BL and BR on row h-2, cut 1");
+        // r = 0, and a zero-size command: nothing is written at all.
+        rows_written = 0;
+        push(4'd10, 19'd9000, 9'd10, 9'd6, 7'd0, 2'd0, 2'd0);
+        push(4'd10, 19'd9100, 9'd0, 9'd6, 7'd2, 2'd0, 2'd0);
+        repeat (100) @(posedge clk_sdram);
+        check(rows_written == 0, "CORNERS r=0 and w=0: nothing is written");
+        // The command after a corner sequence waits for it (chain_idle): a RECT queued right behind CORNERS lands after all its segments.
+        rc_cut_lut = 80'd0; rc_cut_lut[2*5 +: 5] = 5'd1; rc_cut_lut[1*5 +: 5] = 5'd0;
+        rows_written = 0;
+        cmd_fg <= 16'h5555; cmd_bg <= 16'h6666;
+        push(4'd10, 19'd7000, 9'd10, 9'd6, 7'd2, 2'd0, 2'd0);
+        push(4'd1, 19'd9500, 9'd8, 9'd1, 7'd0, 2'd0, 2'd0);
+        repeat (300) @(posedge clk_sdram);
+        check(rows_written == 5 && row_addr[4] == 19'd9500 && row_pix[4][0] == 16'h5555, "CORNERS: the next command starts after the last corner segment");
 
         $display("\n%0s (%0d failures)", errors ? "FAILED" : "PASSED", errors);
         $finish;
