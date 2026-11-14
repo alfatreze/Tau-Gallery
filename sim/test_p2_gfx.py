@@ -10,7 +10,7 @@ def check(name, ok):
     global fails
     print(("ok   " if ok else "FAIL ") + name)
     if not ok: fails += 1
-SCEN = ("bracket", "blitmode", "stash", "compose", "blend", "noblend", "nodbuf", "bar", "mbbuf", "wide", "raw")
+SCEN = ("bracket", "blitmode", "stash", "compose", "blend", "noblend", "nodbuf", "bar", "mbbuf", "wide", "raw", "corners")
 def build(td, mutant):
     d = Path(td)
     for sub in ("sim", "fw2/gfx", "fw2/platform"): (d / sub).mkdir(parents=True, exist_ok=True)
@@ -31,12 +31,18 @@ def build(td, mutant):
     if mutant == "rawshadow": m("    color_shadow = 0xFFFFFFFFu;\n    FB_GO(OP_BLIT);\n}\n", "    FB_GO(OP_BLIT);\n}\n")
     if mutant == "rawlimit": m("if (!w || w > 127u || src_off >= (1u << 19)", "if (!w || src_off >= (1u << 19)")
     if mutant == "rawbases": m("    set_bases(src_base, dst_base);\n    wait_fifo();\n    REG_WR(R_FB_ADDR, dst_off);", "    wait_fifo();\n    REG_WR(R_FB_ADDR, dst_off);")
+    if mutant == "norc": m("    rc_lut_ensure(r);\n    gt_note", "    gt_note")
+    if mutant == "rcnofence": m("    if (!r || r == rc_radius) return;\n    gfx_fence();\n", "    if (!r || r == rc_radius) return;\n")
+    if mutant == "rcalways": m("if (!r || r == rc_radius) return;", "if (!r) return;")
+    if mutant == "rcnever": m("    rc_radius = (uint8_t)r;\n", "    rc_radius = (uint8_t)r; rc_radius = 0xFF;\n") if False else m("if (!r || r == rc_radius) return;", "if (!r || rc_radius) return;")
+    if mutant == "rcshift": m("REG_WR(R_RC_DATA, gfx_rc_cut(r, dy));", "REG_WR(R_RC_DATA, gfx_rc_cut(r, dy + 1u));")
+    if mutant == "rcstart": m("    REG_WR(R_RC_IDX, 0u);\n", "    REG_WR(R_RC_IDX, 1u);\n")
     if mutant == "barhi": m("(((lit >> 7) & 0x3u) << 15)", "0u")
     if mutant == "barclip": m("    if (lit > 511u) lit = 511u;\n", "")
     if mutant == "probe": m("    return gfx_blend_state == 1u;\n}\n/* Blend the w x h box", "    gfx_blend_state = 1u; return 1;\n}\n/* Blend the w x h box")
     (d / "fw2/gfx/gfx.c").write_text(src)
     (d / "fw2/cores").mkdir(parents=True, exist_ok=True); (d / "fw2/cores/gfx_touch_core.h").write_text((ROOT / "fw2/cores/gfx_touch_core.h").read_text())
-    for f in ("gfx/gfx.h", "platform/mmio.h", "platform/platform.h"): (d / "fw2" / f).write_text((ROOT / "fw2" / f).read_text())
+    for f in ("gfx/gfx.h", "gfx/rc_cut.h", "platform/mmio.h", "platform/platform.h"): (d / "fw2" / f).write_text((ROOT / "fw2" / f).read_text())
     (d / "fw").mkdir(exist_ok=True)
     (d / "fw2/generated").mkdir(parents=True, exist_ok=True); (d / "fw2/generated/font_data.h").write_text((ROOT / "fw2/generated/font_data.h").read_text())
     (d / "sim/p2_engine_model.h").write_text((ROOT / "sim/p2_engine_model.h").read_text())
@@ -55,7 +61,7 @@ with tempfile.TemporaryDirectory() as td:
             if l.startswith("ok"): print(l)
             elif l: check(l, False)
         if rc: fails += 0
-for mut, scen in (("bases", "blitmode"), ("nofence", "bracket"), ("setfence", "blitmode"), ("nosync", "bracket"), ("composesync", "compose"), ("blendfence", "blend"), ("present", "compose"), ("probe", "noblend"), ("barhi", "bar"), ("mbbuf", "mbbuf"), ("wide", "wide"), ("rawcolor", "raw"), ("rawshadow", "raw"), ("rawlimit", "raw"), ("rawbases", "raw")):
+for mut, scen in (("norc", "corners"), ("rcnofence", "corners"), ("rcalways", "corners"), ("rcnever", "corners"), ("rcshift", "corners"), ("rcstart", "corners"), ("bases", "blitmode"), ("nofence", "bracket"), ("setfence", "blitmode"), ("nosync", "bracket"), ("composesync", "compose"), ("blendfence", "blend"), ("present", "compose"), ("probe", "noblend"), ("barhi", "bar"), ("mbbuf", "mbbuf"), ("wide", "wide"), ("rawcolor", "raw"), ("rawshadow", "raw"), ("rawlimit", "raw"), ("rawbases", "raw")):
     with tempfile.TemporaryDirectory() as td:
         out, rc = run(build(td, mut), scen); check(f"mutant {mut} is caught", rc != 0)
 print("PASSED" if not fails else f"FAILED ({fails})")

@@ -99,6 +99,8 @@
 #define R_HIST_IDX   0x80000270u        /* write {histogram[9:8] 0 luma 1 red 2 green 3 blue, bin[7:0]}: starts a read */
 #define R_HIST_DATA  0x80000274u        /* read [31] busy, [23:0] the bin */
 #define R_HIST_N     0x80000278u        /* read [23:0] pixels counted as of the last read */
+#define R_RC_IDX     0x800000D4u        /* the draw engine's corner-cut table (resets to all zero: nothing rounds until it is loaded): entry select 0..15 */
+#define R_RC_DATA    0x800000D8u        /* write: the cut of the selected entry (5 bits), the entry advances and wraps (fw2/gfx/rc_cut.h) */
 #define R_SDA_SEL    0x800001D4u        /* per-port SDRAM statistics window (tau_sdr_stat_win.sv): write {port[1:0], stat[2:0]} (stat 0 requests, 1 words, 2 busy cycles, 3 worst wait, 4 urgent over the bound, 5 bad requests; port 0 scan-out, 1 engine, 2 CPU) -- ignored while pending; read [31] built in, [8] a snapshot is pending, [4:0] the selection */
 #define R_SDA_VAL    0x800001D8u        /* read: the snapshot of the selected counter, stable until the next select; valid once R_SDA_SEL bit 8 is 0 */
 #define R_DBUF_CPU   0x80000118u        /* Helios H2: bit 0 = the buffer plain RECT/CHAR/COPY commands target (rows of the visible frame only; the off-screen stash rows are shared); read bit 31 = built in */

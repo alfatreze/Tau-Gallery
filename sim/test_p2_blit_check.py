@@ -17,7 +17,7 @@ def build(td, model_mut=None, gfx_mut=None):
     if model_mut: a, b = model_mut; assert a in model, a; model = model.replace(a, b, 1)
     (d / "fw2/gfx/gfx.c").write_text(gfx); (d / "sim/p2_engine_model.h").write_text(model)
     (d / "fw2/cores/gfx_touch_core.h").write_text((ROOT / "fw2/cores/gfx_touch_core.h").read_text())
-    for f in ("gfx/gfx.h", "platform/mmio.h", "platform/platform.h", "diagnostics/blit_check.c", "diagnostics/blit_check.h"): (d / "fw2" / f).write_text((ROOT / "fw2" / f).read_text())
+    for f in ("gfx/gfx.h", "gfx/rc_cut.h", "platform/mmio.h", "platform/platform.h", "diagnostics/blit_check.c", "diagnostics/blit_check.h"): (d / "fw2" / f).write_text((ROOT / "fw2" / f).read_text())
     (d / "fw2/generated/font_data.h").write_text((ROOT / "fw2/generated/font_data.h").read_text())
     (d / "sim/h.c").write_text((ROOT / "sim/p2_blitcheck_harness.c").read_text())
     exe = d / "h"
@@ -31,7 +31,7 @@ with tempfile.TemporaryDirectory() as td:
     mask, bad = run(build(td))
     check(f"every expectation holds on the engine model (mask {mask}, bad pixels {bad})", mask == 0 and bad == 0)
 MUT = (
-    ("RECT fill colour", ("(uint16_t)c->color;\n    } else if (op == 5u)", "(uint16_t)(c->color ^ 1u);\n    } else if (op == 5u)"), None, 0),
+    ("RECT fill colour", ("(uint16_t)c->color;\n    } else if (op == 8u || op == 10u)", "(uint16_t)(c->color ^ 1u);\n    } else if (op == 8u || op == 10u)"), None, 0),
     ("BAR lit rule", ("j < h - lit ?", "j < lit ?"), None, 1),
     ("COPY source row step", ("(j / sy) * EM_STRIDE", "0u * EM_STRIDE"), None, 2),
     ("PALETTE index mask", ("em_clut[v & 255u]", "em_clut[v & 127u]"), None, 3),

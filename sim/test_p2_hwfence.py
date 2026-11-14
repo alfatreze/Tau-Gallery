@@ -23,7 +23,7 @@ def build(td, mutant):
     if mutant == "nofallback": m("{ r = 0xDEADBEEFu; hw_fence = 0; break; }", "{ r = 0xDEADBEEFu; break; }")
     (d / "fw2/gfx/gfx.c").write_text(src)
     (d / "fw2/cores/gfx_touch_core.h").write_text((ROOT / "fw2/cores/gfx_touch_core.h").read_text())
-    for f in ("gfx/gfx.h", "platform/mmio.h", "platform/platform.h"): (d / "fw2" / f).write_text((ROOT / "fw2" / f).read_text())
+    for f in ("gfx/gfx.h", "gfx/rc_cut.h", "platform/mmio.h", "platform/platform.h"): (d / "fw2" / f).write_text((ROOT / "fw2" / f).read_text())
     (d / "fw2/generated/font_data.h").write_text((ROOT / "fw2/generated/font_data.h").read_text())
     (d / "sim/p2_engine_model.h").write_text((ROOT / "sim/p2_engine_model.h").read_text())
     (d / "sim/h.c").write_text((ROOT / "sim/p2_hwfence_harness.c").read_text())

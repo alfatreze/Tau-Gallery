@@ -19,6 +19,7 @@ static uint32_t em_fb_addr, em_fb_size, em_fb_color, em_cycles, em_reads;
 static uint32_t em_blt_idx, em_src_base, em_dst_base, em_blend_on, em_blend_a;
 static uint32_t em_cpu, em_disp, em_flip_pending, em_has_dbuf = 1, em_has_blend = 1;
 static uint32_t em_sdr_addr, em_sdr_data, em_sdr_rdata, em_clut_idx; static uint16_t em_clut[256];
+static uint8_t em_rc_lut[16]; static uint32_t em_rc_idx, em_rc_writes;                       /* the corner-cut table (R_RC_IDX / R_RC_DATA), all zero at power-up, read when a corner command EXECUTES */
 static uint32_t em_fence_n, em_has_fence = 1, em_fence_stuck;      /* Talos T3 status block present (R_GFX_*; 0 models the earlier bitstreams); em_fence_stuck: the fence counter never advances (the firmware's 50 ms fallback) */
 static uint32_t em_nflips, em_executed, em_torn, em_overwide;      /* em_overwide: BLIT/CBLIT commands wider than the 127-pixel row buffer */
 static uint32_t (*em_ext_rd)(uint32_t a); static void (*em_ext_wr)(uint32_t a, uint32_t v);      /* registers outside the draw engine (a test supplies the ones its module reads) */
@@ -35,6 +36,16 @@ static void em_exec(const em_cmd_t *c)
     em_executed++;
     if (op == 1u) {                                                  /* RECT */
         for (uint32_t j = 0; j < h; j++) for (uint32_t i = 0; i < w; i++) em_mem[em_dbuf_addr(c->addr + j * EM_STRIDE + i, em_cpu)] = (uint16_t)c->color;
+    } else if (op == 8u || op == 10u) {                              /* RRECT (fill in fg, then the corners in bg) / CORNERS (the corner cuts only, in bg): radius = go[9:3], the cut of row `row` is em_rc_lut[r - row] */
+        const uint32_t rr = (c->go >> 3) & 0x7Fu, r = rr > 15u ? 15u : rr; const uint16_t fg = (uint16_t)c->color, bg = (uint16_t)(c->color >> 16);
+        if (op == 8u) for (uint32_t j = 0; j < h; j++) for (uint32_t i = 0; i < w; i++) em_mem[em_dbuf_addr(c->addr + j * EM_STRIDE + i, em_cpu)] = fg;
+        for (uint32_t row = 0; r && row < r && h && w; row++) {
+            const uint32_t cut = em_rc_lut[r - row] & 31u;
+            for (uint32_t k = 0; k < cut && k < w; k++) {
+                em_mem[em_dbuf_addr(c->addr + row * EM_STRIDE + k, em_cpu)] = bg; em_mem[em_dbuf_addr(c->addr + row * EM_STRIDE + (w - 1u - k), em_cpu)] = bg;
+                em_mem[em_dbuf_addr(c->addr + (h - 1u - row) * EM_STRIDE + k, em_cpu)] = bg; em_mem[em_dbuf_addr(c->addr + (h - 1u - row) * EM_STRIDE + (w - 1u - k), em_cpu)] = bg;
+            }
+        }
     } else if (op == 5u) {                                           /* BAR: lit = cmd_glyph (go[9:3]) with cmd_glyph_hi (go[16:15]) above it, clamped to h; unlit rows on top in the background colour, lit rows below in the foreground (mp3_fb.sv OP_BAR) */
         uint32_t lit = ((c->go >> 3) & 0x7Fu) | (((c->go >> 15) & 3u) << 7); if (lit > h) lit = h;
         for (uint32_t j = 0; j < h; j++) for (uint32_t i = 0; i < w; i++) em_mem[em_dbuf_addr(c->addr + j * EM_STRIDE + i, em_cpu)] = (uint16_t)(j < h - lit ? (c->color >> 16) : (c->color & 0xFFFFu));
@@ -94,13 +105,15 @@ void host_wr(uint32_t a, uint32_t v)
         break;
     case 0x800000C8u: em_clut_idx = v & 255u; break;
     case 0x800000CCu: em_clut[em_clut_idx++ & 255u] = (uint16_t)v; break;
+    case 0x800000D4u: em_rc_idx = v & 15u; break;
+    case 0x800000D8u: em_rc_lut[em_rc_idx] = (uint8_t)(v & 31u); em_rc_idx = (em_rc_idx + 1u) & 15u; em_rc_writes++; break;
     default: if (em_ext_wr) em_ext_wr(a, v); break;
     }
 }
 static uint16_t em_px(uint32_t buf, uint32_t x, uint32_t y) { return em_mem[(buf ? EM_BUF_PX : 0u) + y * EM_STRIDE + x]; }
 static void em_reset(void)
 {
-    memset(em_mem, 0, sizeof em_mem); em_qh = em_qt = 0; em_cpu = em_disp = em_flip_pending = 0; em_src_base = em_dst_base = 0; em_blend_on = 0; em_nflips = 0; em_executed = 0; em_torn = 0; em_overwide = 0;
+    memset(em_mem, 0, sizeof em_mem); memset(em_rc_lut, 0, sizeof em_rc_lut); em_rc_idx = em_rc_writes = 0; em_qh = em_qt = 0; em_cpu = em_disp = em_flip_pending = 0; em_src_base = em_dst_base = 0; em_blend_on = 0; em_nflips = 0; em_executed = 0; em_torn = 0; em_overwide = 0;
     for (uint32_t i = 0; i < 256u; i++) em_clut[i] = (uint16_t)i;
 }
 #endif

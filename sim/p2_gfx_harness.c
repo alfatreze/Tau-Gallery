@@ -1,4 +1,5 @@
 /* Host check of the Player 2 graphics layer (fw2/gfx/gfx.c) against the engine model (sim/p2_engine_model.h). argv: scenario name. Prints "ok name" / "FAIL name" lines. */
+#include <math.h>
 #include "p2_engine_model.h"
 #include "../fw2/platform/platform.h"
 caps_t caps;
@@ -114,6 +115,38 @@ static void sc_bar(void)
     gfx_rect(0, 0, 400, 360, 0x0001); gfx_bar(390, 350, 30, 30, 15, 0xF800, 0x001F); gfx_fence();
     chk("a bar is clipped to the visible frame", em_px(0, 399, 359) == 0xF800 && em_px(0, 399, 349) == 0x0001);
 }
+static int in_cut(uint32_t row, uint32_t col, uint32_t w, uint32_t h, uint32_t r)           /* is pixel (row, col) of a w x h box in a corner cut of radius r: a floating point circle through the pixel centres (independent of fw2/gfx/rc_cut.h) */
+{
+    for (uint32_t cy = 0; cy < 2u; cy++) for (uint32_t cx = 0; cx < 2u; cx++) {
+        const uint32_t dr = cy ? h - 1u - row : row, k = cx ? w - 1u - col : col;
+        if (dr < r) { const double dd = (double)r - (double)dr - 0.5; const uint32_t in = (uint32_t)floor(sqrt((double)r * r - dd * dd) + 0.5), cut = r > in ? r - in : 0u; if (k < cut) return 1; }
+    }
+    return 0;
+}
+static int box_ok(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t r, uint16_t inside, uint16_t bg)
+{
+    for (uint32_t j = 0; j < h; j++) for (uint32_t i = 0; i < w; i++) if (em_px(0, x + i, y + j) != (in_cut(j, i, w, h, r) ? bg : inside)) return 0;
+    return 1;
+}
+static void sc_corners(void)                                                                               /* the corner table: the engine's table is zero until the firmware loads it */
+{
+    em_reset(); caps.dbuf = 0; em_has_dbuf = 0; fill_front(0x0000);
+    gfx_rect(100, 100, 40, 40, 0xF800); gfx_corners(100, 100, 40, 40, 8, 0x0001);
+    chk("the first corner op loads the table (16 entries) before the engine runs it", em_rc_writes == 16u);
+    gfx_rect(160, 100, 40, 40, 0xF800); gfx_corners(160, 100, 40, 40, 8, 0x0001);
+    chk("the same radius again loads nothing", em_rc_writes == 16u);
+    gfx_rect(220, 100, 40, 40, 0x07E0); gfx_corners(220, 100, 40, 40, 10, 0x0001);
+    chk("another radius reloads the table", em_rc_writes == 32u);
+    gfx_rect(280, 100, 40, 40, 0x001F); gfx_corners(280, 100, 40, 40, 10, 0x0001);
+    gfx_rrect(100, 200, 50, 30, 6, 0xFFFF, 0x0001);
+    gfx_fence();
+    chk("corners of radius 8 are the circle's, drawn over the filled box and nothing else changes (both boxes)", box_ok(100, 100, 40, 40, 8, 0xF800, 0x0001) && box_ok(160, 100, 40, 40, 8, 0xF800, 0x0001));
+    chk("a box queued with radius 8 is still radius 8 after the table was reloaded for 10 (the reload waited for the engine)", box_ok(100, 100, 40, 40, 8, 0xF800, 0x0001) && em_px(0, 100, 100) == 0x0001 && em_px(0, 107, 107) == 0xF800);
+    chk("corners of radius 10 are the circle's", box_ok(220, 100, 40, 40, 10, 0x07E0, 0x0001) && box_ok(280, 100, 40, 40, 10, 0x001F, 0x0001));
+    chk("a rounded rectangle (fill, then corners) of radius 6 is the same circle", box_ok(100, 200, 50, 30, 6, 0xFFFF, 0x0001));
+    uint32_t tab_ok = 1; for (uint32_t r = 1; r <= 15u; r++) for (uint32_t dy = 1; dy <= r; dy++) { const double dd = (double)dy - 0.5; const uint32_t in = (uint32_t)floor(sqrt((double)r * r - dd * dd) + 0.5), want = r > in ? r - in : 0u; if (gfx_rc_cut(r, dy) != want) tab_ok = 0; }
+    chk("the table entries are the floating point circle's for every radius 1..15", tab_ok && gfx_rc_cut(8, 0) == 0u && gfx_rc_cut(8, 9) == 0u && gfx_rc_cut(0, 1) == 0u);
+}
 static void sc_wide(void)
 {
     em_reset(); caps.dbuf = 0; em_has_dbuf = 0;
@@ -172,6 +205,6 @@ int main(int argc, char **argv)
 {
     const char *s = argc > 1 ? argv[1] : "bracket";
     if (!strcmp(s, "bracket")) sc_bracket(); else if (!strcmp(s, "blitmode")) sc_blitmode(); else if (!strcmp(s, "stash")) sc_stash();
-    else if (!strcmp(s, "compose")) sc_compose(); else if (!strcmp(s, "blend")) sc_blend(); else if (!strcmp(s, "noblend")) sc_noblend(); else if (!strcmp(s, "nodbuf")) sc_nodbuf(); else if (!strcmp(s, "raw")) sc_raw(); else if (!strcmp(s, "wide")) sc_wide(); else if (!strcmp(s, "bar")) sc_bar(); else if (!strcmp(s, "mbbuf")) sc_mbbuf();
+    else if (!strcmp(s, "compose")) sc_compose(); else if (!strcmp(s, "blend")) sc_blend(); else if (!strcmp(s, "noblend")) sc_noblend(); else if (!strcmp(s, "nodbuf")) sc_nodbuf(); else if (!strcmp(s, "raw")) sc_raw(); else if (!strcmp(s, "corners")) sc_corners(); else if (!strcmp(s, "wide")) sc_wide(); else if (!strcmp(s, "bar")) sc_bar(); else if (!strcmp(s, "mbbuf")) sc_mbbuf();
     return fails ? 1 : 0;
 }
