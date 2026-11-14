@@ -6,10 +6,12 @@ Development began from upstream commit
 `7ef8f0fb84abd4ae5a6a187805fd910351ae57dc`.
 
 The repository preserves the complete upstream Git history. HarpMudd's original
-copyright notice remains in `LICENSE`, alongside the notice for Tau's later
-modifications. The MIT license applies to HarpMudd's MIT-licensed original work
-and to Tau's own MIT-licensed additions; it does not replace licenses attached
-to third-party components.
+copyright notice remains in `LICENSE-MIT`, alongside the notice for Tau's earlier
+modifications. Tau Gallery is distributed under the Apache License 2.0
+(`LICENSE`); the MIT license (`LICENSE-MIT`) continues to apply to HarpMudd's
+MIT-licensed original work and to the earlier MIT-licensed Tau files, and its
+copyright and permission notice must stay with them. Neither license replaces
+licenses attached to third-party components.
 
 ## Original project
 
@@ -17,14 +19,14 @@ to third-party components.
 - Author: HarpMudd
 - Source: <https://github.com/harpmudd/HarpMudd.mp3player>
 - Tau baseline: v1.4.0 / commit `7ef8f0fb84abd4ae5a6a187805fd910351ae57dc`
-- License: MIT, preserved in `LICENSE`
+- License: MIT, preserved in `LICENSE-MIT`
 
 ## Tau
 
 - Project direction, identity, artwork, packaging, documentation, and
   modifications after the baseline: alfatreze
 - Source: <https://github.com/alfatreze/Tau-Alpha>
-- License for Tau-authored code and documentation: MIT
+- License for Tau-authored code and documentation: Apache-2.0 (`LICENSE`); files that descend from the MIT-licensed original or from Tau's earlier MIT releases keep the MIT terms (`LICENSE-MIT`)
 
 ## Components with separate terms
 

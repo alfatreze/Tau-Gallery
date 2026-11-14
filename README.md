@@ -30,4 +30,4 @@ python3 tools/package_dev_build.py --number 901 --variant player2 --build-flags 
 python3 tools/install_dev_core.py work/diagnostics/tau-dev-901/pocket --card /Volumes/Pock          # dry run; --yes to write
 ```
 
-The licence is MIT; Tau Alpha's attribution is kept in `LICENSE` and `NOTICE.md`.
+The licence is Apache-2.0 (`LICENSE`). The MIT license of the upstream project and of the earlier Tau files is kept in `LICENSE-MIT`, with the attribution in `NOTICE.md` and `NOTICE`.
