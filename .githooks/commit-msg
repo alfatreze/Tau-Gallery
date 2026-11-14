@@ -1,0 +1,8 @@
+#!/bin/sh
+# Project rule 11 (docs/PROJECT_RULES.md): a commit message never mentions an AI tool and carries no Co-Authored-By or "generated with" line for one.
+# Enable once per clone:  git config core.hooksPath .githooks
+if grep -i -E 'claude|anthropic|codex|openai|chatgpt|copilot|gemini|generated with|ai[- ]assisted' "$1" > /dev/null; then
+    echo "commit refused (project rule 11): the message mentions an AI tool or carries an attribution line for one:" >&2
+    grep -i -n -E 'claude|anthropic|codex|openai|chatgpt|copilot|gemini|generated with|ai[- ]assisted' "$1" >&2
+    exit 1
+fi
