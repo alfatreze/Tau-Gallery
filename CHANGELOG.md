@@ -2,6 +2,20 @@
 
 What changed in each release, newest first. Lines starting `- Omega:` are copied into the release's `tau-compat.json` notes for Tau Omega.
 
+## v0.9.0 — 14 November 2026
+
+The first public release of Tau Gallery, a photo gallery for the Analogue Pocket: a thumbnail grid, a full-screen viewer and zoom and pan for very large pictures, decoded by a hardware decoder in the core. This is a beta (0.9): most of it has been tested in simulation, and only part of it on a Pocket (see the limits below).
+
+- **Core:** `alfatreze.Tau Gallery` on platform `tau_gallery`, core version 4D50331E. It needs the matching firmware (included) and pictures converted with the tools below.
+- **Grid:** four sizes (4 x 3, 5 x 4, 6 x 4, 8 x 6; Settings > GRID SIZE), square thumbnails that fill their cell, rounded corners and a rounded selection frame, one level of folders, a details page set (INFO, SHOT, HISTOGRAMS with a page indicator; histograms counted by the hardware decoder).
+- **Viewer:** fit view, zoom and pan, turn the picture (X, Y), mirror it (Start with X or Y), crop masks (L1; 1:1, 4:5, 3:2, 16:9, CinemaScope, XPan, 3:1; Start turns a mask). Zooming from a turned or masked view returns to the upright picture first.
+- **Settings:** resume on the last picture, grid size, dither (off, ordered, moving), colour preset (normal, bright, contrast, midtones, faded, warm, cool, invert).
+- **Tools (separate downloads, as they are):** the converter app (macOS only, unsigned) and the Python encoding tools (`tgy_convert.py` and friends, any system with Python 3, Pillow and numpy). They write the version 1 pictures (.tgy) and the library index (`tau-library.tdb`, TGIX version 1) the core reads.
+- **Known limits:** the Dock has not been tried (the core says it is not supported); rounded corners, cover thumbnails and the latest Settings page were built after the last full Pocket test; zoom of a turned picture goes back to upright by design; the converter app has no Windows or Linux build (the Python tools run anywhere); a very large picture (hundreds of megapixels) converts slowly and needs several gigabytes of memory.
+- Omega: new core; its library index is TGIX version 1 (`tau-library.tdb`), not the music player's.
+
+The older entries below belong to the music player (Tau Alpha) this project descends from.
+
 ## v0.6.1 — 21 October 2026
 
 A small release that makes the card setup clearer and meets the openFPGA Library's requirements.

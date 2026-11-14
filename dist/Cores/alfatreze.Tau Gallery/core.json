@@ -9,15 +9,15 @@
             "description": "Photo gallery: fast previews, zoom and pan for big images",
             "author": "alfatreze",
             "url": "https://github.com/alfatreze/Tau-Gallery",
-            "version": "0.1.0",
-            "date_release": "2026-11-07"
+            "version": "0.9.0",
+            "date_release": "2026-11-14"
         },
         "framework": {
             "target_product": "Analogue Pocket",
             "version_required": "1.1",
             "sleep_supported": false,
             "dock": {
-                "supported": true,
+                "supported": false,
                 "analog_output": false
             },
             "hardware": {
