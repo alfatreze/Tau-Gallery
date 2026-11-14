@@ -135,7 +135,7 @@ int gfx_mb_write(uint32_t a, uint32_t d) { if (a + 1u >= HW_N) return -1; mem[a]
 int gfx_mb_read(uint32_t a, uint32_t *o) { *o = (uint32_t)mem[a] | (uint32_t)mem[a + 1u] << 16; return 0; }
 int gfx_mb_write_buf(uint32_t a, uint32_t d) { if (a + 1u >= sizeof fb / 2u) return -1; fb[a] = (uint16_t)d; fb[a + 1u] = (uint16_t)(d >> 16); return 0; }
 void gfx_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint16_t c) { for (uint32_t j = y; j < y + h && j < 1024u; j++) for (uint32_t i = x; i < x + w && i < 512u; i++) fb[j * 512u + i] = c; }
-static char texts[64][64]; static int ntext;
+static char texts[64][64]; static uint32_t texts_y[64]; static int ntext;
 /* Talos ops of core rev 30, modelled: OP_CORNERS paints the cut of each corner (a circle of radius r) in bg; OP_DSBLIT scales DOWN from the stash, every output pixel the rounded average of a 2 x 2 source box at floor(i * den / num). */
 static uint32_t corner_ops, dsblit_ops, dsblit_bad;                                                             /* dsblit_bad: a scale whose source is not in the shared stash rows (360 and below): the second UI buffer would read another picture */
 void gfx_corners(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t r, uint16_t bg)
@@ -158,7 +158,7 @@ void gfx_dsblit(uint32_t sx, uint32_t sy, uint32_t dx, uint32_t dy, uint32_t w, 
         fb[(dy + j) * 512u + dx + i] = (uint16_t)((((r5 + 2u) >> 2) << 11) | (((g6 + 2u) >> 2) << 5) | ((b5 + 2u) >> 2));
     }
 }
-uint32_t gfx_text(uint32_t x, uint32_t y, const char *s, uint16_t fg, uint16_t bg) { (void)x; (void)y; (void)fg; (void)bg; if (ntext == 64) ntext = 0; strncpy(texts[ntext], s, 63); texts[ntext++][63] = 0; return 0; }
+uint32_t gfx_text(uint32_t x, uint32_t y, const char *s, uint16_t fg, uint16_t bg) { (void)x; (void)fg; (void)bg; if (ntext == 64) ntext = 0; texts_y[ntext] = y; strncpy(texts[ntext], s, 63); texts[ntext++][63] = 0; return 0; }
 uint32_t gfx_text_width(const char *s) { return 8u * (uint32_t)strlen(s); }
 void irq_enable(uint32_t m) { (void)m; }
 /* the Talos BLIT as the RTL has it (docs/M2_DESIGN.md section 9, sim/tb_talos_tilecopy.v): bases 25 bits, offsets 19 bits, a row at most 127 halfwords; this model also counts copies that read a window and any write into the displayed screen area */
@@ -459,6 +459,7 @@ static void pass_hook(void)                                                     
 }
 static int count_text(const char *s) { int n = 0; for (int i = 0; i < 64; i++) if (!strcmp(texts[i], s)) n++; return n; }
 static int said(const char *s) { for (int i = 0; i < 64; i++) if (strstr(texts[i], s)) return 1; return 0; }
+static int text_y(const char *s) { for (int k = 1; k <= 64; k++) { const int i = (ntext + 64 - k) % 64; if (strstr(texts[i], s)) return (int)texts_y[i]; } return -1; }      /* the y of the newest text that holds s, -1 if none */
 static const char *last_text(void) { return texts[(ntext + 63) % 64]; }
 static void clear_texts(void) { memset(texts, 0, sizeof texts); ntext = 0; }
 
@@ -559,6 +560,8 @@ static void lib1_cp(int n)
     case 450: { uint32_t sx, sy; sx = LG[0].x0; sy = 22u + LG[0].y0; const uint16_t dk = (uint16_t)((th_role[TR_BG_BOTTOM] >> 1) & 0x7BEFu);
               chk(450, level == 1u && th_role[TR_BG_BOTTOM] != 0u && dk != th_role[TR_BG_BOTTOM] && lib1_cell_ok(0, 0, thumb1_of(0), 1) && fb[(sy + 90u) * 512u + sx + 90u] == dk && fb[(sy + 79u) * 512u + sx + 90u] != dk); break; }   /* a folder tile in the light theme: the name strip is darker than the background and the cover above it is not */
     case 519: chk(519, pix_ctrl == 1u && pix_stores == 0u && pix_bad == 0u); break;                                                                                  /* at start: dither only (default ordered), no tables, nothing loaded */
+    case 526: { const int yr = text_y("RESUME LAST PICTURE"), yg = text_y("GRID SIZE"), yd = text_y("DITHER"), yc = text_y("COLOUR"), yh = text_y("ON: the grid opens");      /* Settings: four rows, each its own line, and the hint under the last one (it was drawn over the COLOUR row) */
+        chk(526, yr >= 0 && yg > yr && yd > yg && yc > yd && yh >= yc + 20); } break;
     case 520: chk(520, pix_ctrl == 5u && pix_stores == 768u && pix_bad == 0u && pix_tables_are(1u)); break;                                                             /* preset 1: tables on, dither bits kept, all 768 entries stored (none while busy or on) */
     case 521: chk(521, pix_ctrl == 5u && pix_stores == 1536u && pix_bad == 0u && pix_tables_are(2u)); break;                                                            /* the next preset: tables off while loading, on again, new curves */
     case 522: chk(522, pix_ctrl == 1u && pix_stores == 6912u && pix_tables_are(1u) && pix_bad == 0u); break;                                                                                  /* Left to preset 1 reloads it, Left again to NORMAL: tables off, nothing reloaded (the tables still hold preset 1) */
@@ -975,7 +978,7 @@ int main(int argc, char **argv)
     }
     if (argc > 2 && !strcmp(argv[2], "colour")) {                                                                 /* Settings > COLOUR: presets load the tables (tables off while storing), NORMAL turns them off, Left wraps to INVERT */
         lib1_on = 1;
-        const uint32_t SC[] = { CP(519), KEY_START, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_A, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_RIGHT, 0, CP(520), KEY_UP, 0, CP(525), KEY_DOWN, 0, KEY_RIGHT, 0, CP(521), KEY_RIGHT, 0, KEY_RIGHT, 0, KEY_RIGHT, 0, CP(524), KEY_LEFT, 0, KEY_LEFT, 0, KEY_LEFT, 0, KEY_LEFT, 0, KEY_LEFT, 0, CP(522), KEY_LEFT, 0, CP(523), KEY_B, 0, KEY_B, 0, END };
+        const uint32_t SC[] = { CP(519), KEY_START, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_A, 0, CP(526), KEY_DOWN, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_RIGHT, 0, CP(520), KEY_UP, 0, CP(525), KEY_DOWN, 0, KEY_RIGHT, 0, CP(521), KEY_RIGHT, 0, KEY_RIGHT, 0, KEY_RIGHT, 0, CP(524), KEY_LEFT, 0, KEY_LEFT, 0, KEY_LEFT, 0, KEY_LEFT, 0, KEY_LEFT, 0, CP(522), KEY_LEFT, 0, CP(523), KEY_B, 0, KEY_B, 0, END };
         nscript = (int)(sizeof SC / sizeof SC[0]); memcpy(script, SC, sizeof SC);
         if (!setjmp(done)) gallery_app_main();
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;

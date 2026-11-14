@@ -944,7 +944,7 @@ static void draw_settings(const gsp_t *sp)
         const uint32_t y = PAGE_Y0 + i * 2u * LINE_H;
         gfx_text(6, y, gsp_labels[i], i == sp->row ? FG : DIM, BG); gfx_text(250, y, val[i], ACC, BG); if (i == sp->row) gfx_text(GFX_W - 32u, y, "<", ACC, BG);
     }
-    gfx_text(6, PAGE_Y0 + 6u * LINE_H + 4u, sp->row == GSP_RESUME ? "ON: the grid opens on the last picture." : sp->row == GSP_GRID ? "Pictures on a page: 12, 20, 24 or 48." : sp->row == GSP_DITHER ? "Spreads the 5 and 6 bit panel steps." : "A colour curve for the whole viewer.", DIM, BG);
+    gfx_text(6, PAGE_Y0 + 2u * GSP_ROWS * LINE_H + 4u, sp->row == GSP_RESUME ? "ON: the grid opens on the last picture." : sp->row == GSP_GRID ? "Pictures on a page: 12, 20, 24 or 48." : sp->row == GSP_DITHER ? "Spreads the 5 and 6 bit panel steps." : "A colour curve for the whole viewer.", DIM, BG);
     page_foot("UP DOWN ROW   LEFT RIGHT CHANGE   B BACK", 0, 0);
 }
 static void frame_box(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t col)           /* a 1 px outline */

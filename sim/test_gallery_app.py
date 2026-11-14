@@ -508,6 +508,9 @@ def mutants(setdir, tail=None):
         ("gallery_app.c", "if ((rot_o != 0u || mask_i != 0u) && (edge & (KEY_A | KEY_R1))) {", "if (rot_o != 0u && (edge & (KEY_A | KEY_R1))) {"),
         ("gallery_app.c", "if ((rot_o != 0u || mask_i != 0u) && (edge & (KEY_A | KEY_R1))) {", "if (mask_i != 0u && (edge & (KEY_A | KEY_R1))) {"),
     ]
+    muts += [                                                                                                      # the Settings page layout
+        ("gallery_app.c", "gfx_text(6, PAGE_Y0 + 2u * GSP_ROWS * LINE_H + 4u, sp->row == GSP_RESUME", "gfx_text(6, PAGE_Y0 + 6u * LINE_H + 4u, sp->row == GSP_RESUME"),      # the old position: over the fourth row
+    ]
     only = sys.argv[sys.argv.index("--only") + 1] if "--only" in sys.argv else None                                   # --only TEXT: just the mutants whose original code contains TEXT (Tier B of CLAUDE.md section 4: the mutants of the code you changed)
     if only: muts = [m for m in muts if only in m[1]]; assert muts, "no mutant matches --only"
     if "--idx" in sys.argv:                                                                                       # --idx 6,7,58: just these mutants (by their position in the list)
