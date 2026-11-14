@@ -115,6 +115,11 @@ def main():
         r = subprocess.run(["bash", "fw2/build.sh"] if args.variant == "player2" else ["bash", "fw/build.sh", target], cwd=root, env=env)
         if r.returncode != 0:
             sys.exit(f"build failed ({target}, {args.build_flags})")
+    if args.variant == "galleryapp":                    # always build the firmware right here: packaging whatever ROM was last built relabelled an old ROM as the new build (DEV 024 carried the ROM of DEV 023 under the new commit)
+        env = dict(os.environ, APP="gallery", TGY="1")
+        print("building the gallery firmware (APP=gallery TGY=1) ...", file=sys.stderr)
+        if subprocess.run(["bash", "fw2/build_gallery.sh"], cwd=root, env=env, stdout=subprocess.DEVNULL).returncode != 0:
+            sys.exit("build failed (fw2/build_gallery.sh APP=gallery TGY=1)")
     if not rom.exists():
         sys.exit(f"{rom} missing -- build it first (bash fw/build.sh {target})")
     if args.rbf:

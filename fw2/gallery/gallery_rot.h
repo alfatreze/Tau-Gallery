@@ -19,8 +19,10 @@ static inline void gr_map(uint32_t o, uint32_t iw, uint32_t ih, uint32_t x, uint
     int32_t px = gr_a[o][0] * sx + gr_a[o][1] * sy, py = gr_a[o][2] * sx + gr_a[o][3] * sy;
     /* c: the corner of the picture that A sends to a negative coordinate comes back to zero */
     int32_t cx = 0, cy = 0;
-    if (gr_a[o][0] < 0) cx += w1; if (gr_a[o][1] < 0) cx += h1;
-    if (gr_a[o][2] < 0) cy += w1; if (gr_a[o][3] < 0) cy += h1;
+    if (gr_a[o][0] < 0) cx += w1;
+    if (gr_a[o][1] < 0) cx += h1;
+    if (gr_a[o][2] < 0) cy += w1;
+    if (gr_a[o][3] < 0) cy += h1;
     *X = (uint32_t)(px + cx); *Y = (uint32_t)(py + cy);
 }
 static inline int32_t gr_stx(uint32_t o, int32_t pitch) { return gr_a[o][0] * 3 + gr_a[o][2] * pitch; }
