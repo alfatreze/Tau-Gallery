@@ -47,7 +47,7 @@ Tests: `src-tauri` has Rust tests that run the real converter (a folder, one pic
 
 ## Status
 
-0.1.0. The macOS build is not signed or notarized (right-click, Open the first time). Windows and Linux are not tried.
+0.9.0. The macOS build (Apple silicon) is not signed or notarized (right-click, Open the first time). Windows and Linux are not tried.
 
 
 ## Tau Gallery 1.0 library (folders, details, sort)
