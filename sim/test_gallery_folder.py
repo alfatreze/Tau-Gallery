@@ -25,7 +25,7 @@ def make_folder(src, n):
     for nm in ("caf\u00e9", "\u4e2d\u6587", "\u65e5\u672c"): Image.new("RGB", (40, 30), (3, 3, 3)).save(src / (nm + ".jpg")); good.append(nm)                  # accented (Latin-1) and two different names with no ASCII at all
     rot = Image.new("RGB", (600, 400), (10, 200, 30)); ex = Image.Exif(); ex[0x0112] = 6; rot.save(src / "ROTATED.jpg", exif=ex.tobytes()); good.append("ROTATED")      # EXIF orientation 6: shown as 400 x 600
     Image.new("RGB", (50, 50), (1, 2, 3)).save(src / "PIC.jpg"); Image.new("RGB", (60, 40), (4, 5, 6)).save(src / "pic.png"); good += ["PIC", "pic"]                  # the same name but for the case and the extension (a case-insensitive disk would merge two files that differ only by case): both must survive
-    (src / "notes.txt").write_text("not a picture"); (src / "empty.jpg").write_bytes(b""); (src / "._IMG_0000.jpg").write_bytes(b"\0\5\x16\7" + bytes(60))
+    (src / "notes.txt").write_text("not a picture"); (src / "empty.jpg").write_bytes(b""); (src / "._IMG_0000.jpg").write_bytes(b"\0\5\x16\7" + bytes(60)); (src / "damaged_0000.jpg").write_bytes(b"\0\5\x16\7" + bytes(60))
     Image.new("RGB", (80, 60), (7, 8, 9)).save(src / (LONG + ".png"))                                                                                              # a card path over the 95-byte limit
     (src / "sub").mkdir(); Image.new("RGB", (80, 60), (9, 9, 9)).save(src / "sub" / "inner.jpg")                                                                   # not converted: the converter does not descend (said in the report)
     return good
@@ -53,7 +53,7 @@ def verify(conv, n, report=True):
     if not ev or ev[-1]["event"] != "done": return w
     conv_ev = [e for e in ev if e["event"] == "converted"]; skips = [e for e in ev if e["event"] == "skip"]
     check(len(conv_ev) == len(good) == ev[-1]["pictures"], f"{len(good)} good pictures converted, none lost", (len(conv_ev), len(good)))
-    check(sorted(e["file"] for e in skips) == sorted(["._IMG_0000.jpg", "empty.jpg", LONG + ".png"]) and ev[-1]["skipped"] == 3, "exactly the junk file, the empty file and the too-long name were skipped, and counted", [e["file"][:20] for e in skips])
+    check(sorted(e["file"] for e in skips) == sorted(["damaged_0000.jpg", "empty.jpg", LONG + ".png"]) and ev[-1]["skipped"] == 3, "exactly the damaged file, the empty file and the too-long name were skipped, and counted (the ._ metadata file is not a picture and is not even listed)", [e["file"][:20] for e in skips])
     check(any("shorten" in e["error"] for e in skips if e["file"].startswith("LLL")), "the too-long name's skip says what to do")
     tgys = sorted(p.name for p in out.glob("*.tgy"))
     check(len(tgys) == len(good) and not list(out.glob("*.part")), "one .tgy per good picture and no .part file is left", (len(tgys), list(out.glob("*.part"))[:2]))
