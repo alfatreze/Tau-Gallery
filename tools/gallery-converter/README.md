@@ -22,7 +22,7 @@ Copy the `Assets` folder to the root of the card (merge it with an existing `Ass
 - **Zoom levels** (on; plain format only): large pictures also get the half and 1:1 zoom stops for the pan and zoom. About 45 MB more on the card for each large picture; small ones add nothing.
 - **Enlarge small pictures** (off): pictures smaller than the screen show at their own size unless this is on.
 
-Drag a picture or a folder onto the window to pick it. A folder is read one level deep (subfolders are not read). Pictures: JPEG, PNG, BMP, GIF, TIFF, WebP. File names on the card are ASCII only (anything else becomes `_` plus a short checksum); the name shown in the gallery keeps the original letters it can (Latin-1).
+Drag a picture or a folder onto the window to pick it. A folder is read one level deep: each subfolder with pictures becomes a folder of the gallery (deeper folders are not read). Pictures: JPEG, PNG, BMP, GIF, TIFF, WebP. File names on the card are ASCII only (anything else becomes `_` plus a short checksum); the name shown in the gallery keeps the original letters it can (Latin-1).
 
 ## What it needs
 
