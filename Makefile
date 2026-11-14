@@ -969,6 +969,7 @@ test-gallery-quick:
 	$(PYTHON) sim/test_gallery_rot.py
 	$(PYTHON) sim/test_gallery_mask.py
 	$(PYTHON) sim/test_gallery_lut.py
+	$(PYTHON) sim/test_rethumb.py
 	$(PYTHON) sim/test_make_gallery_release.py
 	$(PYTHON) sim/test_tgy_convert_v1.py
 	$(PYTHON) sim/test_merge_index.py
