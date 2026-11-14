@@ -1,25 +1,21 @@
 # Tau Gallery
 
-A photo gallery core for the Analogue Pocket (openFPGA): fast previews, large images, zoom and pan. A fork of Tau Alpha
-(`main` at `12418aab`, see `UPSTREAM.md`; upstream README: `docs/UPSTREAM_TAU_ALPHA_README.md`). Plan: `../docs/GALLERY_ANALYSIS_2026-11-07.md`.
+<img width="400" height="360" alt="20261114_022101" src="https://github.com/user-attachments/assets/b3b89f90-f357-4e1a-8b28-e34ed9548dd0" />
+<img width="800" height="720" alt="20261114_022121" src="https://github.com/user-attachments/assets/a42b7f17-764c-431f-91da-00352ed44164" />
+<img width="400" height="360" alt="20261113_085759" src="https://github.com/user-attachments/assets/f021955d-24da-4e0b-870f-5682cceefbe7" />
 
-## Identity (independent of Tau Alpha)
 
-Same naming structure as Tau Alpha's release channels (`tools/tau_layout.py`), with its own ids, platforms and settings. Author id stays `alfatreze`.
+A photo gallery core for the Analogue Pocket: 
+- Custom jpeg like codec for extreme performance (hardware decoded)
+- Any image will open at ~250ms
+- 800x600 Resolution
+- Fit screen of full zoom with panning and navigator
+- Ultra large image support (maximum tested 400+ megapixel)
+- Dithering for 15bit analogue screen
+- Histograms and EXIF
+- Image rotation and color LUT effects
+- MacOS encoding app and python tool, more to come in the future
 
-| Channel | Core id (`Author.Core`, = folder name) | Platform id (<= 15 chars) | Select Core shortname | Version |
-|---|---|---|---|---|
-| Stable | `alfatreze.Tau Gallery` | `tau_gallery` | Tau Gallery | `X.Y.Z` |
-| Stable diagnostics | `alfatreze.Tau Gallery Diagnostics` | `tau_gallery` | Tau Gallery Diagnostics | `X.Y.Z` |
-| Preview | `alfatreze.Tau Gallery Preview` | `tau_gallery_pre` (+ reads `tau_gallery`) | Tau Gallery Preview | `X.Y.Z-preview.N` |
-| Preview diagnostics | `alfatreze.Tau Gallery Preview Diagnostics` | `tau_gallery_pre` | Tau Gallery Preview Diagnostics | `X.Y.Z-preview.N` |
-| Dev | `alfatreze.Tau Gallery DEV NN` | `tau_gallery_dev` (+ reads `tau_gallery`) | Tau Gallery DEV NN | `X.Y.Z-dev.NN` |
-
-- **Settings:** the Pocket keeps them per core id under `/Settings/alfatreze.Tau Gallery.../`, so Tau Gallery never reads or overwrites Tau Alpha's.
-- **Files on the card:** `Assets/<platform>/<core id>/` (ROM, cold image, loading splash), `Assets/tau_gallery/common/` (shared gallery data), `Cores/<core id>/`, `Platforms/<platform>.json` and `_images/<platform>.bin`.
-- **Current version:** `0.1.0` (`dist/Cores/alfatreze.Tau Gallery/core.json`); dev builds are `0.1.0-dev.NN`.
-- **Artwork:** placeholders from `tools/gen_gallery_art.py` (icon, platform image, boot splash); previews in `assets/brand/`.
-- **Binaries in `dist/`:** inherited Tau Alpha build products used as test fixtures (`dist/INHERITED_BINARIES.md`).
 
 ## Build and package
 
