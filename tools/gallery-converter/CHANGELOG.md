@@ -6,6 +6,7 @@ The converter now has its own version and its own releases (`converter-vX.Y.Z`),
 
 The converter is now part of the app. It is a Rust port of the Python converter (the `tgy-core` crate), so the app needs nothing else installed, and it is much faster.
 
+- **Only the hardware-decoder format in the app.** The page no longer offers the plain (version 0) format or its "Zoom levels" option: the app always writes the hardware-decoder files (better quality, small files). The plain format stays in `tgyconv` and the Python tools; another format (TGX) is planned.
 - **No Python.** Python 3, Pillow and numpy are no longer needed, and the Python setup panel is gone from the page.
 - **Much faster: about 50 times on average.** Measured on 8 photos (2.5 to 102 megapixels, JPEG) on one Apple-silicon Mac, the old Python converter against this one, same machine, same files: the average speed-up is **58 times** (geometric mean 48 times; per photo 19 to 102 times), and the total time for the 8 photos fell from **236 s to 3.3 s** (71 times). A 102 megapixel JPEG took 98 s and now takes 1.1 s; the five ordinary photos (3 to 16 s each) now take 0.1 to 0.3 s each. It uses every core. The speed-up is the same code path on every platform, but the figures were measured on macOS only.
 - **Very large pictures work.** A 416 megapixel, 1 GB TIFF that the Python converter refused (Pillow's limit of 179 megapixels) now converts in 8.5 s on an 8-core Mac to a 198 MB file that passes every checksum. A picture that size needs about 4 GB of memory while it converts.

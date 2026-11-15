@@ -9,8 +9,8 @@
   let scanInfo = $state<Scan | null>(null);
   let output = $state<string>(saved.output ?? '');
   let merge = $state<boolean>(saved.merge ?? true);
-  let levels = $state<boolean>(saved.levels ?? true);
-  let format = $state<'v0' | 'v1'>(saved.format === 'v0' ? 'v0' : 'v1');
+  const format = 'v1';          // the hardware-decoder files only; the plain (v0) format stays in the converter library and the command line, not in the app
+  const levels = false;
   let quality = $state<number>(Number(saved.quality) >= 1 && Number(saved.quality) <= 100 ? Number(saved.quality) : 92);
   let fitQuality = $state<number>(Number(saved.fitQuality) >= 1 && Number(saved.fitQuality) <= 100 ? Number(saved.fitQuality) : 90);
   let upscale = $state<boolean>(saved.upscale ?? false);
@@ -29,7 +29,7 @@
   let error = $state('');
   let stopping = $state(false);
 
-  $effect(() => { try { localStorage.setItem(KEY, JSON.stringify({ output, merge, levels, upscale, format, quality, fitQuality, sort, oldIndex })); } catch { /* no storage: fine */ } });
+  $effect(() => { try { localStorage.setItem(KEY, JSON.stringify({ output, merge, upscale, quality, fitQuality, sort, oldIndex })); } catch { /* no storage: fine */ } });
 
   const canConvert = $derived(!busy && !!output && !!scanInfo && (scanInfo.kind === 'file' || scanInfo.kind === 'folder') && scanInfo.pictures > 0);
 
@@ -128,20 +128,11 @@
         <select bind:value={sort} disabled={busy || oldIndex} aria-label="Order of the pictures inside a folder"><option value="name">By name</option><option value="taken">By date taken</option><option value="converted">As converted</option></select></span></label>
       <label class="opt"><input type="checkbox" bind:checked={oldIndex} disabled={busy} /><span>Index for a gallery before 1.0<small>A flat list with small thumbnails, no folders and no picture details. Leave this off for Tau Gallery 1.0.</small></span></label>
     </details>
-    <fieldset class="fmt" disabled={busy}>
-      <legend>Format</legend>
-      <label class="opt"><input type="radio" name="format" value="v1" bind:group={format} /><span>Hardware decoder<small>For the Tau Gallery core with the hardware decoder (DEV 013 and later). Pictures open quickly and zoom to their full size, whatever the size; the files are small. Needs numpy.</small></span></label>
-      <label class="opt"><input type="radio" name="format" value="v0" bind:group={format} /><span>Plain (every Tau Gallery core)<small>Works on every build. The pictures are stored as raw tiles, so the files are large.</small></span></label>
-    </fieldset>
-    {#if format === 'v0'}
-    <label class="opt"><input type="checkbox" bind:checked={levels} disabled={busy} /><span>Zoom levels (pan and zoom)<small>Large pictures keep their detail for zooming. About 45 MB more on the card for each large picture; small ones add nothing.</small></span></label>
-    {:else}
-    <p class="note">Zoom comes with the picture: a picture larger than the screen also gets its full-size level for panning and zooming, no setting needed. A very large photograph takes a few seconds (about 1 second for 100 megapixels on an 8-core machine); the converter uses the machine's cores.</p>
+    <p class="note">The pictures are written in the hardware-decoder format, for the Tau Gallery core with the hardware decoder (DEV 013 and later): they open quickly and the files are small. Zoom comes with the picture: a picture larger than the screen also gets its full-size level for panning and zooming, no setting needed. A very large photograph takes a few seconds (about 1 second for 100 megapixels on an 8-core machine); the converter uses the machine's cores.</p>
     <details class="adv"><summary>Quality ({fitQuality} fit view, {quality} zoom level)</summary>
       <label class="opt"><span>Fit view quality: {fitQuality}<small>The picture as first shown (JPEG-style quality, 1 to 100).</small><input type="range" min="50" max="100" step="1" bind:value={fitQuality} disabled={busy} aria-label="Fit view quality" /></span></label>
       <label class="opt"><span>Zoom level quality: {quality}<small>Only for pictures that are not JPEG (a JPEG's own data is kept as it is, with no loss).</small><input type="range" min="50" max="100" step="1" bind:value={quality} disabled={busy} aria-label="Zoom level quality" /></span></label>
     </details>
-    {/if}
     <label class="opt"><input type="checkbox" bind:checked={upscale} disabled={busy} /><span>Enlarge small pictures to fill the screen<small>Off: pictures smaller than the screen show at their own size.</small></span></label>
   </section>
 

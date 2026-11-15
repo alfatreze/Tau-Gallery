@@ -13,13 +13,11 @@ Copy the `Assets` folder to the root of the card (merge it with an existing `Ass
 
 ## Format
 
-- **Hardware decoder** (the default): the compressed container the Tau Gallery core with the hardware decoder draws (DEV 013 and later). Pictures open quickly and zoom to their full size; the files are small. A picture larger than the screen also gets its full-size level automatically (a JPEG keeps its own data as it is, with no loss; any other picture is encoded at the **Zoom level quality**, default 92; the **Fit view quality** is the picture as first shown, default 90). Needs **numpy** besides Pillow; the Python line at the bottom says whether it was found. A JPEG whose data is kept as it is converts quickly; the time goes into re-coding the picture's detail, so a dense photograph takes longest: a 102 megapixel one took about 5 minutes on one processor and about 105 seconds on this machine's 8 (the tiles are coded on several processors, the file is the same), and a flat 233 megapixel map 2 minutes.
-- **Plain**: the raw tile format every Tau Gallery core reads; the files are large. The **Zoom levels** option below is for this format only.
+The app writes the **hardware-decoder** format only: the compressed container the Tau Gallery core with the hardware decoder draws (DEV 013 and later). Pictures open quickly and zoom to their full size; the files are small. A picture larger than the screen also gets its full-size level automatically (a JPEG keeps its own data as it is, with no loss; any other picture is encoded at the **Zoom level quality**, default 92; the **Fit view quality**, default 90, is the picture as first shown). The plain raw-tile format (version 0) is no longer offered in the app; `tgyconv --format v0` and the Python tools still write it. A further format (TGX) is planned.
 
 ## Options
 
 - **Add to the library already in this folder** (on): keeps what an earlier run converted, so one picture can be added to a library. A picture with the same name is replaced; a picture whose file was removed is dropped from the index. Off starts a new library.
-- **Zoom levels** (on; plain format only): large pictures also get the half and 1:1 zoom stops for the pan and zoom. About 45 MB more on the card for each large picture; small ones add nothing.
 - **Enlarge small pictures** (off): pictures smaller than the screen show at their own size unless this is on.
 
 Drag a picture or a folder onto the window to pick it. A folder is read one level deep: each subfolder with pictures becomes a folder of the gallery (deeper folders are not read). Pictures: JPEG, PNG, BMP, GIF, TIFF, WebP. File names on the card are ASCII only (anything else becomes `_` plus a short checksum); the name shown in the gallery keeps the original letters it can (Latin-1).
