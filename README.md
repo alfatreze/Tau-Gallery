@@ -11,7 +11,7 @@ Tau Gallery is an openFPGA core (`alfatreze.Tau Gallery`). Version 0.9 is a beta
 ## Get started in three steps
 
 1. **Install the core.** Download `alfatreze.Tau_Gallery_*.zip` from the [releases](https://github.com/alfatreze/Tau-Gallery/releases) and unzip it onto the root of the Pocket's SD card (it merges with the card's `Cores`, `Platforms` and `Assets` folders).
-2. **Convert your pictures** with the **Tau Gallery Converter**, a small desktop app: pick a picture or a folder, pick an output folder, press Convert. (macOS, Apple silicon, from the same releases page. On any system with Python there are command-line [encoding tools](tools/gallery/README.md) that do the same.)
+2. **Convert your pictures** with the **Tau Gallery Converter**, a small desktop app: pick a picture or a folder, pick an output folder, press Convert. (macOS, Windows and Linux, from the [releases page](https://github.com/alfatreze/Tau-Gallery/releases): the converter has its own releases, `converter-vX.Y.Z`, separate from the core's. On any system with Python there are also command-line [encoding tools](tools/gallery/README.md) that do the same.)
 3. **Copy the `Assets` folder** the converter wrote onto the card (merge it with the existing one). Start "Tau Gallery" on the Pocket.
 
 The core shows an empty library until you convert pictures. Your originals are never changed.
@@ -85,9 +85,9 @@ The converter turns pictures into the files the core reads. It is the easiest wa
 - **Add to the library already in the output folder**: keep what an earlier run converted, add or replace pictures, merge into the library on the card. Choose the **order inside a folder**: by name, by date taken, or as converted.
 - **EXIF-aware**: the orientation is applied, EXIF details go into the library, wide-gamut photos are converted to sRGB.
 - **Quality settings** for pictures that are not JPEG, and an option to **enlarge small pictures**.
-- **Finds Python by itself** (the PATH, Homebrew, python.org) and takes a path if it must be told; the converter itself is the Python tools below, so the app and the command line give identical files.
+- **Nothing to install**: the converter is built into the app and uses every core. It is about **50 times faster** than the Python tools on average (58 times over 8 photos of 2.5 to 102 megapixels, 19 to 102 times per photo; 236 s in total down to 3.3 s; measured on one Apple-silicon Mac), and writes the same files as the Python tools below (levels encoded from pixels can differ in a few coefficients per million; see the converter's [changelog](tools/gallery-converter/CHANGELOG.md)).
 
-Needs Python 3 with Pillow and numpy. The macOS build is for Apple silicon, is not signed or notarised (right-click, Open the first time), and there is **no Windows or Linux build** of the app yet. The command-line [encoding tools](tools/gallery/README.md) run on any system with Python.
+Needs nothing else installed. **macOS** (Apple silicon): ad-hoc signed, not notarised, so the first time open System Settings, Privacy & Security and choose Open Anyway. **Windows** (x64): an installer and a portable zip; **Linux** (x64): a `.deb` and an AppImage. The Windows and Linux builds are new in converter 0.2.0 and were built by the repository's workflow; they have not been run on those systems by the author, so tell me what breaks. The command-line [encoding tools](tools/gallery/README.md) run on any system with Python.
 
 ## Status
 

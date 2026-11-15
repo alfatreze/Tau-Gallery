@@ -26,11 +26,23 @@ Drag a picture or a folder onto the window to pick it. A folder is read one leve
 
 ## What it needs
 
-Python 3 with Pillow (`python3 -m pip install Pillow`), and numpy for the hardware-decoder format (`python3 -m pip install numpy`). The app looks for one by itself (the PATH, Homebrew, python.org); the **Python** line at the bottom shows what it found and takes a path if it has to be told. The converter (`tools/gallery/tgy_convert.py` and every module it imports, found by reading the import lines) is copied into the app at build time (`npm run sync`), so the app always runs the tested converter.
+Nothing else installed. The converter is built into the app (the `tgy-core` crate in this folder, a Rust port of `tools/gallery/tgy_convert.py`): no Python, Pillow or numpy. It uses every core of the machine. Measured against the Python converter on 8 photos (2.5 to 102 megapixels) on one Apple-silicon Mac: **58 times faster on average** (geometric mean 48, per photo 19 to 102), 236 s in total down to 3.3 s; a 102 megapixel JPEG takes about 1 second.
+
+## Platforms
+
+- **macOS** (Apple silicon): `cargo tauri build --bundles app` (ad-hoc signed, see Status). Built and run here.
+- **Windows** (x64): the executable cross-builds from a Mac with `cargo tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc --no-bundle` (needs `cargo install cargo-xwin` and its one-time SDK download). That gives one `.exe` that needs only the WebView2 runtime Windows 10 and 11 already have; it was built but **not run on Windows**. The NSIS installer is not built on a Mac (`makensis` for macOS runs out of memory on this project): `.github/workflows/converter.yml` builds it on a Windows runner.
+- **Linux** (x64): needs `webkit2gtk` and GTK development libraries, so it is built by the same workflow on an Ubuntu runner (`deb` and `AppImage`). The converter crate itself was type-checked for `x86_64` and `aarch64` Linux; the Linux app was **not built or run**.
+
+The workflow also runs the page check and both test suites on each platform. It has **not been run on a runner yet**.
+
+The app lists the cards it finds under `/Volumes` (macOS), `/media/USER` and `/run/media/USER` (Linux) and the drives D: to Z: (Windows, without label or free space); on any platform the output folder can be chosen by hand.
 
 ## Where it comes from
 
-The shell is the Tau Encoder's (`Tau codecs/tau-encoder`): the Tauri 2 / Vite / Svelte 5 setup, its dependency versions and lockfile, the dialog plugin and capability, the look of the page. The work is done by the Python converter as a child process that prints one JSON event a line (`plan`, `converted`, `skip`, `warning`, `done`), the same idea as the codecs CLI's machine events; the app relays them to the page. It does not share code with the Tau Encoder and changes nothing in it.
+The shell is the Tau Encoder's (`Tau codecs/tau-encoder`): the Tauri 2 / Vite / Svelte 5 setup, its dependency versions and lockfile, the dialog plugin and capability, the look of the page. The work is done in process by `tgy-core` (`tgy-core/src`): the range coder and symbol layer (`tvcrc.rs`, `v0.rs`), the JPEG coefficient reader (`jpegcoef.rs`), the reconstruction (`recon.rs`), Pillow-compatible Lanczos (`resize.rs`), the encoder for pictures that are not JPEG (`encode.rs`), the container and index writers (`container.rs`, `index.rs`) and the folder run (`convert.rs`). It emits the same one-JSON-event-a-line records the Python tool printed (`plan`, `converted`, `skip`, `warning`, `done`); the app relays them to the page. The Python converter in `tools/gallery` stays as the reference the Rust port is tested against. `tgyconv` (`cargo run --release --bin tgyconv -- SRC OUT --card-layout --format v1`) is the same converter on the command line, with the options of `tgy_convert.py`.
+
+Same output as the Python converter: the symbol layer matches the frozen conformance vectors bit for bit; a JPEG's own coefficients, the fit view, thumbnails, the folder index, EXIF details and the plain (version 0) files come out byte for byte the same (checked on test sets, including a 102 megapixel photo). Two things can differ by a rounding step and both are valid files: a level encoded from pixels (a picture that is not a JPEG, or a 4:4:4 or wide-gamut JPEG) can differ by one in a handful of coefficients per million where a value falls exactly on a rounding tie (numpy sums in an order that is not reproducible), and a picture with a non-sRGB ICC profile is converted with `moxcms` instead of LittleCMS (at most one level of difference per channel). Not read: JPEGs with four components (CMYK), arithmetic-coded or 12-bit JPEGs; the file is skipped and said so.
 
 ## Develop
 
@@ -38,16 +50,17 @@ The shell is the Tau Encoder's (`Tau codecs/tau-encoder`): the Tauri 2 / Vite / 
 npm install
 npm run check                 # svelte-check
 npm run dev                   # the page in a browser tab, with stand-in data (no app needed)
-cd src-tauri && cargo test    # the backend against the real converter
+cd tgy-core && cargo test --release   # the converter against the Python reference's values
+cd src-tauri && cargo test    # the app's backend (a folder, one picture added, a picture that cannot be read, stopping a run)
 cargo tauri dev               # the app
 cargo tauri build --bundles app
 ```
 
-Tests: `src-tauri` has Rust tests that run the real converter (a folder, one picture added to it, a file that is not a picture, stopping a running conversion, one conversion at a time). The converter's own modes are tested by `sim/test_tgy_convert_modes.py` (`make test-tgy`).
+Tests: `tgy-core/tests/vectors.rs` runs the frozen symbol-layer vectors (`docs/conformance/tgy_v0_vectors.json`); `tgy-core/tests/golden.rs` pins coefficients, pixels, Lanczos output and a whole container to values taken from the Python reference. The Python converter's own modes are tested by `sim/test_tgy_convert_modes.py` (`make test-tgy`).
 
 ## Status
 
-0.9.0. The macOS build (Apple silicon) is not signed or notarized (right-click, Open the first time). Windows and Linux are not tried.
+0.2.0. The macOS build is ad-hoc signed (`signingIdentity: "-"` in `tauri.conf.json`), not notarized, so the bundle is sealed and macOS lists it under System Settings, Privacy & Security, where "Open Anyway" allows it the first time. If a downloaded copy still says it is damaged, run `xattr -dr com.apple.quarantine "Tau Gallery Converter.app"`. Windows and Linux are not tried.
 
 
 ## Tau Gallery 1.0 library (folders, details, sort)

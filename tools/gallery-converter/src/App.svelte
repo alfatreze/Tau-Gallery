@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { invoke, onConvertEvent, onDrop, pick, pickOutput, type Ev, type PyStatus, type Scan, type Summary, type Volume } from './tauri';
+  import { invoke, onConvertEvent, onDrop, pick, pickOutput, type Ev, type Scan, type Summary, type Volume } from './tauri';
 
   const KEY = 'tau-gallery-converter';
   const saved = (() => { try { return JSON.parse(localStorage.getItem(KEY) ?? '{}'); } catch { return {}; } })();
@@ -16,8 +16,6 @@
   let upscale = $state<boolean>(saved.upscale ?? false);
   let sort = $state<'name' | 'taken' | 'converted'>(saved.sort === 'taken' || saved.sort === 'converted' ? saved.sort : 'name');
   let oldIndex = $state<boolean>(saved.oldIndex ?? false);
-  let pythonPath = $state<string>(saved.python ?? '');
-  let py = $state<PyStatus | null>(null);
   let over = $state(false);
   let volumes = $state<Volume[]>([]);
   let usedRoot = $state('');          // set when a folder inside the card's tree was changed to the card's root
@@ -31,10 +29,9 @@
   let error = $state('');
   let stopping = $state(false);
 
-  $effect(() => { try { localStorage.setItem(KEY, JSON.stringify({ output, merge, levels, upscale, format, quality, fitQuality, sort, oldIndex, python: pythonPath })); } catch { /* no storage: fine */ } });
+  $effect(() => { try { localStorage.setItem(KEY, JSON.stringify({ output, merge, levels, upscale, format, quality, fitQuality, sort, oldIndex })); } catch { /* no storage: fine */ } });
 
-  const needsNumpy = $derived(format === 'v1' && !!py?.ok && !py.numpy);
-  const canConvert = $derived(!busy && !!py?.ok && !needsNumpy && !!output && !!scanInfo && (scanInfo.kind === 'file' || scanInfo.kind === 'folder') && scanInfo.pictures > 0);
+  const canConvert = $derived(!busy && !!output && !!scanInfo && (scanInfo.kind === 'file' || scanInfo.kind === 'folder') && scanInfo.pictures > 0);
 
   async function setSource(path: string | null) {
     if (!path) return;
@@ -52,13 +49,11 @@
     if (!here && output.startsWith('/Volumes/') && !volumes.some((v) => output.startsWith(v.path))) output = '';      // the card that was chosen is gone
     if (!output && volumes.length === 1) await setOutput(volumes[0].path);                                              // one card in: it is the one
   }
-  async function checkPython() { py = await invoke<PyStatus>('python_status', { user: pythonPath || null }); }
 
   onMount(() => {
     void (async () => {
       await refreshVolumes();
       if (!output) output = await invoke<string>('default_output');
-      await checkPython();
     })();
     let offDrop = () => {}; let offEv = () => {};
     void onDrop((paths) => { if (!busy && paths.length) void setSource(paths[0]); }, (on) => (over = on && !busy)).then((f) => (offDrop = f));
@@ -78,7 +73,7 @@
 
   async function convert() {
     busy = true; stopping = false; error = ''; summary = null; log = []; done = 0; total = scanInfo?.pictures ?? 0; kept = 0;
-    try { summary = await invoke<Summary>('convert', { input: source, output, levels, upscale, merge, format, quality, fitQuality, sort, oldIndex, python: pythonPath || null }); }
+    try { summary = await invoke<Summary>('convert', { input: source, output, levels, upscale, merge, format, quality, fitQuality, sort, oldIndex }); }
     catch (e) { error = String(e); }
     finally { busy = false; stopping = false; }
   }
@@ -141,13 +136,12 @@
     {#if format === 'v0'}
     <label class="opt"><input type="checkbox" bind:checked={levels} disabled={busy} /><span>Zoom levels (pan and zoom)<small>Large pictures keep their detail for zooming. About 45 MB more on the card for each large picture; small ones add nothing.</small></span></label>
     {:else}
-    <p class="note">Zoom comes with the picture: a picture larger than the screen also gets its full-size level for panning and zooming, no setting needed. A very large dense photograph can take a few minutes to convert (about 2 minutes for 100 megapixels on an 8-core machine); the converter uses the machine's cores.</p>
+    <p class="note">Zoom comes with the picture: a picture larger than the screen also gets its full-size level for panning and zooming, no setting needed. A very large photograph takes a few seconds (about 1 second for 100 megapixels on an 8-core machine); the converter uses the machine's cores.</p>
     <details class="adv"><summary>Quality ({fitQuality} fit view, {quality} zoom level)</summary>
       <label class="opt"><span>Fit view quality: {fitQuality}<small>The picture as first shown (JPEG-style quality, 1 to 100).</small><input type="range" min="50" max="100" step="1" bind:value={fitQuality} disabled={busy} aria-label="Fit view quality" /></span></label>
       <label class="opt"><span>Zoom level quality: {quality}<small>Only for pictures that are not JPEG (a JPEG's own data is kept as it is, with no loss).</small><input type="range" min="50" max="100" step="1" bind:value={quality} disabled={busy} aria-label="Zoom level quality" /></span></label>
     </details>
     {/if}
-    {#if needsNumpy}<p class="info bad" role="alert">The hardware-decoder format needs numpy. Install it with <b>python3 -m pip install numpy</b>, or choose the plain format.</p>{/if}
     <label class="opt"><input type="checkbox" bind:checked={upscale} disabled={busy} /><span>Enlarge small pictures to fill the screen<small>Off: pictures smaller than the screen show at their own size.</small></span></label>
   </section>
 
@@ -169,9 +163,4 @@
     </section>
   {/if}
 
-  <details open={!py?.ok}>
-    <summary>{py?.ok ? `Python ${py.version} · Pillow ${py.pillow}${py.numpy ? ' · numpy ' + py.numpy : ' · no numpy'}` : 'Python 3 with Pillow is needed'}</summary>
-    {#if py && !py.ok}<p class="info bad">{py.message}</p>{/if}
-    <div class="pick"><input type="text" bind:value={pythonPath} placeholder="Full path of python3 (optional)" aria-label="Python path" /><button type="button" onclick={checkPython}>Check</button></div>
-  </details>
 </main>

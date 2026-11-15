@@ -1,0 +1,55 @@
+# Builds the Tau Gallery Converter app (tools/gallery-converter) for macOS, Windows and Linux and runs its tests on each.
+# NOT run on a runner yet (written 2026-11-15): the Windows executable was cross-built and the converter crate was type-checked for Linux on a Mac,
+# but the Linux app, the Windows installer and the macOS dmg have never been built. Start it by hand from the Actions tab (workflow_dispatch).
+name: converter
+on:
+  workflow_dispatch:
+  push:
+    paths: ["tools/gallery-converter/**", ".github/workflows/converter.yml"]
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest,   name: macos-arm64,  bundles: "app,dmg" }
+          - { os: windows-latest, name: windows-x64,  bundles: "nsis" }
+          - { os: ubuntu-22.04,   name: linux-x64,    bundles: "deb,appimage" }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: tools/gallery-converter
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm, cache-dependency-path: tools/gallery-converter/package-lock.json }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: "tools/gallery-converter/tgy-core\ntools/gallery-converter/src-tauri" }
+      - name: Linux libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - run: npm ci
+      - name: Page check
+        run: npm run check
+      - name: Converter tests (against the Python reference's values)
+        run: cargo test --release --manifest-path tgy-core/Cargo.toml
+      - name: App backend tests
+        run: cargo test --release --manifest-path src-tauri/Cargo.toml
+      - run: cargo install tauri-cli --version "^2.11" --locked
+      - name: Build
+        run: cargo tauri build --bundles ${{ matrix.bundles }}
+        working-directory: tools/gallery-converter/src-tauri
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tau-gallery-converter-${{ matrix.name }}
+          path: |
+            tools/gallery-converter/src-tauri/target/release/bundle/**/*.dmg
+            tools/gallery-converter/src-tauri/target/release/bundle/**/*-setup.exe
+            tools/gallery-converter/src-tauri/target/release/bundle/**/*.deb
+            tools/gallery-converter/src-tauri/target/release/bundle/**/*.AppImage
+            tools/gallery-converter/src-tauri/target/release/bundle/macos/*.app
+          if-no-files-found: error
