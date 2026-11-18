@@ -162,6 +162,10 @@ def run(workdir, setdir):
     return rc, out
 
 def mutants(setdir, tail=None):
+    w0 = Path(tempfile.mkdtemp())                                                                 # a mutant run means something only on a passing unmutated test: with a failing one every mutant would count as killed
+    if not build(w0): print("BASELINE does not build"); return 1
+    rc0, out0 = run(w0, setdir)
+    if rc0 != 0 or "PASSED" not in out0: print("BASELINE FAILS: no mutant result is valid"); print("\n".join(l for l in out0.splitlines() if "FAIL" in l)); return 1
     muts = [("gallery_app.c", "REG_WR(R_LAND_BASE, GAL_PLANE_BASE);", "REG_WR(R_LAND_BASE, GAL_PLANE_BASE + 2u);"),
             ("gallery_app.c", "0x40000000u + c, len,", "0x40000000u, len,"),
             ("gallery_app.c", "t->canvas_off + c, 0x40000000u", "t->canvas_off, 0x40000000u"),

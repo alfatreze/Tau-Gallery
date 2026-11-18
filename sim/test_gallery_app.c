@@ -952,6 +952,7 @@ int main(int argc, char **argv)
         S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 2); S4[k++] = KEY_SELECT | KEY_LEFT; S4[k++] = 0; HOLD(0, 3); S4[k++] = CP(134); S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 700); S4[k++] = KEY_B; S4[k++] = 0; HOLD(0, 5); S4[k++] = CP(135);      /* another picture is opened while the zoom loads: its plane is its own, and the next zoom starts a fresh bar */      /* z06 3,600 x 2,400: windows that the level's edges do not clamp */
         S4[k++] = KEY_B; S4[k++] = 0; S4[k++] = KEY_B; S4[k++] = 0; HOLD(0, 12);
         S4[k++] = KEY_START; S4[k++] = 0; S4[k++] = KEY_DOWN; S4[k++] = 0; S4[k++] = KEY_DOWN; S4[k++] = 0; S4[k++] = KEY_A; S4[k++] = 0; HOLD(0, 3); S4[k++] = CP(128); S4[k++] = END;
+        if (k > (int)(sizeof script / sizeof script[0])) { printf("FAIL the scenario script has %d steps, the script buffer holds %d (raise both arrays)\n", k, (int)(sizeof script / sizeof script[0])); return 2; }
         nscript = k; memcpy(script, S4, (size_t)k * sizeof S4[0]);
         if (!setjmp(done)) gallery_app_main();
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
@@ -1037,6 +1038,7 @@ int main(int argc, char **argv)
         S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); for (int i = 0; i < 5; i++) { S6[k++] = KEY_RIGHT; S6[k++] = 0; } S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(215); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 200); S6[k++] = CP(216); S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3);      /* the rotated picture is v06: it zooms now (its zoom level is written upright); B back to the fit view */
         S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); for (int i = 0; i < 6; i++) { S6[k++] = KEY_LEFT; S6[k++] = 0; } S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(217); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 60); S6[k++] = CP(218); S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(226); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 60); S6[k++] = CP(227); S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(228); S6[k++] = KEY_A; S6[k++] = 0; H6(0, 60); S6[k++] = CP(229); S6[k++] = KEY_B; S6[k++] = 0; H6(0, 3); for (int i = 0; i < 7; i++) { S6[k++] = KEY_RIGHT; S6[k++] = 0; } S6[k++] = KEY_A; S6[k++] = 0; S6[k++] = CP(250);
         S6[k++] = KEY_A; S6[k++] = 0; H6(0, 400); S6[k++] = CP(230); H6(KEY_RIGHT, 120); H6(0, 100); S6[k++] = CP(251); S6[k++] = CP(231); H6(0, 400); S6[k++] = CP(270); H6(KEY_LEFT, 10); S6[k++] = CP(272); H6(KEY_LEFT, 190); S6[k++] = CP(271); S6[k++] = CP(273); H6(0, 10); S6[k++] = CP(274); S6[k++] = CP(225); S6[k++] = END;
+        if (k > (int)(sizeof script / sizeof script[0])) { printf("FAIL the scenario script has %d steps, the script buffer holds %d (raise both arrays)\n", k, (int)(sizeof script / sizeof script[0])); return 2; }
         nscript = k; memcpy(script, S6, (size_t)k * sizeof S6[0]);
         if (!setjmp(done)) gallery_app_main();
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
@@ -1051,6 +1053,7 @@ int main(int argc, char **argv)
         S7[k++] = KEY_B; S7[k++] = 0; S7[k++] = KEY_B; S7[k++] = 0; S7[k++] = KEY_RIGHT; S7[k++] = 0; S7[k++] = KEY_A; S7[k++] = 0; S7[k++] = CP(295);               /* back to the grid, v09, open */
         S7[k++] = KEY_B; S7[k++] = 0; S7[k++] = KEY_RIGHT; S7[k++] = 0; S7[k++] = KEY_A; S7[k++] = 0; S7[k++] = CP(298); S7[k++] = KEY_A; S7[k++] = 0; for (int i = 0; i < 20; i++) S7[k++] = 0; S7[k++] = CP(299);      /* v10: a file with the EXIF tag still in its header */
         S7[k++] = END;
+        if (k > (int)(sizeof script / sizeof script[0])) { printf("FAIL the scenario script has %d steps, the script buffer holds %d (raise both arrays)\n", k, (int)(sizeof script / sizeof script[0])); return 2; }
         nscript = k; memcpy(script, S7, (size_t)k * sizeof S7[0]);
         if (!setjmp(done)) gallery_app_main();
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
@@ -1109,6 +1112,7 @@ int main(int argc, char **argv)
             for (uint32_t p = 0; p < 9u; p++) { S3[k++] = KEY_R1; S3[k++] = 0; }                                          /* 150 -> 294 */
             S3[k++] = KEY_DOWN; S3[k++] = 0; S3[k++] = CP(70); S3[k++] = KEY_DOWN; S3[k++] = 0; S3[k++] = CP(71); S3[k++] = END;      /* a row down, then Down from the last row goes to the last picture */
         }
+        if (k > (int)(sizeof script / sizeof script[0])) { printf("FAIL the scenario script has %d steps, the script buffer holds %d (raise both arrays)\n", k, (int)(sizeof script / sizeof script[0])); return 2; }
         nscript = k; memcpy(script, S3, (size_t)k * sizeof S3[0]);
         if (!setjmp(done)) gallery_app_main();
         if (!strncmp(argv[2], "bigresume", 9)) { const uint32_t idx = setw[6]; chk(66, sel == idx && page == idx / 16u); chk(67, set_writes == 0); }

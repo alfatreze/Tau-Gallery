@@ -90,22 +90,23 @@ def checks(conv):
     return bad
 
 MUT = [("sys.stdout.reconfigure(line_buffering=True)", "pass"),
-       ("if (photos / Path(e[\"path\"]).name).is_file(): old[", "if True: old["),
+       ("if not (photos / Path(e[\"path\"]).name).is_file(): continue", "if False: continue"),
        ("old.pop((stem + \".tgy\").lower(), None)", "pass"),
-       ("key=lambda x: x[0])", "key=lambda x: x[1][\"width\"])"),
+       ("\"name\": lambda it: (it[\"name\"].lower(), it[\"path\"].lower())", "\"name\": lambda it: it[\"width\"]"),
        ("index_dir = a.out / str(Path(card_dir).parent) if a.card_layout else a.out", "index_dir = a.out"),
        ("photos = a.out / card_dir if a.card_layout else a.out", "photos = a.out"),
        ("if a.src.suffix.lower() not in EXT:", "if False:"),
-       ("elif a.src.is_dir(): files", "elif a.src.is_dir() and False: files"),
+       ("elif a.src.is_dir():\n        top", "elif a.src.is_dir() and False:\n        top"),
        ("if a.merge and (index_dir / a.index_name).is_file():", "if (index_dir / a.index_name).is_file():"),
        ("except ValueError as e: print(json.dumps({\"event\": \"warning\"", "except ValueError as e: print(json.dumps({\"event\": \"note\""),
-       ("print(json.dumps({\"event\": \"plan\", \"files\": len(files), \"kept\": len(old)}))", "print(json.dumps({\"event\": \"plan\", \"files\": len(files), \"kept\": 0}))"),
-       ("thumbs = [th for _, _, th in both]", "thumbs = thumbs + [th for _, _, th in both][len(thumbs):]"),
-       ("\"converted\": len(entries) - len(old)", "\"converted\": len(entries)"),
+       ("\"files\": len(jobs), \"kept\": len(old)", "\"files\": len(jobs), \"kept\": 0"),
+       ("[it[\"thumb\"] for it in ordered], folders or None", "[it[\"thumb\"] for it in allitems], folders or None"),
+       ("\"converted\": len(items)", "\"converted\": len(ordered)"),
        ("else: print(json.dumps({\"event\": \"error\", \"error\": \"no such file or folder: \" + str(a.src)})); return 2", "else: files = []")]
 
 def mutants():
     src = (ROOT / "tools/gallery/tgy_convert.py").read_text(); bad = 0
+    if checks(ROOT / "tools/gallery/tgy_convert.py"): print("BASELINE FAILS: no mutant result is valid"); return 1                  # every mutant would count as killed
     for i, (a, b) in enumerate(MUT):
         if a not in src: print("MISSING mutant text", i, a[:60]); bad += 1; continue
         d = Path(tempfile.mkdtemp()); shutil.copy(ROOT / "tools/gallery/tgy.py", d / "tgy.py"); (d / "tgy_convert.py").write_text(src.replace(a, b, 1))
