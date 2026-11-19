@@ -290,12 +290,26 @@ static int hist_screen_ok(uint32_t i)    /* the details page's four histograms a
     for (uint32_t k = 0; k < 4u; k++) {
         uint32_t max = 0u, diff = 0u; for (uint32_t b = 0; b < 32u; b++) { if (cnt[k][b] > max) max = cnt[k][b]; if (cnt[k][b] != det_hist.bin[k][b]) diff++; }
         if (diff > 40u) ok = 0;                                                                                        /* the luma bin may differ by one at a bin edge: a few pixels move to a neighbour, never many */
-        const uint32_t fx0 = (k & 1u) ? DET_HX1 : DET_HX0, fy0 = (k & 2u) ? DET_HY1 : DET_HY0;
+        const uint32_t fx0 = DET_PX, fy0 = DET_PY0 + k * DET_PSTEP;
         for (uint32_t b = 0; b < 32u; b++) {
-            const uint32_t n = det_hist.bin[k][b], h = n ? ((uint32_t)((uint64_t)n * 50u / max) < 1u ? 1u : (uint32_t)((uint64_t)n * 50u / max)) : 0u;
-            const uint32_t px = fx0 + 15u + b * 5u + 1u, bottom = fy0 + DET_HH - 4u;
-            for (uint32_t r = 0; r < 52u; r++) { const uint32_t yy = bottom - 1u - r; const int on = fb[yy * 512u + px] == col[k]; if (on != (r < h)) ok = 0; }
-            if (fb[(bottom - 1u) * 512u + fx0 + 15u + b * 5u + 4u] == col[k]) ok = 0;                                  /* the gap column between bars is clear */
+            const uint32_t n = det_hist.bin[k][b], h = n ? ((uint32_t)((uint64_t)n * 44u / max) < 1u ? 1u : (uint32_t)((uint64_t)n * 44u / max)) : 0u;
+            const uint32_t px = fx0 + 3u + b * 8u + 1u, bottom = fy0 + 68u - 4u;                                       /* a thumbnail's bin is a bar 7 pixels wide in an 8 pixel slot, 44 pixels high at most, 4 above the frame's bottom */
+            for (uint32_t r = 0; r < 45u; r++) { const uint32_t yy = bottom - 1u - r; const int on = fb[yy * 512u + px] == col[k]; if (on != (r < h)) ok = 0; }
+            if (fb[(bottom - 1u) * 512u + fx0 + 3u + b * 8u + 7u] == col[k]) ok = 0;                                  /* the gap column between bars is clear */
+        }
+    }
+    return ok;
+}
+static int hist_fine_screen_ok(void)                                                                                  /* a decoder histogram on the screen: one 1 pixel bar for each of the 256 levels, 3 pixels in from the frame, 44 pixels high at most (the tallest of its colour), 4 above the frame's bottom */
+{
+    const uint16_t col[4] = { 0xFFFFu, 0xF800u, 0x07E0u, 0x001Fu }; int ok = det_hist.is_fine == 1u;
+    for (uint32_t k = 0; k < 4u; k++) {
+        uint32_t max = 0u; for (uint32_t i = 0; i < 256u; i++) if (det_hist.fine[k][i] > max) max = det_hist.fine[k][i];
+        const uint32_t fx0 = DET_PX, fy0 = DET_PY0 + k * DET_PSTEP, bottom = fy0 + 68u - 4u;
+        for (uint32_t i = 0; i < 256u; i++) {
+            const uint32_t n = det_hist.fine[k][i], h = n ? ((uint32_t)((uint64_t)n * 44u / max) < 1u ? 1u : (uint32_t)((uint64_t)n * 44u / max)) : 0u;
+            for (uint32_t r = 0; r < 45u; r++) { const int on = fb[(bottom - 1u - r) * 512u + fx0 + 3u + i] == col[k]; if (on != (r < h)) ok = 0; }
+            if (fb[(bottom - 1u) * 512u + fx0 + 3u + i + 1u] == col[k] && i == 255u) ok = 0;                          /* nothing right of the last level */
         }
     }
     return ok;
@@ -465,6 +479,14 @@ static void clear_texts(void) { memset(texts, 0, sizeof texts); ntext = 0; }
 
 /* ---- the version 1 library scenario (folders, grid sizes, rounded corners, selection ring): the checks use their own copy of the geometry (spec numbers), not the firmware's table ---- */
 static int lib1_on; static uint32_t gsel;                                                                                   /* the grid under test */
+static int preview_ok(const uint8_t *t, uint32_t y0)                                                  /* the details page's small image: the 96 x 96 thumbnail at x 6, every pixel but the rounded corners' 8 x 8 squares */
+{
+    for (uint32_t r = 0; r < 96u; r++) for (uint32_t c = 0; c < 96u; c++) {
+        if ((r < 8u || r >= 88u) && (c < 8u || c >= 88u)) continue;
+        const uint32_t o = (r * 96u + c) * 2u; if (fb[(y0 + r) * 512u + 6u + c] != (uint16_t)(t[o] | t[o + 1] << 8)) return 0;
+    }
+    return 1;
+}
 static const uint8_t *thumb1_of(uint32_t i) { const uint32_t atlas = (uint32_t)idx_data[24] | (uint32_t)idx_data[25] << 8 | (uint32_t)idx_data[26] << 16; return idx_data + atlas + i * 18432u; }
 typedef struct { uint32_t cols, rows, cw, x0, dx, y0, dy, rad, ratio; } lg_t;                                  /* ratio: 0 = 1:1, 1 = 3:4, 2 = 2:3, 3 = 1:2 */
 static const lg_t LG[4] = { { 4, 3, 96, 3, 99, 6, 102, 8, 0 }, { 5, 4, 72, 6, 78, 4, 76, 8, 1 }, { 6, 4, 64, 2, 66, 10, 74, 6, 2 }, { 8, 6, 48, 1, 49, 3, 51, 4, 3 } };
@@ -519,15 +541,16 @@ static int lib1_ring_ok(uint32_t g, uint32_t cells, uint32_t sel_k)
 }
 static int hist_dec_ok(void)                                                                                          /* the details page's histograms against a count of the decoded pixels on the plane (the picture's own rectangle), written here from the definition: luma (77 R + 150 G + 29 B) >> 8, 8 bins of 256 to one of 32, the 16 bit rule of the display */
 {
-    static uint32_t c[4][32]; memset(c, 0, sizeof c); uint32_t n = 0;
+    static uint32_t c[4][256]; memset(c, 0, sizeof c); uint32_t n = 0;
     for (uint32_t y = pic.ry; y < (uint32_t)pic.ry + pic.rh; y++) for (uint32_t x = pic.rx; x < (uint32_t)pic.rx + pic.rw; x++) {
         const uint32_t a = GAL_PLANE_BASE * 2u + y * 2400u + x * 3u, r = mbyte(a), g = mbyte(a + 1u), b = mbyte(a + 2u);
-        c[0][((77u * r + 150u * g + 29u * b) >> 8) / 8u]++; c[1][r / 8u]++; c[2][g / 8u]++; c[3][b / 8u]++; n++;
+        c[0][(77u * r + 150u * g + 29u * b) >> 8]++; c[1][r]++; c[2][g]++; c[3][b]++; n++;
     }
-    uint32_t mx = 0u, s = 0u; for (int k = 0; k < 4; k++) for (int i = 0; i < 32; i++) if (c[k][i] > mx) mx = c[k][i];
+    uint32_t mx = 0u, s = 0u; for (int k = 0; k < 4; k++) for (int i = 0; i < 256; i++) if (c[k][i] > mx) mx = c[k][i];
     while ((mx >> s) > 65535u) s++;
     int ok = det_hist.n == n && n > 0u;
-    for (int k = 0; k < 4; k++) for (int i = 0; i < 32; i++) { uint32_t v = c[k][i] >> s; if (!v && c[k][i]) v = 1u; if (det_hist.bin[k][i] != v) ok = 0; }
+    for (int k = 0; k < 4; k++) for (int i = 0; i < 256; i++) { uint32_t v = c[k][i] >> s; if (!v && c[k][i]) v = 1u; if (det_hist.fine[k][i] != v) ok = 0; }
+    ok = ok && det_hist.is_fine == 1u;
     return ok;
 }
 static void lib1_cp(int n)
@@ -570,9 +593,9 @@ static void lib1_cp(int n)
     case 523: chk(523, pix_ctrl == 5u && pix_stores == 7680u && pix_bad == 0u && pix_tables_are(7u)); break;                                                            /* Left from NORMAL wraps to INVERT */
     case 451: { const uint32_t per = LG[1].cols * LG[1].rows; chk(451, level == 0u && gi == 1u && pp == per && sel == 48u && page == 2u && n_on_page == 20u && lib1_page_ok(1, 40, 20) && lib1_ring_ok(1, 20, 8) && !strcmp(last_text(), "49/60")); break; }   /* the grid size changed in Settings (4 x 3 to 5 x 4): the same picture stays selected, on its page of the new grid */
     case 490: chk(490, level == 0u && sel == 0u && lib1_page_ok(0, 0, 12)); clear_texts(); break;
-    case 491: chk(491, said("DETAILS  INFO") && said("Canon EOS R5") && said("RF24-70mm F2.8") && said("2024-05-17 13:04") && said("JPEG") && said("1/3") && said("Img 00") && fb[9u * 512u + 332u] == th_role[TR_ACCENT] && fb[9u * 512u + 340u] == th_role[TR_TEXT_SECONDARY] && fb[9u * 512u + 348u] == th_role[TR_TEXT_SECONDARY]); clear_texts(); break;      /* Select on a picture with every detail (the three dots: the first, current page, in the accent colour): INFO has FORMAT, CAMERA, LENS, TAKEN; three pages */
+    case 491: chk(491, said("DETAILS  INFO") && said("Canon EOS R5") && said("RF24-70mm F2.8") && said("2024-05-17 13:04") && said("JPEG") && said("1/3") && said("Img 00") && fb[9u * 512u + 332u] == th_role[TR_ACCENT] && fb[9u * 512u + 340u] == th_role[TR_TEXT_SECONDARY] && fb[9u * 512u + 348u] == th_role[TR_TEXT_SECONDARY] && said("IN THE PICTURE") && said("X  NEXT COLOUR FILTER") && said("Y  TURN RIGHT") && said("L1  CROP MASK") && preview_ok(thumb1_of(sel), 168u)); clear_texts(); break;      /* Select on a picture with every detail (the three dots: the first, current page, in the accent colour): INFO has FORMAT, CAMERA, LENS, TAKEN; three pages */
     case 492: chk(492, said("DETAILS  SHOT") && said("1/250 S") && said("F/2.8") && said("400") && said("35 MM") && said("2/3") && !said("Canon")); clear_texts(); break;      /* Right: the SHOT page */
-    case 493: chk(493, said("DETAILS  HISTOGRAMS") && said("3/3") && det_hist.n == 96u * 96u); clear_texts(); break;                                      /* Right: the histograms count every pixel of the square thumbnail */
+    case 493: chk(493, said("DETAILS  HISTOGRAMS") && said("3/3") && det_hist.n == 96u * 96u && det_hist.is_fine == 0u && said("LEVELS") && said("32") && said("PIXELS") && said("9216") && preview_ok(thumb1_of(sel), 26u)); clear_texts(); break;                                      /* Right: the histograms count every pixel of the square thumbnail */
     case 494: chk(494, said("DETAILS  INFO") && said("1/3")); clear_texts(); break;                                                                       /* Right wraps to the first page */
     case 495: chk(495, said("DETAILS  HISTOGRAMS") && said("3/3")); clear_texts(); break;                                                                  /* Left from the first wraps to the last */
     case 496: chk(496, level == 0u && sel == 0u && lib1_page_ok(0, 0, 12) && !said("DETAILS")); clear_texts(); break;                                         /* B: the grid again */
@@ -728,7 +751,7 @@ static void checkpoint(int n)
     case 510: chk(510, mask_i == 1u && mask_p == 0u && plane_mask_ok("v00.rgb", 0u, 40u, 0u, 760u, 720u)); break;                                                         /* Start on the square changes nothing */
     case 511: chk(511, mask_i == 0u && zk >= 0 && rot_o == 0u); break;                                                                 /* A (zoom) with a mask on the upright picture: the mask is dropped and the 1:1 level is shown */
     case 530: chk(530, vbase == GAL_PLANE_BASE && pic.rw > 100u && pic.rw < 800u + 1u && hs_starts >= 1u && !(hs_en & 1u)); clear_texts(); break;                       /* the viewer decoded picture 0 and counted it: the unit's origin was written per tile, counting is off again after the decode */
-    case 531: chk(531, said("DETAILS  HISTOGRAMS") && said("2/2") && said("COUNTED FROM THE DECODED PICTURE") && !said("FROM THE THUMBNAIL") && hist_dec_ok() && det_hist.n == (uint32_t)pic.rw * pic.rh); clear_texts(); break;
+    case 531: chk(531, said("DETAILS  HISTOGRAMS") && said("2/2") && said("COUNTED FROM THE DECODED PICTURE") && !said("FROM THE THUMBNAIL") && hist_dec_ok() && hist_fine_screen_ok() && said("256") && said("LEVELS") && det_hist.n == (uint32_t)pic.rw * pic.rh); clear_texts(); break;
     case 532: chk(532, said("DETAILS  HISTOGRAMS") && said("2/2") && said("FROM THE THUMBNAIL") && !said("COUNTED FROM") && det_hist.n <= 96u * 72u); clear_texts(); break;     /* a picture that was not decoded in the viewer: the thumbnail's count, said so */
     case 533: chk(533, said("DETAILS  HISTOGRAMS") && said("COUNTED FROM THE DECODED PICTURE") && hist_dec_ok() && det_hist.n == (uint32_t)pic.rw * pic.rh && det_hist.n < 800u * 720u); clear_texts(); break;      /* v01 (500 x 300, black bars on the fit canvas): only the picture's rectangle was counted */
     case 534: chk(534, said("DETAILS  HISTOGRAMS") && said("FROM THE THUMBNAIL") && !said("COUNTED FROM") && sel == 1u); clear_texts(); break;      /* v01 was counted, then v11's decode counted 20 tiles and failed: the counters are not v01's any more, so its details fall back to the thumbnail */
@@ -743,6 +766,11 @@ static void checkpoint(int n)
     case 512: chk(512, mask_i == 1u && mask_painted && zk < 0 && zn == 0u); break;                                                                                         /* v01 has no zoom level: A with a mask on changes nothing, the mask stays */
     case 513: chk(513, mask_i == 0u && zk < 0 && rot_o == 0u && !mask_painted && plane_is_rgb("v00.rgb") && vbase == GAL_PLANE_BASE); break;                                /* back from the zoom to fit: the plane is the whole picture again, no black bands */
     case 514: chk(514, rot_o == 0u && zk < 0 && plane_is_rgb("v00.rgb") && vbase == GAL_PLANE_BASE); break;                                                                  /* back from the zoom to fit after a turn: the upright plane */
+    case 560: chk(560, rot_o == 0u && gset.lut == 1u && pix_ctrl == 5u && pix_stores == 768u && pix_bad == 0u && pix_tables_are(1u)); break;                                  /* X: the next colour filter (BRIGHT): the tables are loaded and on, the picture is not turned */
+    case 561: chk(561, rot_o == 1u && gset.lut == 1u && pix_ctrl == 5u && pix_stores == 768u); break;                                                                     /* Start + X mirrors and leaves the filter alone */
+    case 562: chk(562, rot_o == 1u && gset.lut == 7u && pix_ctrl == 5u && pix_bad == 0u && pix_tables_are(7u)); break;                                                    /* six more: INVERT, and the mirror is still there */
+    case 563: chk(563, gset.lut == 0u && pix_ctrl == 1u && pix_bad == 0u && rot_o == 1u); break;                                                                           /* one more wraps to NORMAL: the tables are off */
+    case 564: chk(564, gset.lut == 0u && rot_o == 7u); break;                                                                                                               /* Y turns clockwise (the mirrored picture becomes the anti-transposed one, as case 543) and does not touch the filter */
     case 548: chk(548, rot_o == 0u && zk >= 0); break;                                                                                                                         /* R1 on a mirrored picture zooms too (upright) */
     case 508: chk(508, mask_i == 0u && sel == 0u); break;
     case 481: chk(481, rot_o == 0u && vbase == GAL_PLANE_BASE); break;                                                                 /* a version 0 picture cannot be turned: X and Y do nothing */
@@ -1060,20 +1088,26 @@ int main(int argc, char **argv)
     }
     if (argc > 2 && !strcmp(argv[2], "v1mask")) {                                                           /* the crop masks on the fit view of a version 1 picture */
         const uint32_t SM[] = { KEY_A, 0, CP(200), KEY_L1, 0, CP(500), KEY_START, 0, CP(510), KEY_A, 0, CP(511), KEY_B, 0, CP(513), KEY_L1, 0, KEY_L1, 0, CP(501), KEY_START, 0, CP(502), KEY_L1, 0, KEY_L1, 0, KEY_L1, 0, KEY_L1, 0, KEY_L1, 0, KEY_L1, 0, CP(503),
-                                KEY_Y, 0, KEY_L1, 0, CP(504), KEY_L1, 0, CP(509), KEY_X, 0, KEY_X, 0, KEY_Y, 0, KEY_Y, 0, KEY_Y, 0, CP(505), KEY_X, 0, KEY_L1, 0, KEY_A, 0, CP(507), KEY_B, 0, KEY_RIGHT, 0, CP(506), KEY_L1, 0, KEY_A, 0, CP(512), END };
+                                KEY_Y, 0, KEY_L1, 0, CP(504), KEY_L1, 0, CP(509), KEY_Y, 0, KEY_Y, 0, KEY_Y, 0, KEY_Y, 0, KEY_Y, 0, KEY_Y, 0, KEY_Y, 0, KEY_Y, 0, KEY_Y, 0, CP(505), KEY_Y, 0, KEY_Y, 0, KEY_Y, 0, KEY_L1, 0, KEY_A, 0, CP(507), KEY_B, 0, KEY_RIGHT, 0, CP(506), KEY_L1, 0, KEY_A, 0, CP(512), END };
         nscript = (int)(sizeof SM / sizeof SM[0]); memcpy(script, SM, sizeof SM);
         if (!setjmp(done)) gallery_app_main();
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
     }
     if (argc > 2 && !strcmp(argv[2], "v1mirror")) {                                                       /* the mirror keys (Start held + X or Y) on the fit view of a version 1 picture */
-        const uint32_t SM[] = { KEY_A, 0, CP(200), KEY_START | KEY_X, 0, CP(540), KEY_START | KEY_Y, 0, CP(541), KEY_START | KEY_Y, 0, CP(542), KEY_Y, 0, CP(543), KEY_START, 0, CP(544), KEY_L1, 0, CP(546), KEY_START | KEY_X, 0, CP(547), KEY_X, 0, KEY_X, 0, KEY_X, 0, KEY_X, 0, KEY_START | KEY_Y, 0, CP(545), KEY_R1, 0, CP(548), END };
+        const uint32_t SM[] = { KEY_A, 0, CP(200), KEY_START | KEY_X, 0, CP(540), KEY_START | KEY_Y, 0, CP(541), KEY_START | KEY_Y, 0, CP(542), KEY_Y, 0, CP(543), KEY_START, 0, CP(544), KEY_L1, 0, CP(546), KEY_START | KEY_X, 0, CP(547), KEY_Y, 0, KEY_Y, 0, KEY_Y, 0, KEY_Y, 0, KEY_START | KEY_Y, 0, CP(545), KEY_R1, 0, CP(548), END };
         nscript = (int)(sizeof SM / sizeof SM[0]); memcpy(script, SM, sizeof SM);
         if (!setjmp(done)) gallery_app_main();
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
     }
+    if (argc > 2 && !strcmp(argv[2], "v1filter")) {                                                      /* X cycles the colour filters in the viewer, Start + X still mirrors, Y turns */
+        const uint32_t SF[] = { KEY_A, 0, CP(200), KEY_X, 0, CP(560), KEY_START | KEY_X, 0, CP(561), KEY_X, 0, KEY_X, 0, KEY_X, 0, KEY_X, 0, KEY_X, 0, KEY_X, 0, CP(562), KEY_X, 0, CP(563), KEY_Y, 0, CP(564), END };
+        nscript = (int)(sizeof SF / sizeof SF[0]); memcpy(script, SF, sizeof SF);
+        if (!setjmp(done)) gallery_app_main();
+        printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
+    }
     if (argc > 2 && !strcmp(argv[2], "v1rot")) {                                                           /* the turned view of a version 1 picture (v00: 1000 x 900, its fit canvas fills the screen) */
-        const uint32_t SR[] = { KEY_A, 0, CP(200), KEY_Y, 0, CP(470), KEY_DOWN, 0, CP(471), KEY_DOWN, 0, KEY_DOWN, 0, KEY_DOWN, 0, CP(472), KEY_UP, 0, KEY_UP, 0, KEY_UP, 0, KEY_UP, 0, KEY_UP, 0, KEY_UP, 0, CP(473), KEY_Y, 0, CP(474), KEY_X, 0, CP(475), KEY_X, 0, CP(476),
-                                KEY_X, 0, KEY_SELECT, 0, KEY_B, 0, CP(477), KEY_A, 0, CP(478), KEY_B, 0, CP(514), KEY_RIGHT, 0, CP(479), KEY_Y, 0, KEY_B, 0, KEY_A, 0, CP(480), KEY_RIGHT, 0, KEY_Y, 0, CP(481), END };
+        const uint32_t SR[] = { KEY_A, 0, CP(200), KEY_Y, 0, CP(470), KEY_DOWN, 0, CP(471), KEY_DOWN, 0, KEY_DOWN, 0, KEY_DOWN, 0, CP(472), KEY_UP, 0, KEY_UP, 0, KEY_UP, 0, KEY_UP, 0, KEY_UP, 0, KEY_UP, 0, CP(473), KEY_Y, 0, CP(474), KEY_Y, 0, KEY_Y, 0, KEY_Y, 0, CP(475), KEY_Y, 0, KEY_Y, 0, KEY_Y, 0, CP(476),
+                                KEY_Y, 0, KEY_Y, 0, KEY_Y, 0, KEY_SELECT, 0, KEY_B, 0, CP(477), KEY_A, 0, CP(478), KEY_B, 0, CP(514), KEY_RIGHT, 0, CP(479), KEY_Y, 0, KEY_B, 0, KEY_A, 0, CP(480), KEY_RIGHT, 0, KEY_Y, 0, CP(481), END };
         nscript = (int)(sizeof SR / sizeof SR[0]); memcpy(script, SR, sizeof SR);
         if (!setjmp(done)) gallery_app_main();
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;

@@ -126,15 +126,14 @@ void tgy_hw_hist_begin(uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1)
     REG_WR(R_HIST_CTRL, 1u); g_hist_on = 1u;
 }
 void tgy_hw_hist_end(void) { REG_WR(R_HIST_CTRL, 0u); g_hist_on = 0u; }
-int tgy_hw_hist_fold32(uint32_t out[4][32], uint32_t *n)
+int tgy_hw_hist_read256(uint32_t out[4][256], uint32_t *n)
 {
-    for (uint32_t k = 0; k < 4u; k++) for (uint32_t b = 0; b < 32u; b++) out[k][b] = 0u;
     for (uint32_t k = 0; k < 4u; k++)
         for (uint32_t i = 0; i < 256u; i++) {
             REG_WR(R_HIST_IDX, (k << 8) | i); uint32_t v = REG_RD(R_HIST_DATA), t = 0;
             while ((v >> 31) && t++ < 100000u) v = REG_RD(R_HIST_DATA);
             if (v >> 31) return 1;                                                   /* never answered */
-            out[k][i >> 3] += v & 0xFFFFFFu;
+            out[k][i] = v & 0xFFFFFFu;
         }
     *n = REG_RD(R_HIST_N) & 0xFFFFFFu;
     return 0;

@@ -60,7 +60,8 @@ static const gc_row_t gc_rows[] = {
     { "A",              "ZOOM IN (IF IT CAN)" },
     { "B",              "BACK TO THE GRID"    },
     { "SELECT",         "PICTURE DETAILS"     },
-    { "X / Y",          "TURN LEFT / RIGHT"   },
+    { "X",              "NEXT COLOUR FILTER"  },
+    { "Y",              "TURN RIGHT"          },
     { "START + X / Y",  "MIRROR SIDE / TOP"   },
     { "L1 / START",     "CROP MASK / TURN IT" },
     { "ZOOMED IN",      ""                    },
@@ -294,6 +295,9 @@ static inline int gi_input(uint32_t edge) { return (edge & (GP_KEY_LEFT | GP_KEY
 #define GD_HIST_NOTE "NOT COMPUTED YET"                                            /* a frame without a thumbnail to count (its read failed) */
 #define GD_HIST_SRC "FROM THE THUMBNAIL"
 #define GD_HIST_SRC_DEC "COUNTED FROM THE DECODED PICTURE"
+/* What the viewer's keys do, shown under the preview on the INFO and SHOT pages (Select opens them from the grid or the picture), 8 pixels a character from x 112. */
+#define GD_KEYS_N 6u
+static const char *const gd_keys[GD_KEYS_N] = { "IN THE PICTURE", "X  NEXT COLOUR FILTER", "Y  TURN RIGHT", "START + X / Y  MIRROR", "L1  CROP MASK", "A  ZOOM   B  BACK" };
 static const char *const gd_hist_labels[GD_HIST_N] = { "LUMA", "RED", "GREEN", "BLUE" };
 typedef struct { const char *name; uint32_t index, count, size, width, height; } gd_t;          /* index is 0-based; size is the file's bytes; width and height 0 when the index does not say */
 typedef struct { const char *label; char value[28]; } gd_row_t;
@@ -408,21 +412,23 @@ static inline char *gdp_indicator(char *q, const gdp_t *p) { q = gi_u(q, (uint32
 /* The histograms: 32 bins each of luma, red, green and blue, counted from the 96 x 72 thumbnail in RGB565 (the CPU does not read the picture plane). Red and blue use their 5 bits as they are, green its top 5 of 6, luma
  * (77 R + 150 G + 29 B) / 256 on the 8-bit expanded channels, then / 8. A bar is as tall as its count is to the tallest bin of the same histogram (at least 1 pixel for a bin that has any). */
 #define HS_BINS 32u
-typedef struct { uint16_t bin[GD_HIST_N][HS_BINS]; uint32_t n; } hs_t;
-/* The counts of the decoder (32 bins from the 256, up to 24 bits each) into the 16 bit bins of an hs_t: every bin is shifted right by the least s that brings the largest under 65,536, and a bin that had any pixels keeps at least 1 (the bars only compare bins of one histogram). n is the real count. */
-static inline void hs_from_counts(hs_t *h, const uint32_t c[GD_HIST_N][HS_BINS], uint32_t n)
+#define HS_FINE 256u                                                                              /* the decoder's own resolution: one bin for each of the 256 levels */
+/* bin: 32 levels counted from the thumbnail (RGB565 has no more steps than that to tell apart); fine: all 256 levels counted by the decoder's histogram unit, is_fine says which of the two the page draws. */
+typedef struct { uint16_t bin[GD_HIST_N][HS_BINS]; uint16_t fine[GD_HIST_N][HS_FINE]; uint32_t n; uint8_t is_fine; } hs_t;
+/* The counts of the decoder (all 256 levels of each histogram, up to 24 bits each) into the 16 bit fine bins of an hs_t: every bin is shifted right by the least s that brings the largest under 65,536, and a bin that had any pixels keeps at least 1 (the bars only compare bins of one histogram). n is the real count. */
+static inline void hs_from_counts(hs_t *h, const uint32_t c[GD_HIST_N][HS_FINE], uint32_t n)
 {
     uint32_t mx = 0u, s = 0u;
-    for (uint32_t k = 0; k < GD_HIST_N; k++) for (uint32_t i = 0; i < HS_BINS; i++) if (c[k][i] > mx) mx = c[k][i];
+    for (uint32_t k = 0; k < GD_HIST_N; k++) for (uint32_t i = 0; i < HS_FINE; i++) if (c[k][i] > mx) mx = c[k][i];
 #if BUG == 21
     (void)mx;                                                                                        /* no scaling: a count above 65,535 wraps */
 #else
     while ((mx >> s) > 65535u) s++;
 #endif
-    for (uint32_t k = 0; k < GD_HIST_N; k++) for (uint32_t i = 0; i < HS_BINS; i++) { const uint32_t v = c[k][i] >> s; h->bin[k][i] = (uint16_t)((v == 0u && c[k][i] != 0u) ? 1u : v); }
-    h->n = n;
+    for (uint32_t k = 0; k < GD_HIST_N; k++) for (uint32_t i = 0; i < HS_FINE; i++) { const uint32_t v = c[k][i] >> s; h->fine[k][i] = (uint16_t)((v == 0u && c[k][i] != 0u) ? 1u : v); }
+    h->n = n; h->is_fine = 1u;
 }
-static inline void hs_clear(hs_t *h) { for (uint32_t k = 0; k < GD_HIST_N; k++) for (uint32_t i = 0; i < HS_BINS; i++) h->bin[k][i] = 0u; h->n = 0u; }
+static inline void hs_clear(hs_t *h) { for (uint32_t k = 0; k < GD_HIST_N; k++) { for (uint32_t i = 0; i < HS_BINS; i++) h->bin[k][i] = 0u; for (uint32_t i = 0; i < HS_FINE; i++) h->fine[k][i] = 0u; } h->n = 0u; h->is_fine = 0u; }
 static inline void hs_add(hs_t *h, uint16_t px)
 {
     const uint32_t r5 = (px >> 11) & 31u, g6 = (px >> 5) & 63u, b5 = px & 31u;
@@ -475,6 +481,10 @@ static inline hs_rect_t hs_rect(uint32_t w, uint32_t h)
 }
 static inline int hs_inside(const hs_rect_t *r, uint32_t row, uint32_t col) { return row >= r->y0 && row < r->y1 && col >= r->x0 && col < r->x1; }
 static inline uint32_t hs_max(const hs_t *h, uint32_t k) { uint32_t m = 0u; for (uint32_t i = 0; i < HS_BINS; i++) if (h->bin[k][i] > m) m = h->bin[k][i]; return m; }
+static inline uint32_t hs_fmax(const hs_t *h, uint32_t k) { uint32_t m = 0u; for (uint32_t i = 0; i < HS_FINE; i++) if (h->fine[k][i] > m) m = h->fine[k][i]; return m; }
+/* The bar of level i of histogram k as the page draws it: its count, and in how many pixels' width (a fine histogram is 1 pixel a level; a thumbnail's 32 bins are 8 pixels each, so both fill the 256 pixel plot). */
+static inline uint32_t hs_bar(const hs_t *h, uint32_t k, uint32_t i) { return h->is_fine ? h->fine[k][i & 255u] : h->bin[k][(i & 255u) >> 3]; }
+static inline uint32_t hs_plot_max(const hs_t *h, uint32_t k) { return h->is_fine ? hs_fmax(h, k) : hs_max(h, k); }
 /* Height in pixels of a bar of `count` when the tallest bin is `max` and the plot is `hmax` pixels high. */
 static inline uint32_t hs_height(uint32_t count, uint32_t max, uint32_t hmax)
 {

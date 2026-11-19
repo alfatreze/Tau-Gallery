@@ -197,6 +197,11 @@ int main(void)
         chk("details: A, Up, Down, Left, Right and Start do not close", gd_input(GP_KEY_A) == 0 && gd_input(GP_KEY_UP) == 0 && gd_input(GP_KEY_DOWN) == 0 && gd_input(GP_KEY_LEFT) == 0 && gd_input(1u << 3) == 0 && gd_input(GP_KEY_START) == 0);
         chk("details: four histogram frames, in the order luma, red, green, blue", GD_HIST_N == 4u && !strcmp(gd_hist_labels[0], "LUMA") && !strcmp(gd_hist_labels[1], "RED") && !strcmp(gd_hist_labels[2], "GREEN") && !strcmp(gd_hist_labels[3], "BLUE"));
         chk("details: the histogram note fits a frame (16 characters)", strlen(GD_HIST_NOTE) <= 16u);
+        { int okk = GD_KEYS_N == 6u; for (uint32_t i = 0; i < GD_KEYS_N; i++) if (strlen(gd_keys[i]) > 35u) okk = 0;                 /* 8 pixels a character from x 112 on a 400 pixel screen, 6 pixels margin */
+          chk("details: the key reminder lines fit the screen beside the preview", okk);
+          int fx = 0, ty = 0, kx = 0, ky = 0; for (uint32_t i = 0; i < GD_KEYS_N; i++) { if (!strncmp(gd_keys[i], "X ", 2) && strstr(gd_keys[i], "FILTER")) kx = 1; if (!strncmp(gd_keys[i], "Y ", 2) && strstr(gd_keys[i], "TURN")) ky = 1; }
+          for (uint32_t i = 0; i < GC_N; i++) { if (!strcmp(gc_rows[i].key, "X") && strstr(gc_rows[i].what, "FILTER")) fx = 1; if (!strcmp(gc_rows[i].key, "Y") && strstr(gc_rows[i].what, "TURN")) ty = 1; }
+          chk("details and Controls: X is the colour filter and Y the turn, in the reminder and in the Controls list", fx && ty && kx && ky); }
         { /* histograms: every RGB565 value against a separate, floating-point statement of the rule */
             int okb = 1; hs_t h;
             for (uint32_t px = 0; px < 65536u; px++) {
@@ -212,14 +217,21 @@ int main(void)
             chk("histogram: each of the 65,536 pixel values lands in one bin per histogram (red and blue their 5 bits, green its top 5, luma within a bin of the weighted sum)", okb);
             hs_clear(&h); hs_add(&h, 0xFFFFu); hs_add(&h, 0x0000u); hs_add(&h, 0xF800u); hs_add(&h, 0x07E0u); hs_add(&h, 0x001Fu);
             chk("histogram: white is the last luma bin and black the first; pure red counts in the last red bin and none in green or blue", h.bin[0][31] >= 1u && h.bin[0][0] >= 1u && h.bin[1][31] == 2u && h.bin[1][0] == 3u && h.bin[2][31] == 2u && h.bin[3][31] == 2u && h.n == 5u);
-            { static uint32_t c[4][32]; memset(c, 0, sizeof c);
-              c[0][3] = 70000u; c[1][5] = 1u; c[2][7] = 140000u; c[3][9] = 3u; c[3][10] = 65535u; hs_from_counts(&h, c, 213539u);
-              chk("histogram: decoder counts above 65,535 are shifted together (the largest, in green, is 140,000: 70,000 is still too big, so shift 2), so luma 17,500, green 35,000, and the pixel count is kept", h.bin[0][3] == 17500u && h.bin[2][7] == 35000u && h.n == 213539u);
-              chk("histogram: a bin that has pixels keeps at least 1 after the shift (red 1 and blue 3 become 1), 65,535 becomes 16,383", h.bin[1][5] == 1u && h.bin[3][9] == 1u && h.bin[3][10] == 16383u && h.bin[0][4] == 0u);
-              memset(c, 0, sizeof c); c[0][0] = 65535u; c[3][31] = 7u; hs_from_counts(&h, c, 65542u);
-              chk("histogram: counts that fit in 16 bits are not changed (no shift at 65,535)", h.bin[0][0] == 65535u && h.bin[3][31] == 7u && h.n == 65542u);
+            { static uint32_t c[4][256]; memset(c, 0, sizeof c);
+              c[0][3] = 70000u; c[1][5] = 1u; c[2][200] = 140000u; c[3][9] = 3u; c[3][10] = 65535u; hs_from_counts(&h, c, 213539u);
+              chk("histogram: decoder counts above 65,535 are shifted together (the largest, in green, is 140,000: 70,000 is still too big, so shift 2), so luma 17,500, green 35,000, and the pixel count is kept", h.fine[0][3] == 17500u && h.fine[2][200] == 35000u && h.n == 213539u && h.is_fine == 1u);
+              chk("histogram: a bin that has pixels keeps at least 1 after the shift (red 1 and blue 3 become 1), 65,535 becomes 16,383", h.fine[1][5] == 1u && h.fine[3][9] == 1u && h.fine[3][10] == 16383u && h.fine[0][4] == 0u);
+              memset(c, 0, sizeof c); c[0][0] = 65535u; c[3][255] = 7u; hs_from_counts(&h, c, 65542u);
+              chk("histogram: counts that fit in 16 bits are not changed (no shift at 65,535)", h.fine[0][0] == 65535u && h.fine[3][255] == 7u && h.n == 65542u);
               memset(c, 0, sizeof c); c[0][1] = 65536u; hs_from_counts(&h, c, 65536u);
-              chk("histogram: 65,536 in the luma histogram alone already shifts (the largest of ALL four histograms counts)", h.bin[0][1] == 32768u); }
+              chk("histogram: 65,536 in the luma histogram alone already shifts (the largest of ALL four histograms counts)", h.fine[0][1] == 32768u);
+              /* what the page draws: a fine histogram is one bar a level, a thumbnail's is 32 bins of 8 levels; hs_clear drops the fine flag */
+              memset(c, 0, sizeof c); c[1][255] = 9u; c[1][0] = 4u; c[2][77] = 11u; hs_from_counts(&h, c, 24u);
+              chk("histogram page: a fine histogram gives each of the 256 levels its own bar, the tallest of the colour is the plot's maximum", h.is_fine == 1u && hs_bar(&h, 1u, 255u) == 9u && hs_bar(&h, 1u, 254u) == 0u && hs_bar(&h, 1u, 0u) == 4u && hs_plot_max(&h, 1u) == 9u && hs_plot_max(&h, 2u) == 11u && hs_plot_max(&h, 0u) == 0u);
+              hs_clear(&h); hs_add(&h, 0xFFFFu); hs_add(&h, 0xF800u);
+              chk("histogram page: a thumbnail's histogram is not fine, its bin i covers levels 8 i to 8 i + 7 (white: level 255 is bin 31), and the fine bars are empty after hs_clear", h.is_fine == 0u && hs_bar(&h, 1u, 255u) == 2u && hs_bar(&h, 1u, 248u) == 2u && hs_bar(&h, 1u, 247u) == 0u && hs_bar(&h, 0u, 0u) == 0u && hs_plot_max(&h, 1u) == 2u && h.fine[1][255] == 0u);
+              hs_from_counts(&h, c, 24u); hs_clear(&h);
+              chk("histogram page: hs_clear empties the fine bins and the flag", h.is_fine == 0u && h.fine[1][255] == 0u && h.fine[2][77] == 0u); }
             hs_clear(&h); hs_add(&h, 0xF800u); chk("histogram: pure red is bright in red only: red bin 31, green bin 0, blue bin 0, a luma bin between 8 and 10 (0.30 of 255)", h.bin[1][31] == 1u && h.bin[2][0] == 1u && h.bin[3][0] == 1u && (h.bin[0][9] == 1u || h.bin[0][8] == 1u));
             hs_clear(&h); hs_add(&h, 0x07E0u); chk("histogram: pure green has the largest luma weight: luma bin 18 or 19 (0.59 of 255)", h.bin[0][18] == 1u || h.bin[0][19] == 1u);
             hs_clear(&h); hs_add(&h, 0x001Fu); chk("histogram: pure blue has the smallest luma weight: luma bin 3 or 4 (0.11 of 255)", h.bin[0][3] == 1u || h.bin[0][4] == 1u);

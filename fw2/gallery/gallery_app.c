@@ -82,10 +82,9 @@ static void frame(uint32_t k, uint16_t c)
 
 /* One thumbnail: its bytes (13,824 for 96 x 72, 18,432 for 96 x 96) are read in 4 KB pieces and written into the framebuffer two pixels at a time (the mailbox), 96 pixels = 192 bytes a row. A grid with a down-scale ratio
  * writes it to the stash instead and has the draw engine scale it into the cell; the corners are rounded last (the engine runs the commands in order). */
-static int draw_thumb(uint32_t x, uint32_t y, uint32_t off)
+static int thumb_blit(uint32_t bx, uint32_t by, uint32_t off)                                           /* the thumbnail's bytes as they are, top left corner at (bx, by) */
 {
-    const uint32_t tb = head.thumb_bytes, ds = GR.ratio != 0xFFu, bx = ds ? STASH_X : x, by = ds ? STASH_Y : y;
-    if (ds) gfx_fence();                                                                              /* the previous thumbnail's scaling has read the stash */
+    const uint32_t tb = head.thumb_bytes;
     for (uint32_t pos = off & ~4095u; pos < off + tb; pos += 4096u) {
         if (!slot_read_blocking(SLOT_IDX, pos, (uint32_t)(uintptr_t)_tag_start, 4096u, CLK_HZ)) return 0;
         const volatile uint32_t *w = GAL_TAGWIN;
@@ -96,6 +95,13 @@ static int draw_thumb(uint32_t x, uint32_t y, uint32_t off)
             gfx_mb_write_buf((by + row) * GFX_STRIDE + bx + col, w[i]);
         }
     }
+    return 1;
+}
+static int draw_thumb(uint32_t x, uint32_t y, uint32_t off)
+{
+    const uint32_t ds = GR.ratio != 0xFFu;
+    if (ds) gfx_fence();                                                                              /* the previous thumbnail's scaling has read the stash */
+    if (!thumb_blit(ds ? STASH_X : x, ds ? STASH_Y : y, off)) return 0;
     if (ds) gfx_dsblit(STASH_X, STASH_Y, x, y, 96u, 96u, GR.ratio, GR.ratio);
     if (GR.rad && level == 0u) gfx_corners(x, y, GR.cw, GR.ch, GR.rad, BG);
     return 1;
@@ -820,9 +826,13 @@ static void viewer(void)
             if (!gal_view_on()) { loaded_page = 0xFFFFFFFFu; draw_page(); say("VIEWER DID NOT START", BAD); return; }
             rot_view(); prev = REG_RD(R_INPUT) & 0xFFFFu; held = 0u; next_tick = cycles(); continue;
         }
-        if (edge & (KEY_X | KEY_Y)) {                                                                                                 /* X: turn the picture counter-clockwise, Y: clockwise; with Start held: X mirrors left-right, Y top-bottom (version 1 pictures: the hardware decoder draws it so) */
+        if ((edge & KEY_X) && !(keys & KEY_START)) {                                                                                  /* X: the next colour filter (the Settings page's COLOUR list, applied at once to every picture; it is remembered like the setting) */
+            gset.lut = (gset.lut + 1u) % GL_PRESETS; fx_apply(); last_act = cycles();
+            continue;
+        }
+        if (edge & (KEY_X | KEY_Y)) {                                                                                                 /* Y: turn the picture clockwise; with Start held: X mirrors left-right, Y top-bottom (version 1 pictures: the hardware decoder draws it so) */
             if (!v1_on) continue;
-            rot_o = (keys & KEY_START) ? ((edge & KEY_Y) ? gr_flip(rot_o) : gr_mirror(rot_o)) : gr_turn(rot_o, (edge & KEY_Y) != 0u); mask_i = 0u;
+            rot_o = (keys & KEY_START) ? ((edge & KEY_Y) ? gr_flip(rot_o) : gr_mirror(rot_o)) : gr_turn(rot_o, 1); mask_i = 0u;
             const int r = view_reopen();
             if (r) { rot_o = 0u; gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); say(open_msg[r], BAD); return; }
             continue;
@@ -952,12 +962,15 @@ static void frame_box(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t c
     gfx_rect(x, y, w, 1, col); gfx_rect(x, y + h - 1u, w, 1, col); gfx_rect(x, y, 1, h, col); gfx_rect(x + w - 1u, y, 1, h, col);
 }
 #define DET_LINE 16u
-#define DET_HX0 6u
-#define DET_HX1 204u
-#define DET_HY0 164u
-#define DET_HY1 246u
-#define DET_HW 190u
-#define DET_HH 76u
+#define DET_VX 6u                                        /* the preview of the picture (its 96 x 96 or 96 x 72 thumbnail) and, under it or beside it, what the page says about the picture */
+#define DET_VY_HIST 26u                                  /* on the histogram page: top left, the four histograms to its right */
+#define DET_VY_INFO 168u                                 /* on the INFO and SHOT pages: under the rows, the viewer's keys to its right */
+#define DET_KX 112u
+#define DET_PX 124u                                      /* the four histogram plots: 262 x 68 frames from x 124, 76 pixels apart from y 26; the plot is 256 pixels wide (one level a pixel), 3 in from the frame */
+#define DET_PY0 26u
+#define DET_PW 262u
+#define DET_PH 68u
+#define DET_PSTEP 76u
 /* The histograms are counted from the picture's thumbnail in the index (the CPU does not read the viewer plane): the same 4 KB reads as draw_thumb, two pixels a word. Returns 0 when a read failed. */
 static hs_t det_hist;
 static int thumb_hist(uint32_t off, hs_t *h, uint32_t pw, uint32_t ph)       /* pw, ph: the picture's size from the index; only the picture's rectangle of the thumbnail is counted, not its black bars */
@@ -976,9 +989,8 @@ static int thumb_hist(uint32_t off, hs_t *h, uint32_t pw, uint32_t ph)       /* 
     }
     return 1;
 }
-#define DET_BX 15u                                       /* the bars: 32 bins of 5 pixels, 15 pixels in from the frame, 50 pixels high, 4 above its bottom edge */
-#define DET_BW 5u
-#define DET_BH 50u
+#define DET_BX 3u
+#define DET_BH 44u                                       /* the tallest bar, 4 pixels above the frame's bottom edge (the label has the top 20) */
 #define DET_BB 4u
 /* The picture details page (gallery_pages.h gd_*): the index's facts, placeholders for what is not read yet, and four histograms of the thumbnail. */
 /* The details pages (gallery_pages.h gdp_*): INFO (the index's facts and the EXIF items the picture has), SHOT (shutter, aperture, ISO, focal length: only when it has one of them) and HISTOGRAMS (counted from the thumbnail). The
@@ -991,23 +1003,36 @@ static void draw_indicator(const gdp_t *p)
     gfx_text(x, 2, b, DIM, BG);
     for (uint32_t i = 0; i < p->n; i++) gfx_rect(x - 6u - (uint32_t)(p->n - i) * 8u, 7, 5, 5, i == p->cur ? ACC : DIM);
 }
-static void draw_dpage(const gdp_t *p, const gd_t *d, const gd_meta_t *m, const hs_t *hist, int from_dec)
+static void draw_preview(uint32_t x, uint32_t y, uint32_t off)                                         /* the picture's thumbnail as a small image; a version 1 one is square, its corners rounded like the grid's */
+{
+    if (!thumb_blit(x, y, off)) { gfx_text(x, y, "NO PREVIEW", DIM, BG); return; }
+    if (head.version == 1u) gfx_corners(x, y, 96u, 96u, 8u, BG);
+}
+static void draw_dpage(const gdp_t *p, const gd_t *d, const gd_meta_t *m, const hs_t *hist, int from_dec, uint32_t thumb_off)
 {
     const uint32_t id = p->id[p->cur];
     page_clear(gdp_titles[id]);
     if (id != GDP_HIST) {
         gd_row_t r[GD_ROWS]; const uint32_t n = id == GDP_INFO ? gdi_rows(d, m, r) : gds_rows(m, r);
         for (uint32_t i = 0; i < n; i++) { const uint32_t y = PAGE_Y0 + i * DET_LINE; gfx_text(6, y, r[i].label, DIM, BG); gfx_text(110, y, r[i].value, FG, BG); }
+        draw_preview(DET_VX, DET_VY_INFO, thumb_off);
+        for (uint32_t i = 0; i < GD_KEYS_N; i++) gfx_text(DET_KX, DET_VY_INFO + i * DET_LINE, gd_keys[i], i == 0u ? ACC : DIM, BG);
     } else {
         static const uint16_t bar_col[GD_HIST_N] = { 0xFFFFu, 0xF800u, 0x07E0u, 0x001Fu };
+        draw_preview(DET_VX, DET_VY_HIST, thumb_off);
+        if (hist) {
+            char b[16]; *put_u(b, hist->is_fine ? HS_FINE : HS_BINS) = 0;
+            gfx_text(DET_VX, DET_VY_HIST + 104u, "LEVELS", DIM, BG); gfx_text(DET_VX, DET_VY_HIST + 120u, b, FG, BG);
+            gfx_text(DET_VX, DET_VY_HIST + 144u, "PIXELS", DIM, BG); *put_u(b, hist->n) = 0; gfx_text(DET_VX, DET_VY_HIST + 160u, b, FG, BG);
+        }
         for (uint32_t h = 0; h < GD_HIST_N; h++) {
-            const uint32_t x = (h & 1u) ? DET_HX1 : DET_HX0, y = (h & 2u) ? DET_HY1 : DET_HY0;
-            frame_box(x, y, DET_HW, DET_HH, DIM); gfx_text(x + 6u, y + 6u, gd_hist_labels[h], ACC, BG);
+            const uint32_t x = DET_PX, y = DET_PY0 + h * DET_PSTEP;
+            frame_box(x, y, DET_PW, DET_PH, DIM); gfx_text(x + 6u, y + 4u, gd_hist_labels[h], ACC, BG);
             if (!hist) { gfx_text(x + 6u, y + 34u, GD_HIST_NOTE, DIM, BG); continue; }
-            const uint32_t mx = hs_max(hist, h);
-            for (uint32_t i = 0; i < HS_BINS; i++) {
-                const uint32_t bh = hs_height(hist->bin[h][i], mx, DET_BH);
-                if (bh) gfx_rect(x + DET_BX + i * DET_BW, y + DET_HH - DET_BB - bh, DET_BW - 1u, bh, bar_col[h]);
+            const uint32_t mx = hs_plot_max(hist, h), step = hist->is_fine ? 1u : 8u;
+            for (uint32_t i = 0; i < HS_FINE; i += step) {
+                const uint32_t bh = hs_height(hs_bar(hist, h, i), mx, DET_BH);
+                if (bh) gfx_rect(x + DET_BX + i, y + DET_PH - DET_BB - bh, step == 1u ? 1u : step - 1u, bh, bar_col[h]);
             }
         }
         gfx_text(6, 324, hist ? (from_dec ? GD_HIST_SRC_DEC : GD_HIST_SRC) : GD_HIST_NOTE, DIM, BG);
@@ -1031,11 +1056,11 @@ static void run_details(void)
     uint32_t prev = REG_RD(R_INPUT) & 0xFFFFu; int hist_ok = -1, from_dec = 0;
     for (;;) {
         if (pg.id[pg.cur] == GDP_HIST && hist_ok < 0) {
-            uint32_t c[GD_HIST_N][HS_BINS], n = 0u;
-            if (hist_for == sel && !tgy_hw_hist_fold32(c, &n) && n != 0u) { hs_from_counts(&det_hist, c, n); hist_ok = 1; from_dec = 1; }      /* the viewer decoded this picture's fit level and the unit counted it */
+            static uint32_t c[GD_HIST_N][HS_FINE]; uint32_t n = 0u;
+            if (hist_for == sel && !tgy_hw_hist_read256(c, &n) && n != 0u) { hs_from_counts(&det_hist, c, n); hist_ok = 1; from_dec = 1; }      /* the viewer decoded this picture's fit level and the unit counted it */
             else hist_ok = thumb_hist(gx_thumb_off(&head, e->thumb), &det_hist, e->width, e->height);
         }
-        draw_dpage(&pg, &d, &m, hist_ok > 0 ? &det_hist : 0, from_dec);
+        draw_dpage(&pg, &d, &m, hist_ok > 0 ? &det_hist : 0, from_dec, gx_thumb_off(&head, e->thumb));
         if (gdp_input(&pg, next_edge(&prev))) break;
     }
 }

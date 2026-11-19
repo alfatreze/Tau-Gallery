@@ -47,10 +47,10 @@ int tgy_hw_show(const tgy_file_t *f, const tgy_level_t *l, uint32_t plane, int (
 void tgy_hw_scatter(int on, int32_t stx, int32_t sty);
 int tgy_hw_level_rot(const tgy_file_t *f, const tgy_level_t *l, uint32_t dst0, uint32_t pitch, uint32_t o, int (*tick)(void *ctx, uint32_t tx, uint32_t ty), void *ctx);
 /* K4 (core rev 30): histograms of the pixels the decoder writes. tgy_hw_hist_begin clears the counters and sets the window [x0, x1) x [y0, y1) in the level's own coordinates (tile (tx, ty) starts at 128 * tx, 128 * ty; at most 1023);
- * the next decoded tiles are counted until tgy_hw_hist_end. tgy_hw_hist_fold32 reads the four 256-bin histograms (luma, red, green, blue) as 32 bins each (8 neighbouring bins summed) and the pixel count; 0 when it read all of them. */
+ * the next decoded tiles are counted until tgy_hw_hist_end. tgy_hw_hist_read256 reads the four 256-bin histograms (luma, red, green, blue), one bin a level, and the pixel count; 0 when it read all of them. */
 void tgy_hw_hist_begin(uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1);
 void tgy_hw_hist_end(void);
-int tgy_hw_hist_fold32(uint32_t out[4][32], uint32_t *n);
+int tgy_hw_hist_read256(uint32_t out[4][256], uint32_t *n);
 uint32_t tgy_hw_status(void);                                                /* STATUS as of the last tile */
 void tgy_hw_forget(void);                                                    /* drop the tables cache (after a reset of the decoder) */
 #endif

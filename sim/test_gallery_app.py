@@ -137,7 +137,7 @@ def run(workdir, setdir):
     if r.returncode: rc = 1; out += "\nFAIL scenario zoom\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
     global V1SET
     if V1SET is None: V1SET = Path(tempfile.mkdtemp()); make_v1_set(V1SET)
-    for sc in ("v1", "v1nohw", "v1zoom", "v1map", "v1rot", "v1mask", "v1hist", "v1mirror"):
+    for sc in ("v1", "v1nohw", "v1zoom", "v1map", "v1rot", "v1mask", "v1hist", "v1mirror", "v1filter"):
         r = subprocess.run([str(workdir / "t"), str(V1SET), sc], capture_output=True, text=True, timeout=900)
         if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
         else: out += "\n" + r.stdout
@@ -377,11 +377,11 @@ def mutants(setdir, tail=None):
         ("gallery_app.c", "const uint32_t end = v1z.idx_off + v1z.idx_len, len = end - pos < v1c_bs ? end - pos : v1c_bs;", "const uint32_t end = v1z.idx_off + v1z.idx_len, len = v1c_bs;"),
     ]
     muts += [                                                                                                      # the details page's histograms
-        ("gallery_app.c", "gfx_rect(x + DET_BX + i * DET_BW, y + DET_HH - DET_BB - bh, DET_BW - 1u, bh, bar_col[h]);", "gfx_rect(x + DET_BX + i * DET_BW + 1u, y + DET_HH - DET_BB - bh, DET_BW - 1u, bh, bar_col[h]);"),
-        ("gallery_app.c", "gfx_rect(x + DET_BX + i * DET_BW, y + DET_HH - DET_BB - bh, DET_BW - 1u, bh, bar_col[h]);", "gfx_rect(x + DET_BX + i * DET_BW, y + DET_HH - DET_BB - bh + 1u, DET_BW - 1u, bh, bar_col[h]);"),
-        ("gallery_app.c", "gfx_rect(x + DET_BX + i * DET_BW, y + DET_HH - DET_BB - bh, DET_BW - 1u, bh, bar_col[h]);", "gfx_rect(x + DET_BX + i * DET_BW, y + DET_HH - DET_BB - bh, DET_BW, bh, bar_col[h]);"),
+        ("gallery_app.c", "gfx_rect(x + DET_BX + i, y + DET_PH - DET_BB - bh, step == 1u ? 1u : step - 1u, bh, bar_col[h]);", "gfx_rect(x + DET_BX + i + 1u, y + DET_PH - DET_BB - bh, step == 1u ? 1u : step - 1u, bh, bar_col[h]);"),
+        ("gallery_app.c", "gfx_rect(x + DET_BX + i, y + DET_PH - DET_BB - bh, step == 1u ? 1u : step - 1u, bh, bar_col[h]);", "gfx_rect(x + DET_BX + i, y + DET_PH - DET_BB - bh + 1u, step == 1u ? 1u : step - 1u, bh, bar_col[h]);"),
+        ("gallery_app.c", "gfx_rect(x + DET_BX + i, y + DET_PH - DET_BB - bh, step == 1u ? 1u : step - 1u, bh, bar_col[h]);", "gfx_rect(x + DET_BX + i, y + DET_PH - DET_BB - bh, step == 1u ? 2u : step, bh, bar_col[h]);"),
         ("gallery_app.c", "{ 0xFFFFu, 0xF800u, 0x07E0u, 0x001Fu }", "{ 0xFFFFu, 0x07E0u, 0xF800u, 0x001Fu }"),
-        ("gallery_app.c", "const uint32_t mx = hs_max(hist, h);", "const uint32_t mx = hs_max(hist, 0u);"),
+        ("gallery_app.c", "const uint32_t mx = hs_plot_max(hist, h), step = hist->is_fine ? 1u : 8u;", "const uint32_t mx = hs_plot_max(hist, 0u), step = hist->is_fine ? 1u : 8u;"),
         ("gallery_app.c", "gh_clear(h);" if False else "    hs_clear(h); const hs_rect_t rc = head.version == 1u ? (hs_rect_t){ 0u, 0u, HS_TW, 96u } : hs_rect(pw, ph);", "    const hs_rect_t rc = head.version == 1u ? (hs_rect_t){ 0u, 0u, HS_TW, 96u } : hs_rect(pw, ph);"),
         ("gallery_app.c", "if (!hist) { gfx_text(x + 6u, y + 34u, GD_HIST_NOTE, DIM, BG); continue; }", ""),
         ("gallery_app.c", "if (hs_inside(&rc, row, col)) hs_add(h, (uint16_t)(v & 0xFFFFu));", "hs_add(h, (uint16_t)(v & 0xFFFFu));"),
@@ -425,7 +425,7 @@ def mutants(setdir, tail=None):
         ("gallery_app.c", "if (gx_parse_entry_h(&head, buf + k * head.entry_bytes, head.entry_bytes, &ent[k])) return 0;", "if (gx_parse_entry_h(&head, buf + k * 160u, head.entry_bytes, &ent[k])) return 0;"),
     ]
     muts += [                                                                                                      # the turned view (K7)
-        ("gallery_app.c", ": gr_turn(rot_o, (edge & KEY_Y) != 0u); mask_i = 0u;", ": gr_turn(rot_o, (edge & KEY_X) != 0u); mask_i = 0u;"),
+        ("gallery_app.c", ": gr_turn(rot_o, 1); mask_i = 0u;", ": gr_turn(rot_o, 0); mask_i = 0u;"),
         ("gallery_app.c", "(rot_pan + ROT_STEP > rot_pan_max ? rot_pan_max : rot_pan + ROT_STEP)", "(rot_pan + ROT_STEP)"),
         ("gallery_app.c", "(rot_pan > ROT_STEP ? rot_pan - ROT_STEP : 0u)", "(rot_pan - ROT_STEP)"),
         ("gallery_app.c", "rot_view(); prev = REG_RD(R_INPUT) & 0xFFFFu; held = 0u; next_tick = cycles(); continue;", "prev = REG_RD(R_INPUT) & 0xFFFFu; held = 0u; next_tick = cycles(); continue;"),
@@ -459,7 +459,7 @@ def mutants(setdir, tail=None):
         ("gallery_app.c", "mask_black(base, 0u, x0, y0, y1); mask_black(base, x1, GT_CANVAS_W, y0, y1);\n", "mask_black(base, 0u, x0, y0, y1);\n"),
         ("gallery_app.c", "    mask_painted = 0u;\n    if (rot_o == 0u) { REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16);", "    if (rot_o == 0u) { REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16);"),
         ("gallery_app.c", "sel = n; rot_o = 0u; mask_i = 0u; mask_painted = 0u;", "sel = n; rot_o = 0u; mask_painted = 0u;"),
-        ("gallery_app.c", ": gr_turn(rot_o, (edge & KEY_Y) != 0u); mask_i = 0u;", ": gr_turn(rot_o, (edge & KEY_Y) != 0u);"),
+        ("gallery_app.c", ": gr_turn(rot_o, 1); mask_i = 0u;", ": gr_turn(rot_o, 1);"),
         ("gallery_app.c", "*x = rot_px + (xa < xb ? xa : xb);", "*x = (xa < xb ? xa : xb);"),
         ("gallery_app.c", "const uint32_t base = rot_o ? GAL_ROT_BASE : GAL_PLANE_BASE, rows = rot_o ? rot_rows : GT_CANVAS_H;", "const uint32_t base = GAL_PLANE_BASE, rows = rot_o ? rot_rows : GT_CANVAS_H;"),
         ("gallery_app.c", "gm_crop(mask_i, mask_p, rx, ry, rw, rh, &x0, &y0, &x1, &y1);", "gm_crop(mask_i, 0u, rx, ry, rw, rh, &x0, &y0, &x1, &y1);"),
@@ -482,7 +482,7 @@ def mutants(setdir, tail=None):
         ("gallery_app.c", "tgy_hw_hist_begin((uint32_t)fx, (uint32_t)fy,", "tgy_hw_hist_begin((uint32_t)fx, 0u,"),
         ("gallery_app.c", "if (hist_hw) { tgy_hw_hist_end(); hist_counted = (r == TH_OK); }", "if (hist_hw) { hist_counted = (r == TH_OK); }"),
         ("gallery_app.c", "if (rv == 0 && hist_counted) hist_for = i;", ""),
-        ("gallery_app.c", "if (hist_for == sel && !tgy_hw_hist_fold32(c, &n) && n != 0u)", "if (!tgy_hw_hist_fold32(c, &n) && n != 0u)"),
+        ("gallery_app.c", "if (hist_for == sel && !tgy_hw_hist_read256(c, &n) && n != 0u)", "if (!tgy_hw_hist_read256(c, &n) && n != 0u)"),
         ("gallery_app.c", "(REG_RD(R_VIEW_CAPS) & 4u) != 0u;", "(REG_RD(R_VIEW_CAPS) & 2u) != 0u;"),
         ("gallery_app.c", "hist_ok = 1; from_dec = 1; }", "hist_ok = 1; from_dec = 0; }"),
         ("gallery_app.c", "hist_for = 0xFFFFFFFFu; hist_counted = 0u;", "hist_counted = 0u;"),
@@ -497,11 +497,11 @@ def mutants(setdir, tail=None):
         ("tgy_hw.c", "REG_WR(R_HIST_CTRL, 1u); g_hist_on = 1u;", "REG_WR(R_HIST_CTRL, 1u); g_hist_on = 0u;"),
     ]
     muts += [                                                                                                      # the mirror keys and the Controls rows
-        ("gallery_app.c", "rot_o = (keys & KEY_START) ? ((edge & KEY_Y) ? gr_flip(rot_o) : gr_mirror(rot_o)) : gr_turn(rot_o, (edge & KEY_Y) != 0u);", "rot_o = gr_turn(rot_o, (edge & KEY_Y) != 0u);"),
+        ("gallery_app.c", "rot_o = (keys & KEY_START) ? ((edge & KEY_Y) ? gr_flip(rot_o) : gr_mirror(rot_o)) : gr_turn(rot_o, 1);", "rot_o = gr_turn(rot_o, 1);"),
         ("gallery_app.c", "rot_o = (keys & KEY_START) ? ((edge & KEY_Y) ? gr_flip(rot_o) : gr_mirror(rot_o)) :", "rot_o = (keys & KEY_START) ? ((edge & KEY_Y) ? gr_mirror(rot_o) : gr_mirror(rot_o)) :"),
         ("gallery_app.c", "rot_o = (keys & KEY_START) ? ((edge & KEY_Y) ? gr_flip(rot_o) : gr_mirror(rot_o)) :", "rot_o = (keys & KEY_START) ? ((edge & KEY_Y) ? gr_flip(rot_o) : gr_flip(rot_o)) :"),
         ("gallery_app.c", "rot_o = (keys & KEY_START) ? ((edge & KEY_Y) ? gr_flip(rot_o) : gr_mirror(rot_o)) :", "rot_o = (keys & KEY_L1) ? ((edge & KEY_Y) ? gr_flip(rot_o) : gr_mirror(rot_o)) :"),
-        ("gallery_app.c", "rot_o = (keys & KEY_START) ? ((edge & KEY_Y) ? gr_flip(rot_o) : gr_mirror(rot_o)) : gr_turn(rot_o, (edge & KEY_Y) != 0u); mask_i = 0u;", "rot_o = (keys & KEY_START) ? ((edge & KEY_Y) ? gr_flip(rot_o) : gr_mirror(rot_o)) : gr_turn(rot_o, (edge & KEY_Y) != 0u);"),
+        ("gallery_app.c", "rot_o = (keys & KEY_START) ? ((edge & KEY_Y) ? gr_flip(rot_o) : gr_mirror(rot_o)) : gr_turn(rot_o, 1); mask_i = 0u;", "rot_o = (keys & KEY_START) ? ((edge & KEY_Y) ? gr_flip(rot_o) : gr_mirror(rot_o)) : gr_turn(rot_o, 1);"),
     ]
     muts += [                                                                                                      # zoom from a turned or masked view goes upright (owner decision B)
         ("gallery_app.c", "            if (zn == 0u) continue;                                                                                                   /* no zoom level", "            if (0) continue;                                                                                                   /* no zoom level"),
@@ -514,6 +514,19 @@ def mutants(setdir, tail=None):
     ]
     muts += [                                                                                                      # the Settings page layout
         ("gallery_app.c", "gfx_text(6, PAGE_Y0 + 2u * GSP_ROWS * LINE_H + 4u, sp->row == GSP_RESUME", "gfx_text(6, PAGE_Y0 + 6u * LINE_H + 4u, sp->row == GSP_RESUME"),      # the old position: over the fourth row
+    ]
+    muts += [                                                                                                      # X: the colour filter in the viewer; the preview and the key reminder on the details pages; the 256 level histograms
+        ("gallery_app.c", "gset.lut = (gset.lut + 1u) % GL_PRESETS; fx_apply(); last_act = cycles();", "gset.lut = (gset.lut + 1u); fx_apply(); last_act = cycles();"),
+        ("gallery_app.c", "gset.lut = (gset.lut + 1u) % GL_PRESETS; fx_apply(); last_act = cycles();", "gset.lut = (gset.lut + 2u) % GL_PRESETS; fx_apply(); last_act = cycles();"),
+        ("gallery_app.c", "gset.lut = (gset.lut + 1u) % GL_PRESETS; fx_apply(); last_act = cycles();", "gset.lut = (gset.lut + 1u) % GL_PRESETS; last_act = cycles();"),
+        ("gallery_app.c", "if ((edge & KEY_X) && !(keys & KEY_START)) {", "if (edge & KEY_X) {"),
+        ("gallery_app.c", "if ((edge & KEY_X) && !(keys & KEY_START)) {", "if ((edge & KEY_X) && (keys & KEY_START)) {"),
+        ("gallery_app.c", "draw_preview(DET_VX, DET_VY_INFO, thumb_off);", "draw_preview(DET_VX, DET_VY_INFO + 1u, thumb_off);"),
+        ("gallery_app.c", "draw_preview(DET_VX, DET_VY_HIST, thumb_off);", "draw_preview(DET_VX, DET_VY_HIST + 1u, thumb_off);"),
+        ("gallery_app.c", "for (uint32_t i = 0; i < GD_KEYS_N; i++) gfx_text(DET_KX,", "for (uint32_t i = 0; i < GD_KEYS_N - 2u; i++) gfx_text(DET_KX,"),
+        ("gallery_app.c", "*put_u(b, hist->n) = 0;", "*put_u(b, hist->n + 1u) = 0;"),
+        ("gallery_app.c", "hist->is_fine ? HS_FINE : HS_BINS", "hist->is_fine ? HS_BINS : HS_FINE"),
+        ("gallery_app.c", "const uint32_t mx = hs_plot_max(hist, h), step = hist->is_fine ? 1u : 8u;", "const uint32_t mx = hs_plot_max(hist, h), step = 1u;"),
     ]
     only = sys.argv[sys.argv.index("--only") + 1] if "--only" in sys.argv else None                                   # --only TEXT: just the mutants whose original code contains TEXT (Tier B of CLAUDE.md section 4: the mutants of the code you changed)
     if only: muts = [m for m in muts if only in m[1]]; assert muts, "no mutant matches --only"
