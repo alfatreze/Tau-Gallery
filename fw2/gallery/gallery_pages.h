@@ -68,6 +68,8 @@ static const gc_row_t gc_rows[] = {
     { "D-PAD",          "PAN"                 },
     { "START",          "MAP: JUMP TO A SPOT" },
     { "L1 / R1",        "ZOOM OUT / IN"       },
+    { "R1 AT 1:1",      "2X: EVERY PIXEL DOUBLED" },
+    { "L1 / B AT 2X",   "BACK TO 1:1"         },
     { "A",              "BACK TO FIT"         },
     { "B",              "BACK TO FIT"         },
     { "SELECT + L / R", "PREVIOUS / NEXT"     },
