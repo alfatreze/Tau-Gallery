@@ -82,7 +82,9 @@ def main():
     im = I.new("RGB", (8, 8)); ex = im.getexif(); ex[271] = "Canon"; ex[272] = "Canon EOS R5"; ifd = ex.get_ifd(0x8769)
     ifd[0x9003] = "2024:05:17 13:04:59"; ifd[0x829A] = 0.004; ifd[0x829D] = 2.8; ifd[0x8827] = 400; ifd[0x920A] = 35.0; ifd[0xA434] = "RF24-70mm F2.8"
     ex[0x8769] = ifd                                                                                  # Pillow 10.2 hands out a fresh dict for an absent Exif IFD: put it back
+    import io as _io; _b = _io.BytesIO(); im.save(_b, "JPEG", exif=ex); _b.seek(0); im = I.open(_b)                  # through Pillow's own writer and reader: how a real file arrives (building the IFD in memory differs between Pillow versions)
     d = tgy.exif_details(im, "JPEG")
+    if d.get("lens") is None: print("  EXIF details read:", d)
     check("EXIF details: camera (make not repeated), lens, taken, shutter 1/250, f/2.8, ISO 400, 35 mm", d == dict(format="JPEG", camera="Canon EOS R5", lens="RF24-70mm F2.8", taken=(2024, 5, 17, 13, 4, 59), shutter=(1, 250), aperture=28, iso=400, focal=350))
     check("a picture with no EXIF has only its format", tgy.exif_details(I.new("RGB", (4, 4)), "PNG") == {"format": "PNG"})
     print("tgix-v1: %d failure(s)" % fails); return 1 if fails else 0
