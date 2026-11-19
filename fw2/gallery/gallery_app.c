@@ -14,6 +14,7 @@
 #include "gallery_view.h"
 #include "gallery_rot.h"
 #include "gallery_mask.h"
+#include "gallery_label.h"
 #include "gallery_lut.h"
 
 #define BG   th_role[TR_BG_BOTTOM]                /* the colours are the theme's roles (ui/theme.c, docs/THEME_SPEC.md) */
@@ -290,6 +291,37 @@ static void show_view(void)                                                     
     view_hidden = 0u;
     if (rot_o == 0u) { REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16); REG_WR(R_VIEW_BASE, GAL_PLANE_BASE); } else rot_view();
 }
+/* ---- the label: the name of what a key changed, a black bar with white text over the last 32 rows of the picture on the screen (gallery_label.h). The rows under it are copied to a save area first (between the black plane and the
+ * landing window) and back when the bar goes: at the next key press or after two seconds. ---- */
+#define GAL_LABSAVE 0x3D3000u                    /* halfword address of the 32 saved rows (38,400 halfwords): after the black plane (which ends at 0x3D2F00), before the landing window at 0x400000 */
+static uint32_t lab_on, lab_t0, lab_base;       /* 1 while the bar is on the plane; when it went up; the plane address of its first row */
+static uint8_t lab_rb[GLB_PX * 3u];
+static void lab_copy(int back)
+{
+    const uint32_t total = GLB_H * GAL_LINE_WORDS16;
+    for (uint32_t off = 0; off < total; off += 127u) { const uint32_t n = total - off < 127u ? total - off : 127u; if (back) gfx_blit_raw(GAL_LABSAVE, lab_base, off, off, n); else gfx_blit_raw(lab_base, GAL_LABSAVE, off, off, n); }
+    gfx_fence();
+}
+static void lab_clear(void) { if (!lab_on) return; lab_copy(1); lab_on = 0u; }
+static void lab_show(const char *text)
+{
+    lab_clear();
+    const uint32_t view = rot_o ? GAL_ROT_BASE + rot_pan * GAL_LINE_WORDS16 : GAL_PLANE_BASE;           /* the plane address of the first row on the screen */
+    lab_base = view + GLB_Y0 * GAL_LINE_WORDS16;
+    lab_copy(0);
+    for (uint32_t i = 0; i < 64u; i++) gfx_mb_write(GAL_ROTZERO + 2u * i, 0u);
+    mask_black(view, 0u, GT_CANVAS_W, GLB_Y0, GLB_Y0 + GLB_H); gfx_fence();                              /* the whole bar black */
+    for (uint32_t sr = 0; sr < 7u; sr++) {                                                               /* each row of the font is three rows of the plane */
+        glb_row(text, sr * GLB_SCALE, lab_rb);
+        for (uint32_t k = 0; k < GLB_SCALE; k++) {
+            const uint32_t row = lab_base + (GLB_TY + sr * GLB_SCALE + k) * GAL_LINE_WORDS16;
+            for (uint32_t w = 0; w < GLB_PX * 3u / 4u; w++) gfx_mb_write(row + 2u * w, (uint32_t)lab_rb[4u * w] | (uint32_t)lab_rb[4u * w + 1u] << 8 | (uint32_t)lab_rb[4u * w + 2u] << 16 | (uint32_t)lab_rb[4u * w + 3u] << 24);
+        }
+    }
+    gfx_fence(); lab_on = 1u; lab_t0 = cycles();
+}
+static void lab_mask(void) { char b[48]; char *q = glb_cat(glb_cat(b, "MASK "), gm_ratio[mask_i % GM_N].name); if (mask_i && mask_p && gm_can_turn(mask_i)) glb_cat(q, " TALL"); lab_show(b); }
+static void lab_turn(void) { char b[48]; glb_cat(b, glb_orient[rot_o & 7u]); lab_show(b); }
 static int open_v1(int show_progress)
 {
     v1_on = 0u;
@@ -354,6 +386,7 @@ static const char *const open_msg[] = { "", "OPEN FAILED", "HEADER READ FAILED",
 static void zoom_list(void);
 static gi_t info = { 0u, 0u, 0u, GI_NONE, 0u, 0u, 0, 0u, 0u, 0u, GI_NONE, GI_NONE, GI_NONE, GI_NONE, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u };
 static gs_vals_t gset; static uint32_t last_act;                                              /* the persisted settings; the clock of the last key or card read (a save waits for a quiet second after it) */
+static void lab_filter(void) { char b[48]; glb_cat(glb_cat(b, "FILTER "), gl_names[gset.lut % GL_PRESETS]); lab_show(b); }
 static uint32_t lut_loaded;                                                                              /* the preset the scan-out tables hold (0 = none loaded; the tables are identity at power-up) */
 static void lut_wait(void) { while (REG_RD(R_PIX_CTRL) & 0x100u) { } }                                    /* one store at a time */
 static void fx_apply(void)                                                                               /* dither and colour preset of the scan-out */
@@ -821,6 +854,7 @@ static void viewer(void)
     for (;;) {
         const uint32_t keys = REG_RD(R_INPUT) & 0xFFFFu, edge = keys & ~prev; prev = keys;
         if (edge) last_act = cycles();
+        if (lab_on && (edge || (uint32_t)(cycles() - lab_t0) > 2u * CLK_HZ)) lab_clear();                                           /* the name goes at the next key press or after two seconds, before anything draws on the plane */
         settings_tick();
         if (zk >= 0) {
             if ((edge & KEY_START) && z_shown) { map_mode(); held = 0u; next_tick = cycles(); prev = REG_RD(R_INPUT) & 0xFFFFu; continue; }                   /* START: the map */
@@ -849,6 +883,7 @@ static void viewer(void)
         }
         if ((edge & KEY_X) && !(keys & KEY_START)) {                                                                                  /* X: the next colour filter (the Settings page's COLOUR list, applied at once to every picture; it is remembered like the setting) */
             gset.lut = (gset.lut + 1u) % GL_PRESETS; fx_apply(); last_act = cycles();
+            lab_filter();
             continue;
         }
         if (edge & (KEY_X | KEY_Y)) {                                                                                                 /* Y: turn the picture clockwise; with Start held: X mirrors left-right, Y top-bottom (version 1 pictures: the hardware decoder draws it so) */
@@ -857,7 +892,7 @@ static void viewer(void)
             hide_view();
             const int r = view_reopen();
             if (r) { rot_o = 0u; view_hidden = 0u; gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); say(open_msg[r], BAD); return; }
-            show_view();
+            show_view(); lab_turn();
             continue;
         }
         if (rot_o != 0u && (edge & (KEY_UP | KEY_DOWN))) {                                                                            /* a turned picture taller than the screen: Up and Down pan it */
@@ -877,7 +912,7 @@ static void viewer(void)
                 { const int r = view_reopen(); if (r) { rot_o = 0u; mask_i = 0u; view_hidden = 0u; gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); say(open_msg[r], BAD); return; } }
             }
             if (mask_i) mask_apply();
-            show_view();
+            show_view(); lab_mask();
             continue;
         }
         if ((rot_o != 0u || mask_i != 0u) && (edge & (KEY_A | KEY_R1))) {                                                             /* zoom from a turned, mirrored or masked view: the zoom views are upright, so the picture goes upright first (owner decision B, 2026-11-13) */

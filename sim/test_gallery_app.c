@@ -336,6 +336,17 @@ static void ref_turn(uint32_t o, uint32_t iw, uint32_t ih, uint32_t x, uint32_t 
     case 6: *X = ih - 1u - y; *Y = x; break;     default: *X = ih - 1u - y; *Y = iw - 1u - x; break;
     }
 }
+static int lab_skip(uint32_t hw) { return lab_on && hw >= lab_base && hw < lab_base + GLB_H * GAL_LINE_WORDS16; }        /* the halfword is under the label's bar: the plane there is the label's, not the picture's (the bar's own pixels are checked on their own) */
+static int label_ok(const char *text)                                                                               /* the label's bar on the plane, pixel for pixel: 32 rows, black, the text in white 16 pixels in and 5 rows down, and the rows above it are not touched (the picture checks skip only the bar) */
+{
+    if (!lab_on || lab_base != (rot_o ? GAL_ROT_BASE + rot_pan * GAL_LINE_WORDS16 : GAL_PLANE_BASE) + GLB_Y0 * GAL_LINE_WORDS16) return 0;      /* on the last 32 rows of what the screen shows (a turned picture's plane is panned) */
+    for (uint32_t y = 0; y < GLB_H; y++) for (uint32_t x = 0; x < 800u; x++) for (uint32_t k = 0; k < 3u; k++) {
+        const uint32_t b = 3u * x + k, got = (mem[lab_base + y * GAL_LINE_WORDS16 + b / 2u] >> (8u * (b & 1u))) & 255u;
+        const int on = y >= GLB_TY && y < GLB_TY + 21u && x >= GLB_TX && x < GLB_PX && glb_on(text, x - GLB_TX, y - GLB_TY);
+        if (got != (on ? 255u : 0u)) return 0;
+    }
+    return 1;
+}
 static int rot_plane_ok(const char *ref, uint32_t o, uint32_t iw, uint32_t ih)
 {
     char f[600]; snprintf(f, sizeof f, "%s/%s", dir, ref); uint32_t n; uint8_t *d = slurp(f, &n); if (!d || n != iw * ih * 3u) return 0;
@@ -343,7 +354,7 @@ static int rot_plane_ok(const char *ref, uint32_t o, uint32_t iw, uint32_t ih)
     uint8_t *want = calloc((size_t)rows * 2400u, 1);
     for (uint32_t y = 0; y < ih; y++) for (uint32_t x = 0; x < iw; x++) { uint32_t X, Y; ref_turn(o, iw, ih, x, y, &X, &Y); for (uint32_t k = 0; k < 3u; k++) want[(py + Y) * 2400u + (px + X) * 3u + k] = d[(y * iw + x) * 3u + k]; }
     uint32_t bad = 0;
-    for (uint32_t b = 0; b < rows * 2400u; b++) { const uint8_t got = (uint8_t)(mem[GAL_ROT_BASE + b / 2u] >> (8u * (b & 1u))); if (got != want[b]) bad++; }
+    for (uint32_t b = 0; b < rows * 2400u; b++) { if (lab_skip(GAL_ROT_BASE + b / 2u)) continue; const uint8_t got = (uint8_t)(mem[GAL_ROT_BASE + b / 2u] >> (8u * (b & 1u))); if (got != want[b]) bad++; }
     free(want); free(d); return bad == 0u;
 }
 
@@ -356,28 +367,28 @@ static int plane_mask_ok(const char *ref, uint32_t o, uint32_t x0, uint32_t y0, 
     for (uint32_t y = 0; y < ih; y++) for (uint32_t x = 0; x < iw; x++) { uint32_t X, Y; ref_turn(o, iw, ih, x, y, &X, &Y); for (uint32_t k = 0; k < 3u; k++) want[(py + Y) * 2400u + (px + X) * 3u + k] = d[(y * iw + x) * 3u + k]; }
     for (uint32_t y = 0; y < rows; y++) for (uint32_t x = 0; x < 800u; x++) if (x < x0 || x >= x1 || y < y0 || y >= y1) for (uint32_t k = 0; k < 3u; k++) want[y * 2400u + x * 3u + k] = 0;
     uint32_t bad = 0;
-    for (uint32_t b = 0; b < rows * 2400u; b++) { const uint8_t got = (uint8_t)(mem[base + b / 2u] >> (8u * (b & 1u))); if (got != want[b]) bad++; }
+    for (uint32_t b = 0; b < rows * 2400u; b++) { if (lab_skip(base + b / 2u)) continue; const uint8_t got = (uint8_t)(mem[base + b / 2u] >> (8u * (b & 1u))); if (got != want[b]) bad++; }
     free(want); free(d); return bad == 0u;
 }
 static int plane_is(uint32_t pic)                                                                 /* the plane equals the canvas of picture `pic` byte for byte */
 {
     char f[600]; snprintf(f, sizeof f, "%s/p%02u.tgy", dir, pic); uint32_t n; uint8_t *d = slurp(f, &n); if (!d) return 0;
     uint32_t bad = 0;
-    for (uint32_t b = 0; b < 1728000u; b++) { const uint8_t got = (uint8_t)(mem[0x200000u + b / 2u] >> (8u * (b & 1u))); if (got != d[20480u + b]) bad++; }
+    for (uint32_t b = 0; b < 1728000u; b++) { if (lab_skip(0x200000u + b / 2u)) continue; const uint8_t got = (uint8_t)(mem[0x200000u + b / 2u] >> (8u * (b & 1u))); if (got != d[20480u + b]) bad++; }
     free(d); return bad == 0u;
 }
 static int plane_is_rgb(const char *fname)                                                       /* the plane equals the 800 x 720 RGB888 file `fname` (the reference decode of a version 1 picture) */
 {
     char f[600]; snprintf(f, sizeof f, "%s/%s", dir, fname); uint32_t n; uint8_t *d = slurp(f, &n); if (!d || n != 1728000u) return 0;
     uint32_t bad = 0;
-    for (uint32_t b = 0; b < 1728000u; b++) if ((uint8_t)(mem[0x200000u + b / 2u] >> (8u * (b & 1u))) != d[b]) bad++;
+    for (uint32_t b = 0; b < 1728000u; b++) if (!lab_skip(0x200000u + b / 2u) && (uint8_t)(mem[0x200000u + b / 2u] >> (8u * (b & 1u))) != d[b]) bad++;
     free(d); return bad == 0u;
 }
 static int plane_is_f(const char *fname)                                                         /* the plane equals the canvas of the file `fname` of the set directory */
 {
     char f[600]; snprintf(f, sizeof f, "%s/%s", dir, fname); uint32_t n; uint8_t *d = slurp(f, &n); if (!d) return 0;
     uint32_t bad = 0;
-    for (uint32_t b = 0; b < 1728000u; b++) { const uint8_t got = (uint8_t)(mem[0x200000u + b / 2u] >> (8u * (b & 1u))); if (got != d[20480u + b]) bad++; }
+    for (uint32_t b = 0; b < 1728000u; b++) { if (lab_skip(0x200000u + b / 2u)) continue; const uint8_t got = (uint8_t)(mem[0x200000u + b / 2u] >> (8u * (b & 1u))); if (got != d[20480u + b]) bad++; }
     free(d); return bad == 0u;
 }
 static int plane_outline_is(const char *fname, int32_t rx, int32_t ry, int32_t rw, int32_t rh)      /* the plane is the canvas of `fname` with a 2-pixel ACC frame on the rectangle and nothing else changed */
@@ -757,16 +768,16 @@ static void checkpoint(int n)
     case 478: chk(478, zk >= 0 && rot_o == 0u && mask_i == 0u); break;                               /* A (zoom) on a turned picture: it goes upright and the 1:1 level is shown (the zoom views are upright) */
     case 479: chk(479, rot_o == 0u && vbase == GAL_PLANE_BASE); break;                                                                 /* the next picture is upright */
     case 480: chk(480, rot_o == 0u && vbase == GAL_PLANE_BASE && sel == 1u); break;                                                    /* a turned picture left with B and opened again from the grid is upright */
-    case 500: chk(500, hid_pairs() && mask_i == 1u && mask_painted && plane_mask_ok("v00.rgb", 0u, 40u, 0u, 760u, 720u) && vbase == GAL_PLANE_BASE); break;                         /* L1: the square mask: the plane is the picture with everything outside the centred 720 x 720 black */
-    case 501: chk(501, hid_pairs() && mask_i == 2u && mask_p == 0u && plane_mask_ok("v00.rgb", 0u, 0u, 40u, 800u, 680u)); break;                                                          /* L1: 4:5 in the picture's own (landscape) orientation is 5:4: 800 x 640; the picture shows again where the square mask had hidden it */
-    case 502: chk(502, hid_pairs() && mask_i == 2u && mask_p == 1u && plane_mask_ok("v00.rgb", 0u, 112u, 0u, 688u, 720u)); break;                                                         /* Start: the mask turned: 4:5 portrait is 576 x 720 */
+    case 500: chk(500, label_ok("MASK 1:1") && hid_pairs() && mask_i == 1u && mask_painted && plane_mask_ok("v00.rgb", 0u, 40u, 0u, 760u, 720u) && vbase == GAL_PLANE_BASE); break;                         /* L1: the square mask: the plane is the picture with everything outside the centred 720 x 720 black */
+    case 501: chk(501, label_ok("MASK 4:5") && hid_pairs() && mask_i == 2u && mask_p == 0u && plane_mask_ok("v00.rgb", 0u, 0u, 40u, 800u, 680u)); break;                                                          /* L1: 4:5 in the picture's own (landscape) orientation is 5:4: 800 x 640; the picture shows again where the square mask had hidden it */
+    case 502: chk(502, label_ok("MASK 4:5 TALL") && hid_pairs() && mask_i == 2u && mask_p == 1u && plane_mask_ok("v00.rgb", 0u, 112u, 0u, 688u, 720u)); break;                                                         /* Start: the mask turned: 4:5 portrait is 576 x 720 */
     case 503: chk(503, hid_pairs() && mask_i == 0u && !mask_painted && plane_is_rgb("v00.rgb") && vbase == GAL_PLANE_BASE); break;                                                        /* L1 until off: the whole picture again */
     case 504: chk(504, rot_o == 6u && mask_i == 1u && plane_mask_ok("v00.rgb", 6u, 40u, 40u, 760u, 760u)); break;                                                           /* a picture turned 90 degrees: the square mask is on the turned plane (720 wide, 800 tall: 40 rows black above and below) */
     case 505: chk(505, rot_o == 3u && mask_i == 0u && !mask_painted && plane_mask_ok("v00.rgb", 3u, 0u, 0u, 800u, 720u)); break;                                              /* turning the picture drops the mask */
     case 506: chk(506, rot_o == 0u && mask_i == 0u && vbase == GAL_PLANE_BASE); break;                                                                                      /* the next picture has no mask */
     case 507: chk(507, mask_i == 0u && zk >= 0 && rot_o == 0u); break;                                                                  /* A (zoom) with a mask on a turned picture: both are dropped, the upright 1:1 level is shown */
-    case 509: chk(509, rot_o == 6u && mask_i == 2u && mask_p == 1u && plane_mask_ok("v00.rgb", 6u, 80u, 0u, 720u, 800u)); break;                                  /* L1 on the turned picture: 4:5 in the turned picture's own portrait orientation: 640 x 800 */
-    case 510: chk(510, mask_i == 1u && mask_p == 0u && plane_mask_ok("v00.rgb", 0u, 40u, 0u, 760u, 720u)); break;                                                         /* Start on the square changes nothing */
+    case 509: chk(509, label_ok("MASK 4:5 TALL") && rot_o == 6u && mask_i == 2u && mask_p == 1u && plane_mask_ok("v00.rgb", 6u, 80u, 0u, 720u, 800u)); break;                                  /* L1 on the turned picture: 4:5 in the turned picture's own portrait orientation: 640 x 800 */
+    case 510: chk(510, !lab_on && mask_i == 1u && mask_p == 0u && plane_mask_ok("v00.rgb", 0u, 40u, 0u, 760u, 720u)); break;                                                         /* Start on the square changes nothing */
     case 511: chk(511, mask_i == 0u && zk >= 0 && rot_o == 0u); break;                                                                 /* A (zoom) with a mask on the upright picture: the mask is dropped and the 1:1 level is shown */
     case 530: chk(530, vbase == GAL_PLANE_BASE && pic.rw > 100u && pic.rw < 800u + 1u && hs_starts >= 1u && !(hs_en & 1u)); clear_texts(); break;                       /* the viewer decoded picture 0 and counted it: the unit's origin was written per tile, counting is off again after the decode */
     case 531: dump_fb("hist_decoder"); chk(531, said("DETAILS  HISTOGRAMS") && said("2/2") && said("COUNTED FROM THE DECODED PICTURE") && !said("FROM THE THUMBNAIL") && hist_dec_ok() && hist_fine_screen_ok() && said("256") && said("LEVELS") && det_hist.n == (uint32_t)pic.rw * pic.rh); clear_texts(); break;
@@ -787,11 +798,12 @@ static void checkpoint(int n)
     case 570: starts_570 = tg.starts; if (getenv("APP_DEBUG")) printf("570: hist %d said-dec %d thumb %d dec_ok %d fine %d n %u pic %u hist_for %u sel %u v1on %u\n", said("DETAILS  HISTOGRAMS"), said("COUNTED FROM THE DECODED PICTURE"), said("THUMBNAIL"), hist_dec_ok(), hist_fine_screen_ok(), det_hist.n, (unsigned)pic.rw * pic.rh, hist_for, sel, v1_on);
               chk(570, said("DETAILS  HISTOGRAMS") && said("COUNTED FROM THE DECODED PICTURE") && !said("THUMBNAIL") && hist_dec_ok() && hist_fine_screen_ok() && det_hist.n == (uint32_t)pic.rw * pic.rh); clear_texts(); break;      /* Select on the grid, then Right: the picture was decoded for the page (the thumbnail is a crop of it), the decoder counted it */
     case 571: chk(571, said("COUNTED FROM THE DECODED PICTURE") && tg.starts == starts_570 && hist_dec_ok()); clear_texts(); break;      /* the same page opened again: the picture was counted already, it is not decoded a second time */
-    case 560: chk(560, rot_o == 0u && gset.lut == 1u && pix_ctrl == 5u && pix_stores == 768u && pix_bad == 0u && pix_tables_are(1u)); break;                                  /* X: the next colour filter (BRIGHT): the tables are loaded and on, the picture is not turned */
-    case 561: chk(561, rot_o == 1u && gset.lut == 1u && pix_ctrl == 5u && pix_stores == 768u); break;                                                                     /* Start + X mirrors and leaves the filter alone */
-    case 562: chk(562, rot_o == 1u && gset.lut == 7u && pix_ctrl == 5u && pix_bad == 0u && pix_tables_are(7u)); break;                                                    /* six more: INVERT, and the mirror is still there */
-    case 563: chk(563, gset.lut == 0u && pix_ctrl == 1u && pix_bad == 0u && rot_o == 1u); break;                                                                           /* one more wraps to NORMAL: the tables are off */
-    case 564: chk(564, gset.lut == 0u && rot_o == 7u); break;                                                                                                               /* Y turns clockwise (the mirrored picture becomes the anti-transposed one, as case 543) and does not touch the filter */
+    case 565: chk(565, !lab_on && rot_o == 7u && rot_plane_ok("v00.rgb", 7u, 800u, 720u)); break;                                                                    /* the next key press (Start, which changes nothing) takes the bar off: the rows under it are back, the plane is the whole picture */
+    case 560: chk(560, label_ok("FILTER BRIGHT") && rot_o == 0u && gset.lut == 1u && pix_ctrl == 5u && pix_stores == 768u && pix_bad == 0u && pix_tables_are(1u)); break;                                  /* X: the next colour filter (BRIGHT): the tables are loaded and on, the picture is not turned */
+    case 561: chk(561, label_ok("MIRRORED") && rot_o == 1u && gset.lut == 1u && pix_ctrl == 5u && pix_stores == 768u); break;                                                                     /* Start + X mirrors and leaves the filter alone */
+    case 562: chk(562, label_ok("FILTER INVERT") && rot_o == 1u && gset.lut == 7u && pix_ctrl == 5u && pix_bad == 0u && pix_tables_are(7u)); break;                                                    /* six more: INVERT, and the mirror is still there */
+    case 563: chk(563, label_ok("FILTER NORMAL") && gset.lut == 0u && pix_ctrl == 1u && pix_bad == 0u && rot_o == 1u); break;                                                                           /* one more wraps to NORMAL: the tables are off */
+    case 564: chk(564, label_ok("ANTI-TRANSPOSED") && gset.lut == 0u && rot_o == 7u); break;                                                                                                               /* Y turns clockwise (the mirrored picture becomes the anti-transposed one, as case 543) and does not touch the filter */
     case 548: chk(548, rot_o == 0u && zk >= 0); break;                                                                                                                         /* R1 on a mirrored picture zooms too (upright) */
     case 508: chk(508, mask_i == 0u && sel == 0u); break;
     case 481: chk(481, rot_o == 0u && vbase == GAL_PLANE_BASE); break;                                                                 /* a version 0 picture cannot be turned: X and Y do nothing */
@@ -1128,7 +1140,7 @@ int main(int argc, char **argv)
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
     }
     if (argc > 2 && !strcmp(argv[2], "v1filter")) {                                                      /* X cycles the colour filters in the viewer, Start + X still mirrors, Y turns */
-        const uint32_t SF[] = { KEY_A, 0, CP(200), KEY_X, 0, CP(560), KEY_START | KEY_X, 0, CP(561), KEY_X, 0, KEY_X, 0, KEY_X, 0, KEY_X, 0, KEY_X, 0, KEY_X, 0, CP(562), KEY_X, 0, CP(563), KEY_Y, 0, CP(564), END };
+        const uint32_t SF[] = { KEY_A, 0, CP(200), KEY_X, 0, CP(560), KEY_START | KEY_X, 0, CP(561), KEY_X, 0, KEY_X, 0, KEY_X, 0, KEY_X, 0, KEY_X, 0, KEY_X, 0, CP(562), KEY_X, 0, CP(563), KEY_Y, 0, CP(564), KEY_START, 0, CP(565), END };
         nscript = (int)(sizeof SF / sizeof SF[0]); memcpy(script, SF, sizeof SF);
         if (!setjmp(done)) gallery_app_main();
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;

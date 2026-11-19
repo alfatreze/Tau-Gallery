@@ -551,6 +551,19 @@ def mutants(setdir, tail=None):
         ("gallery_app.c", "if (from_grid && hist_for != sel && head.version == 1u) {", "if (from_grid && head.version == 1u) {"),
         ("gallery_app.c", "if (from_grid && hist_for != sel && head.version == 1u) {", "if (from_grid && hist_for != sel) {"),
     ]
+    muts += [                                                                                                      # the label bar
+        ("gallery_app.c", "if (lab_on && (edge || (uint32_t)(cycles() - lab_t0) > 2u * CLK_HZ)) lab_clear();", "if (lab_on && ((uint32_t)(cycles() - lab_t0) > 2u * CLK_HZ)) lab_clear();"),
+        ("gallery_app.c", "    lab_copy(0);\n    for (uint32_t i = 0; i < 64u; i++)", "    for (uint32_t i = 0; i < 64u; i++)"),
+        ("gallery_app.c", "glb_cat(glb_cat(b, \"FILTER \"), gl_names[gset.lut % GL_PRESETS])", "glb_cat(glb_cat(b, \"FILTER \"), gl_names[(gset.lut + 1u) % GL_PRESETS])"),
+        ("gallery_app.c", "mask_black(view, 0u, GT_CANVAS_W, GLB_Y0, GLB_Y0 + GLB_H); gfx_fence();", "gfx_fence();"),
+        ("gallery_app.c", "for (uint32_t k = 0; k < GLB_SCALE; k++) {", "for (uint32_t k = 0; k < 2u; k++) {"),
+        ("gallery_app.c", "const uint32_t view = rot_o ? GAL_ROT_BASE + rot_pan * GAL_LINE_WORDS16 : GAL_PLANE_BASE;", "const uint32_t view = GAL_PLANE_BASE;"),
+        ("gallery_app.c", "if (mask_i && mask_p && gm_can_turn(mask_i)) glb_cat(q, \" TALL\");", "if (mask_i && gm_can_turn(mask_i)) glb_cat(q, \" TALL\");"),
+        ("gallery_app.c", "            show_view(); lab_turn();\n", "            show_view();\n"),
+        ("gallery_app.c", "            lab_filter();\n            continue;", "            continue;"),
+        ("gallery_app.c", "            show_view(); lab_mask();\n", "            show_view();\n"),
+        ("gallery_app.c", "glb_cat(b, glb_orient[rot_o & 7u]); lab_show(b);", "glb_cat(b, glb_orient[(rot_o + 1u) & 7u]); lab_show(b);"),
+    ]
     only = sys.argv[sys.argv.index("--only") + 1] if "--only" in sys.argv else None                                   # --only TEXT: just the mutants whose original code contains TEXT (Tier B of CLAUDE.md section 4: the mutants of the code you changed)
     if only: muts = [m for m in muts if only in m[1]]; assert muts, "no mutant matches --only"
     if "--idx" in sys.argv:                                                                                       # --idx 6,7,58: just these mutants (by their position in the list)

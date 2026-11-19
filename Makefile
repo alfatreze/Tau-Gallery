@@ -967,6 +967,7 @@ test-gallery-quick:
 	$(PYTHON) sim/test_tgy_hw.py
 	$(PYTHON) sim/test_tgix_v1.py
 	$(PYTHON) sim/test_gallery_rot.py
+	$(PYTHON) sim/test_gallery_label.py
 	$(PYTHON) sim/test_gallery_mask.py
 	$(PYTHON) sim/test_gallery_lut.py
 	$(PYTHON) sim/test_rethumb.py
@@ -1145,6 +1146,7 @@ test-gallery-ci:
 	$(PYTHON) sim/test_gallery_folder.py
 	$(PYTHON) sim/test_tgix_v1.py
 	$(PYTHON) sim/test_gallery_rot.py
+	$(PYTHON) sim/test_gallery_label.py
 	$(PYTHON) sim/test_gallery_mask.py
 	$(PYTHON) sim/test_gallery_lut.py
 	$(PYTHON) sim/test_rethumb.py
