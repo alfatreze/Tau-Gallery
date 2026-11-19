@@ -21,6 +21,7 @@ def exif(make="Canon", model="Canon EOS R5", taken=None, iso=None):
     if taken: ifd[0x9003] = taken
     if iso: ifd[0x8827] = iso
     ifd[0x829A] = 0.004; ifd[0x829D] = 2.8; ifd[0x920A] = 35.0; ifd[0xA434] = "RF24-70mm F2.8"
+    ex[0x8769] = ifd                                                                                  # Pillow 10.2 hands out a fresh dict for an absent Exif IFD: put it back
     return ex
 def run(mod, src, out, *args):
     old = sys.stdout; sys.stdout = io.StringIO()
