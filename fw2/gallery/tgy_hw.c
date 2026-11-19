@@ -126,6 +126,14 @@ void tgy_hw_hist_begin(uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1)
     REG_WR(R_HIST_CTRL, 1u); g_hist_on = 1u;
 }
 void tgy_hw_hist_end(void) { REG_WR(R_HIST_CTRL, 0u); g_hist_on = 0u; }
+int tgy_hw_hist_bin(uint32_t k, uint32_t i, uint32_t *v)                           /* bin i of histogram k (0 luma, 1 red, 2 green, 3 blue), 24 bits; 1 when the unit never answered */
+{
+    REG_WR(R_HIST_IDX, (k << 8) | i); uint32_t x = REG_RD(R_HIST_DATA), t = 0;
+    while ((x >> 31) && t++ < 100000u) x = REG_RD(R_HIST_DATA);
+    if (x >> 31) return 1;
+    *v = x & 0xFFFFFFu; return 0;
+}
+uint32_t tgy_hw_hist_n(void) { return REG_RD(R_HIST_N) & 0xFFFFFFu; }
 int tgy_hw_hist_read256(uint32_t out[4][256], uint32_t *n)
 {
     for (uint32_t k = 0; k < 4u; k++)

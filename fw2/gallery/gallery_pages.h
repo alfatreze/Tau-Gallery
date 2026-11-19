@@ -418,16 +418,23 @@ static inline char *gdp_indicator(char *q, const gdp_t *p) { q = gi_u(q, (uint32
 /* bin: 32 levels counted from the thumbnail (RGB565 has no more steps than that to tell apart); fine: all 256 levels counted by the decoder's histogram unit, is_fine says which of the two the page draws. */
 typedef struct { uint16_t bin[GD_HIST_N][HS_BINS]; uint16_t fine[GD_HIST_N][HS_FINE]; uint32_t n; uint8_t is_fine; } hs_t;
 /* The counts of the decoder (all 256 levels of each histogram, up to 24 bits each) into the 16 bit fine bins of an hs_t: every bin is shifted right by the least s that brings the largest under 65,536, and a bin that had any pixels keeps at least 1 (the bars only compare bins of one histogram). n is the real count. */
-static inline void hs_from_counts(hs_t *h, const uint32_t c[GD_HIST_N][HS_FINE], uint32_t n)
+static inline uint32_t hs_shift(uint32_t mx)                                                          /* the least shift that brings the largest count under 65,536 */
 {
-    uint32_t mx = 0u, s = 0u;
-    for (uint32_t k = 0; k < GD_HIST_N; k++) for (uint32_t i = 0; i < HS_FINE; i++) if (c[k][i] > mx) mx = c[k][i];
+    uint32_t s = 0u;
 #if BUG == 21
     (void)mx;                                                                                        /* no scaling: a count above 65,535 wraps */
 #else
     while ((mx >> s) > 65535u) s++;
 #endif
-    for (uint32_t k = 0; k < GD_HIST_N; k++) for (uint32_t i = 0; i < HS_FINE; i++) { const uint32_t v = c[k][i] >> s; h->fine[k][i] = (uint16_t)((v == 0u && c[k][i] != 0u) ? 1u : v); }
+    return s;
+}
+static inline uint16_t hs_scale(uint32_t c, uint32_t s) { const uint32_t v = c >> s; return (uint16_t)((v == 0u && c != 0u) ? 1u : v); }      /* a bin that had pixels keeps at least 1 */
+static inline void hs_from_counts(hs_t *h, const uint32_t c[GD_HIST_N][HS_FINE], uint32_t n)
+{
+    uint32_t mx = 0u;
+    for (uint32_t k = 0; k < GD_HIST_N; k++) for (uint32_t i = 0; i < HS_FINE; i++) if (c[k][i] > mx) mx = c[k][i];
+    const uint32_t s = hs_shift(mx);
+    for (uint32_t k = 0; k < GD_HIST_N; k++) for (uint32_t i = 0; i < HS_FINE; i++) h->fine[k][i] = hs_scale(c[k][i], s);
     h->n = n; h->is_fine = 1u;
 }
 static inline void hs_clear(hs_t *h) { for (uint32_t k = 0; k < GD_HIST_N; k++) { for (uint32_t i = 0; i < HS_BINS; i++) h->bin[k][i] = 0u; for (uint32_t i = 0; i < HS_FINE; i++) h->fine[k][i] = 0u; } h->n = 0u; h->is_fine = 0u; }

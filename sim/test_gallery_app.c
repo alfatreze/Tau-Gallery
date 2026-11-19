@@ -16,6 +16,8 @@
 #define T_STAGE 0xE28000u
 static uint16_t mem[HW_N];                         /* SDRAM, halfwords: the plane at 0x200000 */
 static uint16_t fb[512u * 1024u];                  /* the UI framebuffer, halfwords, stride 512 */
+static uint32_t hist_boost = 1u;                                                                                 /* every bin the histogram unit reports times this (a scenario sets it so the counts pass 65,535 and the page must scale them)  */
+static uint32_t z2_vis_hits;                                                                                     /* decoder writes into the rows the screen is reading while the 2x loop runs (there must be none: only tiles outside the shown view are ever decoded) */
 static uint32_t vlog[256], vlog_n, vsnap[256], vsnap_n;                                                          /* every write of the view base since the last checkpoint (the snapshot is what the checkpoint sees) */
 static uint32_t clk, irq_pend, vid_req, vid_bus, vid_sw, vid_due, vbase, vstride, land_base, land_words, land_ovf, input_n;
 static int force_ovf, force_short, viewer_dead, fail_pic_reads, pass_pic_reads; static uint32_t v1_starts_before, land_unaligned, zt_n_212, rwd_241;
@@ -81,7 +83,7 @@ static void wr(uint32_t a, uint32_t v)
     case 0x80000250u: pix_ctrl = v & 7u; break;
     case 0x80000260u: hs_en = v & 1u; if (v & 2u) { memset(hs_bin, 0, sizeof hs_bin); hs_cnt = 0u; hs_clr_busy = 3u; } break;
     case 0x80000264u: hs_rect0 = v; break; case 0x80000268u: hs_rect1 = v; break; case 0x8000026Cu: hs_org = v; hs_starts++; break;
-    case 0x80000270u: hs_data = hs_bin[(v >> 8) & 3u][v & 255u]; hs_n = hs_cnt; hs_rd_busy = 2u; break;
+    case 0x80000270u: hs_data = (hs_bin[(v >> 8) & 3u][v & 255u] * hist_boost) & 0xFFFFFFu; hs_n = hs_cnt; hs_rd_busy = 2u; break;
     case 0x80000254u: { const uint32_t ch = (v >> 16) & 3u; if (pix_busy || (pix_ctrl & 4u) || ch > 2u) pix_bad++; else { pix_lut[ch][(v >> 8) & 255u] = v & 255u; pix_stores++; pix_busy = 3u; } } break;
     case 0x800001ECu: vid_req = v & 1u; vid_due = clk + 2u * 1111111u; break;
     case 0x800001F0u: vbase = v & 0x1FFFFFFu; if (vlog_n < 256u) vlog[vlog_n++] = vbase; { const uint32_t wn = (vbase >= T_WIN1 && vbase < T_STAGE) ? 1u : (vbase >= T_WIN0 && vbase < T_WIN1) ? 0u : 9u; if (wn != 9u && wn != last_win) { if (last_win != 9u) win_flips++; last_win = wn; } } break;
@@ -224,6 +226,7 @@ typedef struct { uint32_t dst, pitch, w, scat; int32_t stx, sty; } tg_emit_t;
 static void tg_emit(void *c, unsigned row, const uint8_t *rgb)
 {
     tg_emit_t *e = c;
+    if (e->scat && z2_active && vstride) for (uint32_t x = 0; x < e->w; x++) { const uint32_t hw = (uint32_t)((int64_t)e->dst + (int64_t)x * e->stx + (int64_t)row * e->sty) / 2u; if (hw >= vbase && (hw - vbase) / vstride < 720u && (hw - vbase) % vstride < 1200u) z2_vis_hits++; }      /* a 2x pixel written where the screen is reading */
     if (e->scat) { for (uint32_t x = 0; x < e->w; x++) for (uint32_t k = 0; k < 3u; k++) msetb((uint32_t)((int64_t)e->dst + (int64_t)x * e->stx + (int64_t)row * e->sty) + k, rgb[3u * x + k]); return; }        /* K7: every pixel at dst + x * stx + y * sty */
     for (uint32_t i = 0; i < e->w * 3u; i++) msetb(e->dst + row * e->pitch + i, rgb[i]);
 }
@@ -413,6 +416,18 @@ static int v1_view_matches(const char *fname, uint32_t W, uint32_t H)           
     }
     free(d); return ok;
 }
+static int z2_view_ok(const char *fname, uint32_t W, uint32_t H)                                              /* the 2x view: what the scan-out shows (from the base and stride registers: a 1,280 pixel plane in one of the two windows) is the 400 x 360 piece of the level at the corner the firmware recorded, every pixel doubled, pixel for pixel */
+{
+    char f[600]; snprintf(f, sizeof f, "%s/%s", dir, fname); uint32_t n; uint8_t *d = slurp(f, &n); if (!d || n != W * H * 3u) return 0;
+    const uint32_t p = vbase >= T_WIN1 ? 1u : 0u, pb = p ? T_WIN1 : T_WIN0;
+    int ok = z2_shown && vstride == Z2_STRIDE_HW && vbase >= pb && vbase < pb + 2457600u && (z2_vx & 3) == 0 && z2_vx >= 0 && z2_vy >= 0 && (uint32_t)z2_vx + 800u <= 2u * W && (uint32_t)z2_vy + 720u <= 2u * H;
+    if (ok) { const uint32_t rel = vbase - pb, row = rel / Z2_STRIDE_HW, rem = rel % Z2_STRIDE_HW; if (rem % 3u || (int32_t)(z2_wtx[p] * 256u + rem / 3u * 2u) != z2_vx || (int32_t)(z2_wty[p] * 256u + row) != z2_vy) ok = 0; }
+    for (uint32_t r = 0; r < 720u && ok; r++) for (uint32_t x = 0; x < 800u && ok; x++) for (uint32_t k = 0; k < 3u; k++) {
+        const uint32_t b = 3u * x + k, got = (mem[vbase + r * vstride + b / 2u] >> (8u * (b & 1u))) & 255u;
+        if (got != d[(((uint32_t)z2_vy + r) / 2u * W + ((uint32_t)z2_vx + x) / 2u) * 3u + k]) ok = 0;
+    }
+    free(d); return ok;
+}
 static uint32_t ph_stall, ph_stall_max, ph_jump_max, ph_axx, ph_axy; static int32_t ph_px = -1, ph_py = -1;
 static void ldr_probe(uint32_t dst)      /* a chunk of a picture landing: what the loader bar shows before it (a track at the start, a fill that only grows). An open that shows no progress (a picture change in the viewer) leaves the last bar full under the viewer: its chunks are not judged */
 {
@@ -567,6 +582,7 @@ static int hist_dec_ok(void)                                                    
         const uint32_t a = GAL_PLANE_BASE * 2u + y * 2400u + x * 3u, r = mbyte(a), g = mbyte(a + 1u), b = mbyte(a + 2u);
         c[0][(77u * r + 150u * g + 29u * b) >> 8]++; c[1][r]++; c[2][g]++; c[3][b]++; n++;
     }
+    for (int k = 0; k < 4; k++) for (int i = 0; i < 256; i++) c[k][i] *= hist_boost;
     uint32_t mx = 0u, s = 0u; for (int k = 0; k < 4; k++) for (int i = 0; i < 256; i++) if (c[k][i] > mx) mx = c[k][i];
     while ((mx >> s) > 65535u) s++;
     int ok = det_hist.n == n && n > 0u;
@@ -799,6 +815,10 @@ static void checkpoint(int n)
               chk(570, said("DETAILS  HISTOGRAMS") && said("COUNTED FROM THE DECODED PICTURE") && !said("THUMBNAIL") && hist_dec_ok() && hist_fine_screen_ok() && det_hist.n == (uint32_t)pic.rw * pic.rh); clear_texts(); break;      /* Select on the grid, then Right: the picture was decoded for the page (the thumbnail is a crop of it), the decoder counted it */
     case 571: chk(571, said("COUNTED FROM THE DECODED PICTURE") && tg.starts == starts_570 && hist_dec_ok()); clear_texts(); break;      /* the same page opened again: the picture was counted already, it is not decoded a second time */
     case 565: chk(565, !lab_on && rot_o == 7u && rot_plane_ok("v00.rgb", 7u, 800u, 720u)); break;                                                                    /* the next key press (Start, which changes nothing) takes the bar off: the rows under it are back, the plane is the whole picture */
+    case 580: chk(580, z2_vis_hits == 0u && z2_shown && z2_view_ok("v00_full.rgb", 1000u, 900u) && z2_vx == 2 * (z_sx + 400) - 400 - ((2 * (z_sx + 400) - 400) & 3) && tg.starts >= 4u); break;      /* R1 at the 1:1 view: the 2x view on the other window, centred where the 1:1 view's centre was, every pixel a 2 x 2 block (four decodes a tile) */
+    case 581: chk(581, z2_vis_hits == 0u && z2_shown && z2_view_ok("v00_full.rgb", 1000u, 900u) && z2_vx > 2 * (z_sx + 400) - 400 && z2_vy > 2 * (z_sy + 360) - 360); break;      /* panned right and down: still the picture doubled, further along */
+    case 582: chk(582, zk == 0 && z_shown && v1_view_matches("v00_full.rgb", 1000u, 900u) && z_sx > 96 && z_sy > 86); break;                                                                  /* L1: back to the 1:1 view, at the 2x view's centre (it had moved right and down) */
+    case 583: chk(583, zk < 0 && vbase == GAL_PLANE_BASE && plane_is_rgb("v00.rgb")); break;                                                                                                /* A in the 2x view: the fit view */
     case 560: chk(560, label_ok("FILTER BRIGHT") && rot_o == 0u && gset.lut == 1u && pix_ctrl == 5u && pix_stores == 768u && pix_bad == 0u && pix_tables_are(1u)); break;                                  /* X: the next colour filter (BRIGHT): the tables are loaded and on, the picture is not turned */
     case 561: chk(561, label_ok("MIRRORED") && rot_o == 1u && gset.lut == 1u && pix_ctrl == 5u && pix_stores == 768u); break;                                                                     /* Start + X mirrors and leaves the filter alone */
     case 562: chk(562, label_ok("FILTER INVERT") && rot_o == 1u && gset.lut == 7u && pix_ctrl == 5u && pix_bad == 0u && pix_tables_are(7u)); break;                                                    /* six more: INVERT, and the mirror is still there */
@@ -1133,9 +1153,21 @@ int main(int argc, char **argv)
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
     }
     if (argc > 2 && !strcmp(argv[2], "v1gridhist")) {                                                    /* the histograms page opened from the grid counts the decoded picture, not the cropped thumbnail */
-        caps_val = 0x80000007u;
+        caps_val = 0x80000007u; hist_boost = 200u;                                                    /* the counts pass 65,535: the page scales them */
         const uint32_t SG[] = { KEY_SELECT, 0, KEY_RIGHT, 0, CP(570), KEY_B, 0, KEY_SELECT, 0, KEY_RIGHT, 0, CP(571), END };
         nscript = (int)(sizeof SG / sizeof SG[0]); memcpy(script, SG, sizeof SG);
+        if (!setjmp(done)) gallery_app_main();
+        printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
+    }
+    if (argc > 2 && !strcmp(argv[2], "v1zoom2")) {                                                       /* the 2x zoom of a version 1 picture (v00: 1000 x 900) */
+        uint32_t S2[8192]; int k = 0;
+#define H2(key, n) do { for (int _i = 0; _i < (n); _i++) S2[k++] = (key); } while (0)
+        S2[k++] = KEY_A; S2[k++] = 0; S2[k++] = CP(210); S2[k++] = KEY_A; S2[k++] = 0; S2[k++] = KEY_R1; S2[k++] = 0; H2(0, 200); S2[k++] = CP(211);                                                                            /* fit, then the 1:1 view */
+        S2[k++] = CP(230); S2[k++] = KEY_R1; S2[k++] = 0; H2(0, 400); S2[k++] = CP(580);                                                                                                         /* R1: the 2x view */
+        H2(KEY_RIGHT, 40); H2(KEY_DOWN, 30); H2(0, 400); S2[k++] = CP(581);                                                                                                                       /* pan */
+        S2[k++] = KEY_L1; S2[k++] = 0; H2(0, 200); S2[k++] = CP(582);                                                                                                                              /* back to 1:1 */
+        S2[k++] = CP(231); S2[k++] = CP(230); S2[k++] = KEY_R1; S2[k++] = 0; H2(0, 400); S2[k++] = KEY_A; S2[k++] = 0; H2(0, 3); S2[k++] = CP(583); S2[k++] = END;                                      /* and in again, A: the fit view */
+        nscript = k; memcpy(script, S2, (size_t)k * sizeof S2[0]);
         if (!setjmp(done)) gallery_app_main();
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
     }

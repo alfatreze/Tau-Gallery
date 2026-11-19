@@ -51,6 +51,8 @@ int tgy_hw_level_rot(const tgy_file_t *f, const tgy_level_t *l, uint32_t dst0, u
 void tgy_hw_hist_begin(uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1);
 void tgy_hw_hist_end(void);
 int tgy_hw_hist_read256(uint32_t out[4][256], uint32_t *n);
+int tgy_hw_hist_bin(uint32_t k, uint32_t i, uint32_t *v);   /* one bin, so a caller need not hold all 1,024 (4 KB): 1 when the unit never answered */
+uint32_t tgy_hw_hist_n(void);                              /* the pixel count */
 uint32_t tgy_hw_status(void);                                                /* STATUS as of the last tile */
 void tgy_hw_forget(void);                                                    /* drop the tables cache (after a reset of the decoder) */
 #endif

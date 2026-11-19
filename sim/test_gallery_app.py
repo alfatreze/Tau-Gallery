@@ -145,7 +145,7 @@ def run(workdir, setdir):
     if r.returncode: rc = 1; out += "\nFAIL scenario zoom\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-2500:]
     global V1SET
     if V1SET is None: V1SET = Path(tempfile.mkdtemp()); make_v1_set(V1SET)
-    for sc in ("v1", "v1nohw", "v1zoom", "v1map", "v1rot", "v1mask", "v1hist", "v1mirror", "v1filter"):
+    for sc in ("v1", "v1nohw", "v1zoom", "v1map", "v1rot", "v1mask", "v1hist", "v1mirror", "v1filter", "v1zoom2"):
         r = subprocess.run([str(workdir / "t"), str(V1SET), sc], capture_output=True, text=True, timeout=900)
         if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-2500:]
         else: out += "\n" + r.stdout
@@ -563,6 +563,26 @@ def mutants(setdir, tail=None):
         ("gallery_app.c", "            lab_filter();\n            continue;", "            continue;"),
         ("gallery_app.c", "            show_view(); lab_mask();\n", "            show_view();\n"),
         ("gallery_app.c", "glb_cat(b, glb_orient[rot_o & 7u]); lab_show(b);", "glb_cat(b, glb_orient[(rot_o + 1u) & 7u]); lab_show(b);"),
+    ]
+    muts += [                                                                                                      # the 2x zoom
+        ("gallery_app.c", "tgy_hw_scatter(1, 6, (int32_t)(2u * Z2_PITCH));", "tgy_hw_scatter(1, 3, (int32_t)(2u * Z2_PITCH));"),
+        ("gallery_app.c", "tgy_hw_scatter(1, 6, (int32_t)(2u * Z2_PITCH));", "tgy_hw_scatter(1, 6, (int32_t)Z2_PITCH);"),
+        ("gallery_app.c", "dst + a * 3u + b * Z2_PITCH, Z2_PITCH,", "dst + a * 3u, Z2_PITCH,"),
+        ("gallery_app.c", "dst + a * 3u + b * Z2_PITCH, Z2_PITCH,", "dst + b * Z2_PITCH, Z2_PITCH,"),
+        ("gallery_app.c", "for (uint32_t k = 0; k < 4u && !r; k++) {\n        const uint32_t a = k & 1u, b = k >> 1;", "for (uint32_t k = 0; k < 3u && !r; k++) {\n        const uint32_t a = k & 1u, b = k >> 1;"),
+        ("gallery_app.c", "(uint32_t)(vx - (int32_t)(z2_wtx[p] * Z2_OT)) * 3u / 2u);", "(uint32_t)(vx - (int32_t)(z2_wtx[p] * Z2_OT)));"),
+        ("gallery_app.c", "if (edge & (KEY_B | KEY_L1)) { ret = 0; break; }", "if (edge & (KEY_B | KEY_L1)) { ret = 1; break; }"),
+        ("gallery_app.c", "if (edge & KEY_A) { ret = 1; break; }", "if (edge & KEY_A) { ret = 0; break; }"),
+        ("gallery_app.c", "else if (zl.layout == 2u && z_shown) { z2_enter();", "else if (zl.layout == 2u) { z2_enter();"),
+        ("gallery_app.c", "    if (r == 0) zoom_open(k, cx - GV_SCREEN_W / 2, cy - GV_SCREEN_H / 2);", "    if (r == 0) zoom_open(k, 0, 0);"),
+        ("gallery_app.c", "uint32_t f = 1u - t_shown_win, composing", "uint32_t f = t_shown_win, composing"),
+        ("gallery_app.c", "if (z2_whole(f, nx, ny, GV_SCREEN_W, GV_SCREEN_H)) z2_show(f, nx, ny);", "if (1) z2_show(f, nx, ny);"),
+        ("gallery_app.c", "if (z2_shown) { const int32_t st = held < 8u ? 8 : 16; wx += dx * st; wy += dy * st; z2_clampv(&wx, &wy); }", "if (z2_shown) { const int32_t st = held < 8u ? 8 : 16; wx += dx * st; z2_clampv(&wx, &wy); }"),
+        ("gallery_app.c", "if (2u * v1z.w < (uint32_t)GV_SCREEN_W || 2u * v1z.h < (uint32_t)GV_SCREEN_H) return;", "if (0) return;"),
+    ]
+    muts += [                                                                                                      # the decoder's histogram read in two passes
+        ("gallery_app.c", "h->fine[k][i] = hs_scale(v, s); }", "h->fine[k][i] = (uint16_t)v; }"),
+        ("gallery_app.c", "const uint32_t s = hs_shift(mx), n = tgy_hw_hist_n(); if (n == 0u) return 0;", "const uint32_t s = 0u, n = tgy_hw_hist_n(); if (n == 0u) return 0;"),
     ]
     only = sys.argv[sys.argv.index("--only") + 1] if "--only" in sys.argv else None                                   # --only TEXT: just the mutants whose original code contains TEXT (Tier B of CLAUDE.md section 4: the mutants of the code you changed)
     if only: muts = [m for m in muts if only in m[1]]; assert muts, "no mutant matches --only"
