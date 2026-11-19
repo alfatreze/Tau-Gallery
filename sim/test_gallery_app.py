@@ -129,43 +129,43 @@ def run(workdir, setdir):
     rc, out = r.returncode, r.stdout
     for sc in SCENARIOS:
         r = subprocess.run([str(workdir / "t"), str(setdir), sc], capture_output=True, text=True, timeout=600)
-        if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
+        if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-200:]
     global BIGSET, ZSET
     if BIGSET is None: BIGSET = Path(tempfile.mkdtemp()); make_big_set(BIGSET)
     if ZSET is None: ZSET = Path(tempfile.mkdtemp()); make_zoom_set(ZSET)
     r = subprocess.run([str(workdir / "t"), str(ZSET), "zoom"], capture_output=True, text=True, timeout=900)
-    if r.returncode: rc = 1; out += "\nFAIL scenario zoom\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
+    if r.returncode: rc = 1; out += "\nFAIL scenario zoom\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-200:]
     global V1SET
     if V1SET is None: V1SET = Path(tempfile.mkdtemp()); make_v1_set(V1SET)
     for sc in ("v1", "v1nohw", "v1zoom", "v1map", "v1rot", "v1mask", "v1hist", "v1mirror", "v1filter"):
         r = subprocess.run([str(workdir / "t"), str(V1SET), sc], capture_output=True, text=True, timeout=900)
-        if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
+        if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-200:]
         else: out += "\n" + r.stdout
     global L1SET
     if L1SET is None: L1SET = Path(tempfile.mkdtemp()); make_lib1_set(L1SET)
     for sc in ("lib1", "lib1resume", "lib1resumeA", "lib1resumeC", "lib1details"):
         r = subprocess.run([str(workdir / "t"), str(L1SET), sc], capture_output=True, text=True, timeout=900)
-        if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
+        if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-200:]
     r = subprocess.run([str(workdir / "t"), str(L1SET), "lib1light"], capture_output=True, text=True, timeout=900)
-    if r.returncode: rc = 1; out += "\nFAIL scenario lib1light\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
+    if r.returncode: rc = 1; out += "\nFAIL scenario lib1light\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-200:]
     for sc in ("lib1g1", "lib1g2", "lib1g3"):
         r = subprocess.run([str(workdir / "t"), str(L1SET), sc], capture_output=True, text=True, timeout=900)
-        if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
+        if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-200:]
     global LBSET
     if LBSET is None: LBSET = Path(tempfile.mkdtemp()); make_libbig_set(LBSET)
     for sc in ("libbig0", "libbig1", "libbig2", "libbig3", "libbigset", "colour"):
         r = subprocess.run([str(workdir / "t"), str(LBSET), sc], capture_output=True, text=True, timeout=900)
-        if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
+        if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-200:]
     for sc in ("big", "bigresume250", "bigresume299"):
         r = subprocess.run([str(workdir / "t"), str(BIGSET), sc], capture_output=True, text=True, timeout=900)
-        if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l)
+        if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-200:]
     return rc, out
 
 def mutants(setdir, tail=None):
     w0 = Path(tempfile.mkdtemp())                                                                 # a mutant run means something only on a passing unmutated test: with a failing one every mutant would count as killed
     if not build(w0): print("BASELINE does not build"); return 1
     rc0, out0 = run(w0, setdir)
-    if rc0 != 0 or "PASSED" not in out0: print("BASELINE FAILS: no mutant result is valid"); print("\n".join(l for l in out0.splitlines() if "FAIL" in l)); return 1
+    if rc0 != 0 or "PASSED" not in out0: print("BASELINE FAILS: no mutant result is valid"); print("\n".join(l for l in out0.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-200:]); return 1
     muts = [("gallery_app.c", "REG_WR(R_LAND_BASE, GAL_PLANE_BASE);", "REG_WR(R_LAND_BASE, GAL_PLANE_BASE + 2u);"),
             ("gallery_app.c", "0x40000000u + c, len,", "0x40000000u, len,"),
             ("gallery_app.c", "t->canvas_off + c, 0x40000000u", "t->canvas_off, 0x40000000u"),
