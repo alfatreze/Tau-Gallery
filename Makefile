@@ -1125,6 +1125,27 @@ test-rtl-tgy-soc: $(RTL_BUILD_DIR)/tau_soc_sim.v
 .PHONY: test-tgy-hw
 # The gate: what must be green before a commit that touches the gallery core, run by .github/workflows/gate.yml and by hand (about 10 minutes). The whole-core
 # simulation (test-fullcore) is slow and needs Intel's altera_mf.v: a nightly, not part of the gate.
+# What the GitHub runner runs (.github/workflows/gate.yml): the gallery's own host tests and the decoder blocks. `gate` also runs the music player's `test-host-fast`,
+# whose tests need a built ROM, an installed card or the music player's files and fail on a clean clone (they are not the gallery's).
+.PHONY: gate-ci
+gate-ci: test-gallery-ci test-tgy-hw test-rtl-tgy-tile test-rtl-tgy-ent test-rtl-tgy-dec test-rtl-tgy-dma test-rtl-tgy-unit test-rtl-tgy-wfifo test-rtl-dmux test-rtl-tgy-soc
+
+.PHONY: test-gallery-ci
+test-gallery-ci:
+	$(PYTHON) sim/test_gallery_app.py
+	$(PYTHON) sim/test_gallery_view.py
+	$(PYTHON) sim/test_gallery_pages.py
+	$(PYTHON) sim/test_gallery_fmt.py
+	$(PYTHON) sim/test_gallery_settings.py
+	$(PYTHON) sim/test_gallery_folder.py
+	$(PYTHON) sim/test_tgix_v1.py
+	$(PYTHON) sim/test_gallery_rot.py
+	$(PYTHON) sim/test_gallery_mask.py
+	$(PYTHON) sim/test_gallery_lut.py
+	$(PYTHON) sim/test_rethumb.py
+	$(PYTHON) sim/test_tgy_convert_v1.py
+	$(PYTHON) sim/test_merge_index.py
+
 .PHONY: gate
 gate: test-host-fast test-fuzz-c test-tgy-hw test-rtl-tgy-tile test-rtl-tgy-ent test-rtl-tgy-dec test-rtl-tgy-dma test-rtl-tgy-unit test-rtl-tgy-wfifo test-rtl-dmux test-rtl-tgy-soc
 
