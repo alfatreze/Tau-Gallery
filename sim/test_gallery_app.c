@@ -115,16 +115,17 @@ static uint32_t ldr_chunks, ldr_max, ldr_prev, ldr_first_ok = 1u, ldr_mono = 1u,
 int slot_read_blocking(uint32_t slot, uint32_t off, uint32_t dst, uint32_t len, uint32_t to)
 {
     (void)to; reads++;
+    const int tagwin = dst == (uint32_t)(uintptr_t)_tag_start;                                   /* the tag window's own address, cut to 32 bits like the firmware passes it: on a 64 bit host with address randomisation its top nibble can be 4, which is the landing window's (a flaky failure on Linux) */
     if (zoom_phase && slot == 2u && len == 49152u) { tile_reads++; tile_read_probe(off); }
-    if (!zoom_phase && slot == 2u && len == 131072u && dst >= 0x40000000u) ldr_probe(dst);
+    if (!zoom_phase && slot == 2u && len == 131072u && !tagwin && dst >= 0x40000000u) ldr_probe(dst);
     if (zoom_phase && slot == 2u) { if (len > zoom_max_len) zoom_max_len = len; if (++reads_since_input > zoom_max_rs) zoom_max_rs = reads_since_input; }
     if (tg.pending) reads_while_decoding++;                                                      /* a card read while the decoder runs: the pipeline overlaps them */
-    if (slot == 2u && (dst >> 28) == 4u && ((off & 4095u) || (len & 4095u))) land_unaligned++;      /* a landing read of a picture starts and ends on 4 KB (the APF reads fastest aligned; every landing in this firmware keeps to it) */
+    if (slot == 2u && !tagwin && (dst >> 28) == 4u && ((off & 4095u) || (len & 4095u))) land_unaligned++;      /* a landing read of a picture starts and ends on 4 KB (the APF reads fastest aligned; every landing in this firmware keeps to it) */
     if (slot == 5u && fail_idx) return 0;                                                         /* the index cannot be read (the thumbnail of the details page) */
     if (slot == 2u) { if (pass_pic_reads > 0) pass_pic_reads--; else if (fail_pic_reads > 0) { fail_pic_reads--; return 0; } }      /* a transient card error: after `pass` good reads the next `fail` reads of a picture fail */
     const uint8_t *src = slot == 5u ? idx_data : slot == 2u ? pic_data : 0; const uint32_t n = slot == 5u ? idx_len : pic_len;
     if (!src || off + len > n || (len & 3u)) return 0;                                        /* a read past the end of the file fails, as on the Pocket */
-    if ((dst >> 28) == 4u) {
+    if (!tagwin && (dst >> 28) == 4u) {
         for (uint32_t i = 0; i < len; i++) { const uint32_t pos = (dst & 0x0FFFFFFFu) + i, h = land_base + pos / 2u, b = pos & 1u; mem[h] = (uint16_t)((mem[h] & ~(0xFFu << (8u * b))) | (uint32_t)src[off + i] << (8u * b)); }
         land_words += len / 4u - (force_short ? 1u : 0u);
     } else { if (len > 4096u) return 0; memcpy(_tag_start, src + off, len); }
