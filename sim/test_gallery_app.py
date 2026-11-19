@@ -579,6 +579,12 @@ def mutants(setdir, tail=None):
         ("gallery_app.c", "else if (zl.layout == 2u && z_shown) { zoom_to_grid = 0u; z2_enter();", "else if (zl.layout == 2u) { zoom_to_grid = 0u; z2_enter();"),
         ("gallery_app.c", "    if (r == 0) zoom_open(k, cx - GV_SCREEN_W / 2, cy - GV_SCREEN_H / 2);", "    if (r == 0) zoom_open(k, 0, 0);"),
         ("gallery_app.c", "z2_tx = s == 2u ? 5u : 4u;", "z2_tx = s == 2u ? 5u : 3u;"),
+        ("gallery_app.c", "if (from != tp && z2_isres(from, bx, by)) { z2_copy(from, tp, bx, by); return 1; }", "if (0 && z2_isres(from, bx, by)) { z2_copy(from, tp, bx, by); return 1; }"),
+        ("gallery_app.c", "if (edge & KEY_START) { ret = 3; break; }", "if (edge & KEY_START) { ret = 0; break; }"),
+        ("gallery_app.c", "    if (!z2_hold) {info.zt_n", "    if (1) {info.zt_n"),
+        ("gallery_app.c", "static void zoom_goto(int k)\n{\n    z2_hold = 0u;\n", "static void zoom_goto(int k)\n{\n"),
+        ("gallery_app.c", "if (r == 0 || r == 3) zoom_open(k, cx - GV_SCREEN_W / 2, cy - GV_SCREEN_H / 2);", "if (r == 0) zoom_open(k, cx - GV_SCREEN_W / 2, cy - GV_SCREEN_H / 2);"),
+        ("gallery_app.c", "static void z2_stats_reset(void) { info.zt_n", "static void z2_stats_reset(void) { info.zoom_ms = 0u; info.zt_n"),
     ]
     muts += [                                                                                                      # the decoder's histogram read in two passes
         ("gallery_app.c", "h->fine[k][i] = hs_scale(v, s); }", "h->fine[k][i] = (uint16_t)v; }"),

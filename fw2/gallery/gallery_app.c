@@ -420,7 +420,8 @@ static int open_timed(uint32_t i, int show_progress)
 #define GAL_WIN1 (GAL_WIN0 + GV_WIN_HW)
 #define GAL_STAGE (GAL_WIN1 + GV_WIN_HW)         /* one landed tile (24,576 halfwords) before Talos copies it */
 #define COPY_PER_PASS 64u                        /* Talos row-piece commands a pass */
-static gt_zoom_t zs[GV_MAX_STOPS], zl; static uint32_t zn; static int zk = -1;              /* the picture's zoom levels, the one in use, its index (-1: the fit view) */
+static gt_zoom_t zs[GV_MAX_STOPS], zl; static uint32_t zn; static int zk = -1;
+static uint32_t z2_hold;                                                                          /* 1 while the Info page's zoom numbers are the 2x or 4x run's (a zoom from the fit view clears it) */              /* the picture's zoom levels, the one in use, its index (-1: the fit view) */
 static gv_stop_t z_stop;
 static uint32_t z_t0, z_first, t_copy_cyc, t_rc_t0;                                                    /* the Info page's zoom timings: the clock at the key, 1 until the first view is on screen, the Talos cycles of the tile being copied */
 static int32_t z_wx, z_wy, z_sx, z_sy; static uint32_t z_shown;                               /* the wanted and the shown corner (level pixels); 1 when a zoom view is on screen */
@@ -528,7 +529,7 @@ static void zb_set(uint32_t done, uint32_t total)
     if (px > zb_px) { zb_write(zb_px, px, px); zb_px = px; }
 }
 static void zb_end(void) { if (!zb_on) return; zb_on = 0u; zb_copy(1); }
-static void zoom_shown_now(void) { zb_end(); if (z_first) { z_first = 0u; info.zoom_ms = (cycles() - z_t0) / (CLK_HZ / 1000u); } }       /* the first zoomed view is on screen */
+static void zoom_shown_now(void) { zb_end(); if (z_first) { z_first = 0u; if (!z2_hold) info.zoom_ms = (cycles() - z_t0) / (CLK_HZ / 1000u); } }       /* the first zoomed view is on screen */
 static void zoom_leave(void)
 {
     if (t_job) gfx_fence();                                                                  /* Talos commands of an abandoned copy retire before anything reuses their memory */
@@ -549,7 +550,7 @@ static void zoom_open(int k, int32_t nx, int32_t ny)
         if (ir != TH_OK) { say("ZOOM INDEX READ FAILED", BAD); zk = -1; return; }
         v1z_idx_ok = 1u;
     }
-    info.zt_n = info.zt_land_sum = info.zt_land_max = info.zt_dec_n = info.zt_dec_sum = info.zt_dec_max = info.zt_pass_max = info.zt_catch = info.zt_moved = info.zt_stall_run_max = info.zt_sp = info.zt_sc = info.zt_sn = info.zt_sj = info.zt_ss = 0u; v1_pre.valid = 0u; z_stall_run = 0u;      /* the tile statistics are those of this zoom */
+    if (!z2_hold) {info.zt_n = info.zt_land_sum = info.zt_land_max = info.zt_dec_n = info.zt_dec_sum = info.zt_dec_max = info.zt_pass_max = info.zt_catch = info.zt_moved = info.zt_stall_run_max = info.zt_sp = info.zt_sc = info.zt_sn = info.zt_sj = info.zt_ss = 0u; v1_pre.valid = 0u; z_stall_run = 0u;      /* the tile statistics are those of this zoom */ }
     zl = zs[k]; zk = k; z_stop.w = zl.w; z_stop.h = zl.h; z_stop.scale_q16 = zl.scale_q16; gv_clamp(&z_stop, &nx, &ny);
     z_wx = nx; z_wy = ny; z_sx = -1; z_sy = -1; z_shown = 0u; z_t0 = cycles(); z_first = 1u;
     if (zl.layout == 0u) { z_stride_hw = zl.stride / 2u; z_nch = gv_nchunks((zl.len + 4095u) & ~4095u); z_lo = 0u; z_hi = 0u; }
@@ -559,6 +560,7 @@ static void zoom_open(int k, int32_t nx, int32_t ny)
 /* Goes to stop k (-1: fit). The fit view shows while the new level loads, and its first view keeps the screen centre on the same point of the picture. */
 static void zoom_goto(int k)
 {
+    z2_hold = 0u;
     int32_t x = 0, y = 0, fox, foy, tox = 0, toy = 0, nx = 0, ny = 0;
     if (zk >= 0) { x = z_shown ? z_sx : z_wx; y = z_shown ? z_sy : z_wy; }                        /* the centre of what the screen shows, not of where the keys have taken the wanted corner */
     zoom_off(zk, &fox, &foy); const uint32_t sf = zoom_scale(zk);
@@ -849,27 +851,39 @@ static int view_reopen(void)                                                    
 }
 /* ---- the 2x and 4x zoom (owner request 2026-11-19): past the 1:1 view of a version 1 picture, A shows every pixel of the level as a 2 x 2 block (the screen shows 400 x 360 of the picture's own pixels) and A again as a 4 x 4 block (200 x 180).
  * Full pixels only, nothing is resampled. Talos can only scale 16 bit pixels and the plane is RGB888, so the decoder does it: its scatter writer puts a decoded pixel at dst + x * stx + y * sty, and a tile is decoded s * s times
- * from the same stream (stx = 3 s bytes, sty = s plane rows, the start moved by a pixel and/or a row): s * s passes fill the s x s blocks of a 128 s pixel tile. About 25 ms a tile at 2x (4 passes) and 100 ms at 4x (16); the stream is read
- * from the card once. 2x: two planes (the zoom's two resident windows) of 5 x 5 tiles of 256 px: one on the screen, the other composed ahead when the view comes within 128 px of the shown plane's edge, and shown when the view's own tiles
- * are whole in it. 4x: one plane of 3 x 3 tiles of 512 px over both windows (7 MB): when the view comes near its edge the screen goes black while the plane is aimed again and the view's tiles are decoded. B goes back a level (4x, 2x, 1:1, fit),
- * L1 and R1 step down and up, a long B leaves for the grid. This loop owns the keys while it runs. ---- */
-#define Z2_FOLLOW 16                             /* output pixels a pass the shown view moves toward the wanted one */
+ * from the same stream (stx = 3 s bytes, sty = s plane rows, the start moved by a pixel and/or a row): s * s passes fill the s x s blocks of a 128 s pixel tile. About 25 ms a tile at 2x (4 passes) and 100 ms at 4x (16), and the stream is
+ * read from the card once. The output lives in two planes, the one on the screen and one composed ahead; 2x: 5 x 5 source tiles of 256 px (the zoom's two windows), 4x: 4 x 3 tiles of 512 px (at 0x408000, and over both windows).
+ * The plane on the screen is kept covering the view plus a margin that is mostly AHEAD in the direction of the pan; when it does not, the other plane is aimed there and composed: the tiles the two planes share are COPIED by Talos (a few
+ * ms a tile), only the new ones are decoded, and the view goes over to it when its own tiles are whole. The shown view follows the wanted one only where its tiles are whole. B goes back a level (4x, 2x, 1:1, fit), L1 steps down and R1 up, a
+ * long B leaves for the grid, Start goes to the 1:1 view's map. This loop owns the keys while it runs. ---- */
+#define GAL_Z4P0 0x408000u                       /* the first 4x plane (halfwords): above the first 32 KB of the landing window, which holds the file's header and tables the decoder reads, below the zoom windows */
 #define B_LONG (CLK_HZ * 6u / 10u)               /* a B held this long leaves the picture for the grid */
+#define Z2_FOLLOW 8                              /* output pixels a pass the shown view moves toward the wanted one, and the most a frame of the keys moves it (a quarter of a second to cross a tile at 2x) */
 static uint32_t z2_wtx[2], z2_wty[2]; static uint8_t z2_res[2][25];
-static uint32_t z2_s, z2_tx, z2_ty, z2_np;       /* the scale (2 or 4), the window in source tiles, the planes (2: one shown and one composed ahead; 1: the 4x plane over both windows) */
-static int32_t z2_margin(void) { return z2_s == 2u ? 64 : 128; }   /* output pixels the shown plane must cover beyond the view in every direction, where the level goes on: the view and its margin must fit the window wherever the tile edges fall (2x: 5 tiles of 256 hold 928 + 255, 4x: 4 x 3 tiles of 512 hold 1,056 + 511 across and 976 + 511 down) */
-static int32_t z2_vx, z2_vy, z2_maxx, z2_maxy; static uint32_t z2_shown, z2_active;                  /* the view on screen (output pixels, the level times the scale): its corner, the limits of the corner, 1 once a view shows */
+static uint32_t z2_s, z2_tx, z2_ty, z2_np;       /* the scale (2 or 4), the window in source tiles, the planes */
+static int32_t z2_vx, z2_vy, z2_maxx, z2_maxy, z2_dirx, z2_diry; static uint32_t z2_shown, z2_active, z2_ncopy, z2_nrecentre;      /* the view on screen (output pixels, the level times the scale): its corner, the limits of the corner, the pan's direction, 1 once a view shows */
 static uint32_t z2_ot(void) { return 128u * z2_s; }                                                   /* output pixels of a source tile */
 static uint32_t z2_pitch(void) { return z2_tx * z2_ot() * 3u; }                                       /* bytes of a plane row */
+static uint32_t z2_base(uint32_t p) { return z2_s == 2u ? (p ? GAL_WIN1 : GAL_WIN0) : (p ? GAL_WIN0 : GAL_Z4P0); }
 static void z2_setup(uint32_t s)
 {
-    z2_s = s; z2_tx = s == 2u ? 5u : 4u; z2_ty = s == 2u ? 5u : 3u; z2_np = s == 2u ? 2u : 1u;
+    z2_s = s; z2_tx = s == 2u ? 5u : 4u; z2_ty = s == 2u ? 5u : 3u; z2_np = 2u;
     const uint32_t W2 = s * v1z.w, H2 = s * v1z.h;
     z2_maxx = (int32_t)((W2 > (uint32_t)GV_SCREEN_W ? W2 - (uint32_t)GV_SCREEN_W : 0u) & ~3u); z2_maxy = (int32_t)(H2 > (uint32_t)GV_SCREEN_H ? H2 - (uint32_t)GV_SCREEN_H : 0u);
 }
 static int32_t z2_floor4(int32_t v) { return v & ~3; }
 static void z2_clampv(int32_t *x, int32_t *y) { *x = *x < 0 ? 0 : *x > z2_maxx ? z2_maxx : z2_floor4(*x); *y = *y < 0 ? 0 : *y > z2_maxy ? z2_maxy : *y; }
+/* What the plane on screen must cover for the view at (wx, wy): the view and, around it, all the room the window has after the tile edges are allowed for (window - (tile - 1) - view), a small part behind the pan and the rest ahead of it. */
+static void z2_need(int32_t wx, int32_t wy, int32_t *x, int32_t *y, int32_t *w, int32_t *h)
+{
+    for (int ax = 0; ax < 2; ax++) {
+        const int32_t ot = (int32_t)z2_ot(), win = (int32_t)(ax ? z2_ty : z2_tx) * ot, view = ax ? GV_SCREEN_H : GV_SCREEN_W, slack = win - (ot - 1) - view, mb = z2_s == 2u ? 48 : 64, dir = ax ? z2_diry : z2_dirx;
+        const int32_t lo = dir > 0 ? (mb < slack / 2 ? mb : slack / 2) : dir < 0 ? slack - (mb < slack / 2 ? mb : slack / 2) : slack / 2, v = ax ? wy : wx;
+        if (ax) { *y = v - lo; *h = view + slack; } else { *x = v - lo; *w = view + slack; }
+    }
+}
 static int z2_has(uint32_t p, int32_t tx, int32_t ty) { return tx >= (int32_t)z2_wtx[p] && tx < (int32_t)(z2_wtx[p] + z2_tx) && ty >= (int32_t)z2_wty[p] && ty < (int32_t)(z2_wty[p] + z2_ty) && tx < (int32_t)v1z.cols && ty < (int32_t)v1z.rows; }
+static int z2_isres(uint32_t p, int32_t tx, int32_t ty) { return z2_has(p, tx, ty) && z2_res[p][(ty - (int32_t)z2_wty[p]) * (int32_t)z2_tx + (tx - (int32_t)z2_wtx[p])]; }
 static void z2_rect(int32_t x, int32_t y, int32_t w, int32_t h, int32_t *tx0, int32_t *ty0, int32_t *tx1, int32_t *ty1)      /* the tiles that the output rectangle touches, inside the level */
 {
     int32_t x0 = x < 0 ? 0 : x, y0 = y < 0 ? 0 : y, x1 = x + w, y1 = y + h; const int32_t W2 = (int32_t)(z2_s * v1z.w), H2 = (int32_t)(z2_s * v1z.h), ot = (int32_t)z2_ot();
@@ -879,7 +893,7 @@ static void z2_rect(int32_t x, int32_t y, int32_t w, int32_t h, int32_t *tx0, in
 static int z2_whole(uint32_t p, int32_t x, int32_t y, int32_t w, int32_t h)                     /* every tile of the rectangle is in plane p's window and decoded */
 {
     int32_t a, b, c, d; z2_rect(x, y, w, h, &a, &b, &c, &d);
-    for (int32_t ty = b; ty <= d; ty++) for (int32_t tx = a; tx <= c; tx++) if (!z2_has(p, tx, ty) || !z2_res[p][(ty - (int32_t)z2_wty[p]) * (int32_t)z2_tx + (tx - (int32_t)z2_wtx[p])]) return 0;
+    for (int32_t ty = b; ty <= d; ty++) for (int32_t tx = a; tx <= c; tx++) if (!z2_isres(p, tx, ty)) return 0;
     return 1;
 }
 static int z2_covers(uint32_t p, int32_t x, int32_t y, int32_t w, int32_t h)                    /* every tile of the rectangle is in plane p's window (decoded or not) */
@@ -888,119 +902,128 @@ static int z2_covers(uint32_t p, int32_t x, int32_t y, int32_t w, int32_t h)    
     for (int32_t ty = b; ty <= d; ty++) for (int32_t tx = a; tx <= c; tx++) if (!z2_has(p, tx, ty)) return 0;
     return 1;
 }
-static void z2_aim(uint32_t p, int32_t cx, int32_t cy)                                           /* plane p's window around the output point (cx, cy), no tile whole */
+static void z2_aim(uint32_t p, int32_t wx, int32_t wy)                                           /* plane p's window around what the view at (wx, wy) needs, no tile whole */
 {
-    const int32_t lx = cx - (GV_SCREEN_W / 2 + z2_margin()), ly = cy - (GV_SCREEN_H / 2 + z2_margin());                                  /* the left and top of what the view and its margin need */
-    int32_t tx = lx < 0 ? 0 : lx / (int32_t)z2_ot(), ty = ly < 0 ? 0 : ly / (int32_t)z2_ot(), mx = (int32_t)v1z.cols - (int32_t)z2_tx, my = (int32_t)v1z.rows - (int32_t)z2_ty;
+    int32_t nx, ny, nw, nh; z2_need(wx, wy, &nx, &ny, &nw, &nh);
+    int32_t tx = nx < 0 ? 0 : nx / (int32_t)z2_ot(), ty = ny < 0 ? 0 : ny / (int32_t)z2_ot(), mx = (int32_t)v1z.cols - (int32_t)z2_tx, my = (int32_t)v1z.rows - (int32_t)z2_ty;
     if (mx < 0) mx = 0; if (my < 0) my = 0;
-    if (tx < 0) tx = 0; if (tx > mx) tx = mx; if (ty < 0) ty = 0; if (ty > my) ty = my;
+    if (tx > mx) tx = mx; if (ty > my) ty = my;
     z2_wtx[p] = (uint32_t)tx; z2_wty[p] = (uint32_t)ty; for (uint32_t i = 0; i < 25u; i++) z2_res[p][i] = 0u;
 }
+static uint32_t z2_us(uint32_t t0) { return (uint32_t)(cycles() - t0) / (CLK_HZ / 1000000u); }
 static int z2_decode(uint32_t p, int32_t tx, int32_t ty)                                         /* the tile's stream once from the card, the tile s * s times into the blocks; 1 on a failure */
 {
     uint32_t off; if (v1_land_stream(tx, ty, 0u, &off)) return 1;
-    const uint32_t pitch = z2_pitch(), ot = z2_ot(), col = (uint32_t)tx - z2_wtx[p], row = (uint32_t)ty - z2_wty[p], dst = win_base(p) * 2u + row * ot * pitch + col * ot * 3u;
+    const uint32_t t0 = cycles(), pitch = z2_pitch(), ot = z2_ot(), col = (uint32_t)tx - z2_wtx[p], row = (uint32_t)ty - z2_wty[p], dst = z2_base(p) * 2u + row * ot * pitch + col * ot * 3u;
     int r = 0; tgy_hw_scatter(1, (int32_t)(3u * z2_s), (int32_t)(z2_s * pitch));
     for (uint32_t k = 0; k < z2_s * z2_s && !r; k++) {
         const uint32_t a = k % z2_s, b = k / z2_s;
         if (tgy_hw_start_from(&v1fz, &v1z, (uint32_t)tx, (uint32_t)ty, dst + a * 3u + b * pitch, pitch, v1_stream_hw(0u) * 2u + off) != TH_OK || tgy_hw_finish() != TH_OK) r = 1;
     }
     tgy_hw_scatter(0, 3, 0);
-    if (!r) z2_res[p][row * z2_tx + col] = 1u;
+    if (!r) { const uint32_t us = z2_us(t0); z2_res[p][row * z2_tx + col] = 1u; info.zt_dec_n++; info.zt_dec_sum += us; if (us > info.zt_dec_max) info.zt_dec_max = us; info.copy_ms = us / 1000u; }
     return r;
+}
+static void z2_copy(uint32_t f, uint32_t b, int32_t tx, int32_t ty)                              /* the tile from plane f (whole there) to plane b: Talos copies its rows, 96 halfwords a command */
+{
+    const uint32_t t0 = cycles(), ph = z2_pitch() / 2u, ot = z2_ot(), rowhw = ot * 3u / 2u;
+    const uint32_t sb = z2_base(f) + ((uint32_t)ty - z2_wty[f]) * ot * ph + ((uint32_t)tx - z2_wtx[f]) * rowhw, db = z2_base(b) + ((uint32_t)ty - z2_wty[b]) * ot * ph + ((uint32_t)tx - z2_wtx[b]) * rowhw;
+    for (uint32_t r = 0; r < ot; r++) for (uint32_t o = 0; o < rowhw; o += 96u) gfx_blit_raw(sb + r * ph, db + r * ph, o, o, 96u);
+    gfx_fence(); z2_res[b][((uint32_t)ty - z2_wty[b]) * z2_tx + ((uint32_t)tx - z2_wtx[b])] = 1u; info.flip_ms = z2_us(t0) / 1000u; z2_ncopy++;
 }
 static void z2_show(uint32_t p, int32_t vx, int32_t vy)
 {
     const uint32_t pitch = z2_pitch();
     REG_WR(R_VIEW_STRIDE, pitch / 2u);
-    REG_WR(R_VIEW_BASE, win_base(p) + (uint32_t)(vy - (int32_t)(z2_wty[p] * z2_ot())) * (pitch / 2u) + (uint32_t)(vx - (int32_t)(z2_wtx[p] * z2_ot())) * 3u / 2u);
+    REG_WR(R_VIEW_BASE, z2_base(p) + (uint32_t)(vy - (int32_t)(z2_wty[p] * z2_ot())) * (pitch / 2u) + (uint32_t)(vx - (int32_t)(z2_wtx[p] * z2_ot())) * 3u / 2u);
     z2_vx = vx; z2_vy = vy; z2_shown = 1u; view_hidden = 0u;
 }
-/* Decodes the next tile of plane tp that the view at (wx, wy) needs: first the tiles of the view itself, then the margin, nearest to the view's centre first. 0: none left, 1: decoded one, -1: a read failed. */
-static int z2_work(uint32_t tp, int32_t wx, int32_t wy)
+/* The next tile of plane tp for the view at (wx, wy): first the tiles of the view itself, then the rest of what it needs (ahead of the pan first), nearest to the view's centre; from plane `from` (whole there) it is copied, else decoded. 0: none left, 1: done one, -1: a read failed. */
+static int z2_work(uint32_t tp, uint32_t from, int32_t wx, int32_t wy)
 {
     int32_t bx = 0, by = 0, best = -1, bd = 0x7FFFFFFF;
     for (int pass = 0; pass < 2 && best < 0; pass++) {
-        const int32_t m = pass ? z2_margin() : 0; int32_t a, b, c, d; z2_rect(wx - m, wy - m, GV_SCREEN_W + 2 * m, GV_SCREEN_H + 2 * m, &a, &b, &c, &d);
+        int32_t rx = wx, ry = wy, rw = GV_SCREEN_W, rh = GV_SCREEN_H, a, b, c, d; if (pass) z2_need(wx, wy, &rx, &ry, &rw, &rh);
+        z2_rect(rx, ry, rw, rh, &a, &b, &c, &d);
         for (int32_t ty = b; ty <= d; ty++) for (int32_t tx = a; tx <= c; tx++) {
-            if (!z2_has(tp, tx, ty) || z2_res[tp][(ty - (int32_t)z2_wty[tp]) * (int32_t)z2_tx + (tx - (int32_t)z2_wtx[tp])]) continue;
+            if (!z2_has(tp, tx, ty) || z2_isres(tp, tx, ty)) continue;
             const int32_t ot = (int32_t)z2_ot(), mx = tx * ot + ot / 2 - (wx + GV_SCREEN_W / 2), my = ty * ot + ot / 2 - (wy + GV_SCREEN_H / 2), dd = mx * mx + my * my;
             if (dd < bd) { bd = dd; best = 1; bx = tx; by = ty; }
         }
     }
     if (best < 0) return 0;
+    if (from != tp && z2_isres(from, bx, by)) { z2_copy(from, tp, bx, by); return 1; }
     return z2_decode(tp, bx, by) ? -1 : 1;
 }
-/* The zoom loop. level: 2 or 4. (*cx, *cy): the screen's centre in the level's own pixels, in and out. Returns 0 for the 1:1 view, 1 for the fit view, 2 to leave for the grid, -1 when a tile could not be read. */
+static void z2_stats_reset(void) { info.zt_n = info.zt_land_sum = info.zt_land_max = info.zt_dec_n = info.zt_dec_sum = info.zt_dec_max = info.zt_pass_max = info.zt_catch = info.zt_moved = info.zt_stall_run_max = 0u; info.zoom_ms = GI_NONE; }
+/* The zoom loop. level: 2 or 4. (*cx, *cy): the screen's centre in the level's own pixels, in and out. Returns 0 for the 1:1 view, 1 for the fit view, 2 to leave for the grid, 3 for the 1:1 view's map, -1 when a tile could not be read. */
 static int z2_run(int32_t *cx, int32_t *cy, uint32_t level)
 {
-    uint32_t f = 1u - t_shown_win, composing = 0u, held = 0u, next_tick = cycles(), prev = REG_RD(R_INPUT) & 0xFFFFu, b_t0 = 0u, b_on = 0u; int ret = 0;
-    z2_setup(level); z2_shown = 0u; z2_active = 1u; v1_pre.valid = 0u;
+    uint32_t f = 1u - t_shown_win, composing = 0u, held = 0u, next_tick = cycles(), prev = REG_RD(R_INPUT) & 0xFFFFu, b_t0 = 0u, b_on = 0u, z_run = 0u, t_level = cycles(), t_comp = 0u; int ret = 0;
+    z2_setup(level); z2_shown = 0u; z2_active = 1u; z2_ncopy = z2_nrecentre = 0u; z2_dirx = z2_diry = 0; v1_pre.valid = 0u; z2_stats_reset();
     int32_t wx = (int32_t)z2_s * *cx - GV_SCREEN_W / 2, wy = (int32_t)z2_s * *cy - GV_SCREEN_H / 2; z2_clampv(&wx, &wy);                  /* the wanted corner: the keys move it at once */
-    if (z2_np == 1u) f = 0u;                                                                                                  /* one plane over both windows: the 1:1 view is gone while it is composed */
-    else f = 1u - t_shown_win;                                                                                                 /* the first plane is composed where the 1:1 view is not: it stays on screen until the 2x view is ready */
-    if (z2_np == 1u) hide_view();
-    z2_aim(f, wx + GV_SCREEN_W / 2, wy + GV_SCREEN_H / 2);
+    z2_aim(f, wx, wy);                                                                                                        /* the first plane is composed where the 1:1 view is not: that view stays on the screen until the zoom's first view is ready */
     for (;;) {
-        const uint32_t keys = REG_RD(R_INPUT) & 0xFFFFu, edge = keys & ~prev; prev = keys;
+        const uint32_t pass_t0 = cycles(), keys = REG_RD(R_INPUT) & 0xFFFFu, edge = keys & ~prev; prev = keys;
         if (edge) last_act = cycles();
         settings_tick();
-        int32_t nlevel = 0;                                                                                                   /* a level change asked for: 1 = 1:1 view, 2 = the next scale up or down */
-        if (edge & KEY_A) { if (z2_s == 2u) nlevel = 4; }                                                                      /* A again: the next level in (4x is the last) */
-        if (edge & KEY_R1) { if (z2_s == 2u) nlevel = 4; }
+        int32_t nlevel = 0;                                                                                                   /* a level change asked for: -1 = the 1:1 view, 2 or 4 = that scale */
+        if (edge & KEY_START) { ret = 3; break; }                                                                              /* Start: the 1:1 view's map, to choose the area */
+        if (edge & (KEY_A | KEY_R1)) { if (z2_s == 2u) nlevel = 4; }                                                           /* A again: the next level in (4x is the last) */
         if (edge & KEY_L1) nlevel = z2_s == 4u ? 2 : -1;
         if (edge & KEY_B) { b_t0 = cycles(); b_on = 1u; }                                                                      /* B: back a level on release, the grid when held */
         if (b_on && !(keys & KEY_B)) { b_on = 0u; nlevel = z2_s == 4u ? 2 : -1; }
         else if (b_on && (uint32_t)(cycles() - b_t0) > B_LONG) { ret = 2; break; }
         if (nlevel == -1) { ret = 0; break; }
-        if (nlevel != 0) {                                                                                                     /* 2x <-> 4x: the centre kept, the plane built again (the screen goes black while it is) */
+        if (nlevel != 0) {                                                                                                     /* 2x <-> 4x: the centre kept, the first plane of the new scale composed while the old view stays on the screen */
             *cx = ((z2_shown ? z2_vx : wx) + GV_SCREEN_W / 2) / (int32_t)z2_s; *cy = ((z2_shown ? z2_vy : wy) + GV_SCREEN_H / 2) / (int32_t)z2_s;
-            z2_setup((uint32_t)nlevel); z2_shown = 0u; composing = 0u; f = 0u; hide_view();
+            if (z2_s == 4u && f == 1u) hide_view();                                                                            /* the 4x plane in the second place covers both windows: nothing is left to compose the 2x one in while it is on the screen */
+            z2_setup((uint32_t)nlevel); z2_shown = 0u; composing = 0u; f = nlevel == 4 ? 0u : 1u; z2_dirx = z2_diry = 0; z2_stats_reset(); t_level = cycles(); held = 0u;
             wx = (int32_t)z2_s * *cx - GV_SCREEN_W / 2; wy = (int32_t)z2_s * *cy - GV_SCREEN_H / 2; z2_clampv(&wx, &wy);
-            z2_aim(f, wx + GV_SCREEN_W / 2, wy + GV_SCREEN_H / 2);
+            z2_aim(f, wx, wy);
         }
         const uint32_t now = cycles();
         if ((int32_t)(now - next_tick) >= 0) {                                                                                 /* a frame: the held direction moves the wanted corner */
             next_tick = now + ZOOM_FRAME;
             const int dx = (keys & KEY_RIGHT) ? 1 : (keys & KEY_LEFT) ? -1 : 0, dy = (keys & KEY_DOWN) ? 1 : (keys & KEY_UP) ? -1 : 0;
             held = (dx || dy) ? held + 1u : 0u;
-            if (z2_shown) { const int32_t st = held < 8u ? 8 : 16; wx += dx * st; wy += dy * st; z2_clampv(&wx, &wy); }
+            if (dx || dy) { z2_dirx = dx; z2_diry = dy; }                                                                      /* the pan's direction (kept when the keys let go: the next pan is likely the same way) */
+            if (z2_shown) { wx += dx * Z2_FOLLOW; wy += dy * Z2_FOLLOW; z2_clampv(&wx, &wy); if (wx != z2_vx || wy != z2_vy) info.zt_catch++; }
         }
-        if (z2_shown) {                                                                                                       /* the plane on screen must cover the wanted view and a margin; if it does not, another is composed around it */
-            if (!z2_covers(f, wx - z2_margin(), wy - z2_margin(), GV_SCREEN_W + 2 * z2_margin(), GV_SCREEN_H + 2 * z2_margin())) {
-                if (z2_np == 1u) { hide_view(); z2_shown = 0u; z2_aim(f, wx + GV_SCREEN_W / 2, wy + GV_SCREEN_H / 2); }               /* 4x: one plane, so the screen goes black while it is aimed again */
-                else {
-                    const uint32_t b = 1u - f;
-                    if (!composing || !z2_covers(b, wx - z2_margin(), wy - z2_margin(), GV_SCREEN_W + 2 * z2_margin(), GV_SCREEN_H + 2 * z2_margin())) { z2_aim(b, wx + GV_SCREEN_W / 2, wy + GV_SCREEN_H / 2); composing = 1u; }
-                }
-            } else composing = 0u;
+        if (z2_shown) {                                                                                                       /* the plane on screen must cover what the wanted view needs; if it does not, the other one is aimed there and composed */
+            int32_t nx, ny, nw, nh; z2_need(wx, wy, &nx, &ny, &nw, &nh); const uint32_t b = 1u - f;
+            if (!z2_covers(f, nx, ny, nw, nh)) { if (!composing || !z2_covers(b, nx, ny, nw, nh)) { z2_aim(b, wx, wy); composing = 1u; t_comp = cycles(); z2_nrecentre++; } }
+            else composing = 0u;
         }
-        const uint32_t tp = composing ? 1u - f : f;                                                                           /* the plane being built */
-        { const int w = z2_work(tp, wx, wy); if (w < 0) { ret = -1; break; } }
-        if (composing && z2_whole(1u - f, wx, wy, GV_SCREEN_W, GV_SCREEN_H)) { f = 1u - f; composing = 0u; z2_show(f, wx, wy); }          /* the other plane has the view: it goes on screen (the one it replaces is the next to be composed) */
-        else if (!z2_shown) { if (z2_whole(f, wx, wy, GV_SCREEN_W, GV_SCREEN_H)) z2_show(f, wx, wy); }                                  /* the first view */
+        { const int w = composing ? z2_work(1u - f, f, wx, wy) : z2_work(f, f, wx, wy); if (w < 0) { ret = -1; break; } }
+        int moved = 0;
+        if (composing && z2_whole(1u - f, wx, wy, GV_SCREEN_W, GV_SCREEN_H)) { f = 1u - f; composing = 0u; z2_show(f, wx, wy); moved = 1; info.flip_ms = z2_us(t_comp) / 1000u; }   /* the other plane has the view: it goes on screen */
+        else if (!z2_shown) { if (z2_whole(f, wx, wy, GV_SCREEN_W, GV_SCREEN_H)) { z2_show(f, wx, wy); info.zoom_ms = (uint32_t)(cycles() - t_level) / (CLK_HZ / 1000u); } }                          /* the first view */
         else {                                                                                                              /* the shown view follows the wanted one where its tiles are whole */
             int32_t nx = z2_vx + (wx - z2_vx > Z2_FOLLOW ? Z2_FOLLOW : wx - z2_vx < -Z2_FOLLOW ? -Z2_FOLLOW : wx - z2_vx), ny = z2_vy + (wy - z2_vy > Z2_FOLLOW ? Z2_FOLLOW : wy - z2_vy < -Z2_FOLLOW ? -Z2_FOLLOW : wy - z2_vy);
             nx = z2_floor4(nx);
             if (nx != z2_vx || ny != z2_vy) {
-                if (z2_whole(f, nx, ny, GV_SCREEN_W, GV_SCREEN_H)) z2_show(f, nx, ny);
-                else if (nx != z2_vx && z2_whole(f, nx, z2_vy, GV_SCREEN_W, GV_SCREEN_H)) z2_show(f, nx, z2_vy);
-                else if (ny != z2_vy && z2_whole(f, z2_vx, ny, GV_SCREEN_W, GV_SCREEN_H)) z2_show(f, z2_vx, ny);
+                if (z2_whole(f, nx, ny, GV_SCREEN_W, GV_SCREEN_H)) { z2_show(f, nx, ny); moved = 1; }
+                else if (nx != z2_vx && z2_whole(f, nx, z2_vy, GV_SCREEN_W, GV_SCREEN_H)) { z2_show(f, nx, z2_vy); moved = 1; }
+                else if (ny != z2_vy && z2_whole(f, z2_vx, ny, GV_SCREEN_W, GV_SCREEN_H)) { z2_show(f, z2_vx, ny); moved = 1; }
             }
+            if (wx != z2_vx || wy != z2_vy) { if (moved) { info.zt_moved++; z_run = 0u; } else { z_run++; if (z_run > info.zt_stall_run_max) info.zt_stall_run_max = z_run; } } else z_run = 0u;
         }
+        { const uint32_t us = z2_us(pass_t0); if (us > info.zt_pass_max) info.zt_pass_max = us; }
     }
     z2_active = 0u; view_hidden = 0u;
     if (ret >= 0) { const int32_t vx = z2_shown ? z2_vx : wx, vy = z2_shown ? z2_vy : wy; *cx = (vx + GV_SCREEN_W / 2) / (int32_t)z2_s; *cy = (vy + GV_SCREEN_H / 2) / (int32_t)z2_s; }
     return ret;
 }
-static uint32_t zoom_to_grid;                                                                   /* z2_run saw a long B: the viewer leaves for the grid */
+static uint32_t zoom_to_grid, zoom_want_map;                                                                   /* z2_run saw a long B: the viewer leaves for the grid */
 static void z2_enter(void)                                                                       /* A (or R1) at the 1:1 view of a version 1 picture */
 {
     if (2u * v1z.w < (uint32_t)GV_SCREEN_W || 2u * v1z.h < (uint32_t)GV_SCREEN_H) return;       /* a level whose doubled size is smaller than the screen (a panorama) has no 2x view: the plane would show stale rows */
     const int k = zk; int32_t cx = z_sx + GV_SCREEN_W / 2, cy = z_sy + GV_SCREEN_H / 2;
     const int r = z2_run(&cx, &cy, 2u);
-    zoom_leave();                                                                                /* the zoom's windows were written over: the 1:1 view is opened again at the same centre */
-    if (r == 0) zoom_open(k, cx - GV_SCREEN_W / 2, cy - GV_SCREEN_H / 2);
+    zoom_leave(); z2_hold = 1u;                                                                  /* the Info page keeps the 2x or 4x run's numbers until the next zoom from the fit view */                                                                                /* the zoom's windows were written over: the 1:1 view is opened again at the same centre */
+    if (r == 0 || r == 3) zoom_open(k, cx - GV_SCREEN_W / 2, cy - GV_SCREEN_H / 2);
+    if (r == 3) zoom_want_map = 1u;                                                              /* the 1:1 view's map, as soon as that view is up */
     else if (r < 0) say("ZOOM READ FAILED", BAD);
     else if (r == 2) zoom_to_grid = 1u;                                                          /* the caller leaves for the grid */
 }
@@ -1013,7 +1036,7 @@ static void viewer(void)
         if (lab_on && (edge || (uint32_t)(cycles() - lab_t0) > 2u * CLK_HZ)) lab_clear();                                           /* the name goes at the next key press or after two seconds, before anything draws on the plane */
         settings_tick();
         if (zk >= 0) {
-            if ((edge & KEY_START) && z_shown) { map_active = 1u; map_mode(); map_active = 0u; held = 0u; next_tick = cycles(); prev = REG_RD(R_INPUT) & 0xFFFFu; continue; }                   /* START: the map */
+            if (((edge & KEY_START) || zoom_want_map) && z_shown) { zoom_want_map = 0u; map_active = 1u; map_mode(); map_active = 0u; held = 0u; next_tick = cycles(); prev = REG_RD(R_INPUT) & 0xFFFFu; continue; }                   /* START: the map */
             if (edge & KEY_B) { b_t0 = cycles(); b_on = 1u; continue; }                                /* B: back one level when released (fit from the first), the grid when held */
             if (b_on && !(keys & KEY_B)) { b_on = 0u; zoom_goto(zk > 0 ? zk - 1 : -1); held = 0u; next_tick = cycles(); continue; }
             if (b_on && (uint32_t)(cycles() - b_t0) > B_LONG) { b_on = 0u; zoom_leave(); gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); return; }
