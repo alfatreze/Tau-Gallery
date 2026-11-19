@@ -42,6 +42,9 @@ int main(void)
       for (unsigned i = 0; i < 8; i++) { for (const char *p = glb_orient[i]; *p; p++) if (*p != ' ' && glb_cols(*p)[0] == 0 && glb_cols(*p)[1] == 0 && glb_cols(*p)[2] == 0 && glb_cols(*p)[3] == 0 && glb_cols(*p)[4] == 0) { ok = 0; printf("  no glyph for '%c' in %s\n", *p, glb_orient[i]); } if (glb_len(glb_orient[i]) > GLB_MAXCH) ok = 0; }
       (void)all; (void)n;
       chk("every filter, mask (turned) and orientation name has a glyph for each character and fits the 30 characters of the bar", ok); }
+    { int ok = 1; const char *t = "FILTER INVERT"; uint8_t rb[GLB_PX * 3u];
+      for (unsigned ty = 0; ty < 21; ty += 3) { glb_row(t, ty, rb); for (unsigned w = 0; w < GLB_PX * 3u / 4u; w++) { const uint32_t want = (uint32_t)rb[4u * w] | (uint32_t)rb[4u * w + 1u] << 8 | (uint32_t)rb[4u * w + 2u] << 16 | (uint32_t)rb[4u * w + 3u] << 24; if (glb_word(t, ty, w) != want) ok = 0; } }
+      chk("glb_word gives exactly the bytes glb_row writes, four at a time (first byte lowest), for every word of the row", ok); }
     { char b[16]; char *q = glb_cat(b, "AB"); q = glb_cat(q, "CD"); chk("glb_cat appends and returns the end", !strcmp(b, "ABCD") && q == b + 4); }
     printf(fails ? "FAILED %d\n" : "PASSED\n", fails); return fails != 0;
 }

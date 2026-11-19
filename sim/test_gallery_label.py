@@ -28,6 +28,8 @@ MUT = [
     ("{ '/', { 0x20, 0x10, 0x08, 0x04, 0x02 } }", "{ '/', { 0x02, 0x04, 0x08, 0x10, 0x20 } }"),
     ("{ ':', { 0x00, 0x36, 0x36, 0x00, 0x00 } }", "{ ':', { 0x00, 0x36, 0x00, 0x00, 0x00 } }"),
     ("static const char *const glb_orient[8] = { \"UPRIGHT\", \"MIRRORED\",", "static const char *const glb_orient[8] = { \"UPRIGHT\", \"MIRRORED~\","),
+    ("if (x >= GLB_TX && glb_on(s, x - GLB_TX, ty)) v |= 255u << (8u * i);", "if (x >= GLB_TX && glb_on(s, x - GLB_TX, ty)) v |= 255u << (8u * (3u - i));"),
+    ("const uint32_t x = (4u * w + i) / 3u;", "const uint32_t x = (4u * w + i) / 4u;"),
     ("static inline char *glb_cat(char *d, const char *s) { while (*s) *d++ = *s++; *d = 0; return d; }", "static inline char *glb_cat(char *d, const char *s) { while (*s) *d++ = *s++; *d = 0; return d + 1; }"),
 ]
 if __name__ == "__main__":

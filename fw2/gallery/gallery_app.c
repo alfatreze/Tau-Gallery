@@ -295,7 +295,6 @@ static void show_view(void)                                                     
  * landing window) and back when the bar goes: at the next key press or after two seconds. ---- */
 #define GAL_LABSAVE 0x3D3000u                    /* halfword address of the 32 saved rows (38,400 halfwords): after the black plane (which ends at 0x3D2F00), before the landing window at 0x400000 */
 static uint32_t lab_on, lab_t0, lab_base;       /* 1 while the bar is on the plane; when it went up; the plane address of its first row */
-static uint8_t lab_rb[GLB_PX * 3u];
 static void lab_copy(int back)
 {
     const uint32_t total = GLB_H * GAL_LINE_WORDS16;
@@ -312,10 +311,9 @@ static void lab_show(const char *text)
     for (uint32_t i = 0; i < 64u; i++) gfx_mb_write(GAL_ROTZERO + 2u * i, 0u);
     mask_black(view, 0u, GT_CANVAS_W, GLB_Y0, GLB_Y0 + GLB_H); gfx_fence();                              /* the whole bar black */
     for (uint32_t sr = 0; sr < 7u; sr++) {                                                               /* each row of the font is three rows of the plane */
-        glb_row(text, sr * GLB_SCALE, lab_rb);
         for (uint32_t k = 0; k < GLB_SCALE; k++) {
             const uint32_t row = lab_base + (GLB_TY + sr * GLB_SCALE + k) * GAL_LINE_WORDS16;
-            for (uint32_t w = 0; w < GLB_PX * 3u / 4u; w++) gfx_mb_write(row + 2u * w, (uint32_t)lab_rb[4u * w] | (uint32_t)lab_rb[4u * w + 1u] << 8 | (uint32_t)lab_rb[4u * w + 2u] << 16 | (uint32_t)lab_rb[4u * w + 3u] << 24);
+            for (uint32_t w = 0; w < GLB_PX * 3u / 4u; w++) gfx_mb_write(row + 2u * w, glb_word(text, sr * GLB_SCALE, w));      /* four bytes of the row at a time, no row buffer */
         }
     }
     gfx_fence(); lab_on = 1u; lab_t0 = cycles();

@@ -52,6 +52,13 @@ static inline void glb_row(const char *s, uint32_t ty, uint8_t *rb)
         rb[3u * x] = v; rb[3u * x + 1u] = v; rb[3u * x + 2u] = v;
     }
 }
+/* Word w (bytes 4 w .. 4 w + 3 of the row's RGB888 stream, the first byte lowest) of text row ty: the same bytes glb_row writes, without a buffer. */
+static inline uint32_t glb_word(const char *s, uint32_t ty, uint32_t w)
+{
+    uint32_t v = 0;
+    for (uint32_t i = 0; i < 4u; i++) { const uint32_t x = (4u * w + i) / 3u; if (x >= GLB_TX && glb_on(s, x - GLB_TX, ty)) v |= 255u << (8u * i); }
+    return v;
+}
 static inline char *glb_cat(char *d, const char *s) { while (*s) *d++ = *s++; *d = 0; return d; }
 /* The names of the eight orientations (gallery_rot.h numbering). */
 static const char *const glb_orient[8] = { "UPRIGHT", "MIRRORED", "FLIPPED", "TURNED 180", "TRANSPOSED", "TURNED LEFT", "TURNED RIGHT", "ANTI-TRANSPOSED" };
