@@ -16,4 +16,9 @@ jobs:
           mkdir -p toolchain
           curl -sL https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases/download/v15.2.0-1/xpack-riscv-none-elf-gcc-15.2.0-1-linux-x64.tar.gz | tar xz -C toolchain
       - name: gate
-        run: make gate-ci
+        run: |
+          # the host tests build their C with `cc`: build it with the sanitizers here, so a crash on the runner names its line
+          mkdir -p "$RUNNER_TEMP/ccw"
+          printf '#!/bin/sh\nexec /usr/bin/cc -fsanitize=address,undefined -fno-omit-frame-pointer -g "$@"\n' > "$RUNNER_TEMP/ccw/cc"; chmod +x "$RUNNER_TEMP/ccw/cc"
+          export PATH="$RUNNER_TEMP/ccw:$PATH" ASAN_OPTIONS=detect_leaks=0
+          make gate-ci

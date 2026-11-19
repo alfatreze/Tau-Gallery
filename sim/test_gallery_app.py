@@ -127,6 +127,7 @@ BIGSET = None; ZSET = None; V1SET = None; L1SET = None; LBSET = None
 def run(workdir, setdir):
     r = subprocess.run([str(workdir / "t"), str(setdir)], capture_output=True, text=True, timeout=600)
     rc, out = r.returncode, r.stdout
+    if rc: out += f"\nFAIL the plain run exited {rc}\n" + r.stderr[-3000:]                                     # a crash prints nothing on stdout: the sanitizer's or the runtime's words are on stderr
     for sc in SCENARIOS:
         r = subprocess.run([str(workdir / "t"), str(setdir), sc], capture_output=True, text=True, timeout=600)
         if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-200:]
@@ -548,4 +549,4 @@ if __name__ == "__main__":
     if "--v1-mutants" in sys.argv: sys.exit(1 if mutants(setdir, int(sys.argv[sys.argv.index("--v1-mutants") + 1]) if len(sys.argv) > sys.argv.index("--v1-mutants") + 1 else 7) else 0)
     w = Path(tempfile.mkdtemp())
     if not build(w): sys.exit(1)
-    rc, out = run(w, setdir); print("\n".join(l for l in out.splitlines() if "FAIL" in l or "PASSED" in l or "(exit" in l)); sys.exit(rc)
+    rc, out = run(w, setdir); print("\n".join(l for l in out.splitlines() if "FAIL" in l or "PASSED" in l or "(exit" in l)); (rc and "FAIL the plain run" in out) and print(out[out.index("FAIL the plain run"):][:3500]); sys.exit(rc)
