@@ -24,7 +24,7 @@ def build_run(hdr):
     w = Path(tempfile.mkdtemp()); (w / "gallery_lut.h").write_text(hdr); (w / "t.c").write_text(PROG)
     env = dict(os.environ); sdk = subprocess.run([sys.executable, str(ROOT / "tools/toolchain.py"), "sdkroot"], capture_output=True, text=True).stdout.strip()
     if sdk: env["SDKROOT"] = sdk
-    r = subprocess.run(["cc", "-w", "-o", str(w / "t"), str(w / "t.c")], capture_output=True, text=True, env=env)
+    r = subprocess.run(["cc", "-w", "-o", str(w / "t"), str(w / "t.c"), "-lm"], capture_output=True, text=True, env=env)
     if r.returncode: print(r.stderr[:600]); return None
     return subprocess.run([str(w / "t")], capture_output=True, text=True).stdout
 def check(out):

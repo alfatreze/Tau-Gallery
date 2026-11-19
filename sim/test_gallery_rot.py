@@ -17,7 +17,7 @@ def build(text=None):
     h = HARNESS.read_text().replace('#include "../fw2/gallery/gallery_rot.h"', f'#include "{d / "gallery_rot.h"}"'); (d / "h.c").write_text(h)
     env = dict(os.environ); sdk = subprocess.run([sys.executable, str(ROOT / "tools/toolchain.py"), "sdkroot"], capture_output=True, text=True).stdout.strip()
     if sdk: env["SDKROOT"] = sdk
-    subprocess.run(["cc", "-O1", "-w", "-o", str(d / "h"), str(d / "h.c")], check=True, env=env); return d / "h"
+    subprocess.run(["cc", "-O1", "-w", "-o", str(d / "h"), str(d / "h.c"), "-lm"], check=True, env=env); return d / "h"
 def run(exe, iw, ih, pitch): return subprocess.run([str(exe), str(iw), str(ih), str(pitch)], capture_output=True, text=True).stdout.splitlines()
 def evaluate(exe):
     global fails

@@ -17,7 +17,7 @@ def build(src_text=None):
     (d / "gallery_fmt.c").write_text(src_text if src_text is not None else SRC.read_text()); (d / "gallery_fmt.h").write_text((ROOT / "fw2/gallery/gallery_fmt.h").read_text()); h.write_text(text)
     env = dict(os.environ); sdk = subprocess.run([sys.executable, str(ROOT / "tools/toolchain.py"), "sdkroot"], capture_output=True, text=True).stdout.strip()
     if sdk: env["SDKROOT"] = sdk
-    subprocess.run(["cc", "-O1", "-w", "-o", str(d / "h"), str(h)], check=True, env=env)
+    subprocess.run(["cc", "-O1", "-w", "-o", str(d / "h"), str(h), "-lm"], check=True, env=env)
     return d / "h"
 
 def run(kind, path):

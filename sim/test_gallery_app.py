@@ -118,7 +118,7 @@ def build(workdir, fw=None):
     (workdir / "sim").mkdir(exist_ok=True); (workdir / "sim/t.c").write_text(text)
     env = dict(os.environ); sdk = subprocess.run([sys.executable, str(ROOT / "tools/toolchain.py"), "sdkroot"], capture_output=True, text=True).stdout.strip()
     if sdk: env["SDKROOT"] = sdk
-    r = subprocess.run(["cc", "-O1", "-w", "-o", str(workdir / "t"), str(workdir / "sim/t.c")], capture_output=True, text=True, env=env)
+    r = subprocess.run(["cc", "-O1", "-w", "-o", str(workdir / "t"), str(workdir / "sim/t.c"), "-lm"], capture_output=True, text=True, env=env)
     if r.returncode: print(r.stderr[:3000]); return False
     return True
 

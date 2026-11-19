@@ -15,7 +15,7 @@ def build(text=None):
     (d / "h.c").write_text(HARNESS.read_text().replace('#include "../fw2/gallery/gallery_mask.h"', f'#include "{d / "gallery_mask.h"}"'))
     env = dict(os.environ); sdk = subprocess.run([sys.executable, str(ROOT / "tools/toolchain.py"), "sdkroot"], capture_output=True, text=True).stdout.strip()
     if sdk: env["SDKROOT"] = sdk
-    subprocess.run(["cc", "-O1", "-w", "-o", str(d / "h"), str(d / "h.c")], check=True, env=env); return d / "h"
+    subprocess.run(["cc", "-O1", "-w", "-o", str(d / "h"), str(d / "h.c"), "-lm"], check=True, env=env); return d / "h"
 def run(exe, x, y, w, h): return subprocess.run([str(exe), str(x), str(y), str(w), str(h)], capture_output=True, text=True).stdout.splitlines()
 def ref(i, p, x, y, w, h):
     n, d = RATIO[i]

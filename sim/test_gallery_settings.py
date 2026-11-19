@@ -10,7 +10,7 @@ def build(extra, hdr=None):
     (w / "sim/t.c").write_text((ROOT / "sim/test_gallery_settings.c").read_text())
     env = dict(os.environ); sdk = subprocess.run([sys.executable, str(ROOT / "tools/toolchain.py"), "sdkroot"], capture_output=True, text=True).stdout.strip()
     if sdk: env["SDKROOT"] = sdk
-    r = subprocess.run(["cc", "-O1", "-w", *extra, "-o", str(w / "t"), str(w / "sim/t.c")], capture_output=True, text=True, env=env)
+    r = subprocess.run(["cc", "-O1", "-w", *extra, "-o", str(w / "t"), str(w / "sim/t.c"), "-lm"], capture_output=True, text=True, env=env)
     if r.returncode: print(r.stderr[:2000]); return None
     return w
 def run(w):
