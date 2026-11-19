@@ -1128,7 +1128,12 @@ test-rtl-tgy-soc: $(RTL_BUILD_DIR)/tau_soc_sim.v
 # What the GitHub runner runs (.github/workflows/gate.yml): the gallery's own host tests and the decoder blocks. `gate` also runs the music player's `test-host-fast`,
 # whose tests need a built ROM, an installed card or the music player's files and fail on a clean clone (they are not the gallery's).
 .PHONY: gate-ci
-gate-ci: test-gallery-ci test-tgy-hw test-rtl-tgy-tile test-rtl-tgy-ent test-rtl-tgy-dec test-rtl-tgy-dma test-rtl-tgy-unit test-rtl-tgy-wfifo test-rtl-dmux test-rtl-tgy-soc
+gate-ci: test-gallery-ci test-tgy-hw-plain test-rtl-tgy-tile test-rtl-tgy-ent test-rtl-tgy-dec
+# The runner measured (2026-11-19): the tile test 4 minutes, entropy and decoder under 1 minute each, the DMA test over 36 minutes (cut off), and the decoder driver's mutants 12 minutes.
+# The rest of `gate` (DMA, unit, wfifo, dmux, soc and the driver's mutants) is for `make gate` on a Mac.
+.PHONY: test-tgy-hw-plain
+test-tgy-hw-plain:
+	$(PYTHON) sim/test_tgy_hw.py
 
 .PHONY: test-gallery-ci
 test-gallery-ci:
