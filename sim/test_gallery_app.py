@@ -548,4 +548,4 @@ if __name__ == "__main__":
     if "--v1-mutants" in sys.argv: sys.exit(1 if mutants(setdir, int(sys.argv[sys.argv.index("--v1-mutants") + 1]) if len(sys.argv) > sys.argv.index("--v1-mutants") + 1 else 7) else 0)
     w = Path(tempfile.mkdtemp())
     if not build(w): sys.exit(1)
-    rc, out = run(w, setdir); print("\n".join(l for l in out.splitlines() if "FAIL" in l or "PASSED" in l)); sys.exit(rc)
+    rc, out = run(w, setdir); print("\n".join(l for l in out.splitlines() if "FAIL" in l or "PASSED" in l or "(exit" in l)); sys.exit(rc)
