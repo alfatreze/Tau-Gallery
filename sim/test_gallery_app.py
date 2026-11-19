@@ -80,6 +80,13 @@ def make_libbig_set(d, n=60):
     ents = [dict(path=f"Assets/tau_gallery/common/photos/l{i:02d}.tgy", name=f"Img {i:02d}", size=1000 + i, width=640, height=480) for i in range(n)]
     (d / "tau-library.tdb").write_bytes(tgy.pack_index_v1(ents, [lib1_thumb(i) for i in range(n)]))
 
+def make_v1idx_set(d):
+    """The version 1 pictures of make_v1_set under a version 1 index (square cropped thumbnails, one folder): the grid opens their details with the thumbnail a crop of the picture."""
+    make_v1_set(d)
+    old = tgy.parse_index_full((d / "tau-library.tdb").read_bytes())
+    ents = [dict(path=e["path"], name=e["name"], size=e["size"], width=e["width"], height=e["height"], folder=0, details={"format": "JPEG"}) for e in old["entries"]]
+    (d / "tau-library.tdb").write_bytes(tgy.pack_index_v1(ents, [lib1_thumb(i) for i in range(len(ents))], [dict(name="All")]))
+
 def make_lib1_set(d):
     """A version 1 library of 36 pictures in three folders (Alpha 20, Beta 3, Gamma 13): 96 x 96 thumbnails of their own pattern, and picture files for the three of Beta (the viewer scenario)."""
     ents, ths = [], []
@@ -123,7 +130,7 @@ def build(workdir, fw=None):
     return True
 
 SCENARIOS = ("resume5", "resume17", "badcrc", "toohigh", "off", "layout0", "ocean_light", "badlook", "details")     # boot scenarios: the saved state, the grid must open on picture 6 or 18, or on picture 1 when it is not the same picture / resume is off / the file is not ours
-BIGSET = None; ZSET = None; V1SET = None; L1SET = None; LBSET = None
+BIGSET = None; ZSET = None; V1SET = None; V1ISET = None; L1SET = None; LBSET = None
 def run(workdir, setdir):
     r = subprocess.run([str(workdir / "t"), str(setdir)], capture_output=True, text=True, timeout=600)
     rc, out = r.returncode, r.stdout
@@ -142,6 +149,11 @@ def run(workdir, setdir):
         r = subprocess.run([str(workdir / "t"), str(V1SET), sc], capture_output=True, text=True, timeout=900)
         if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-2500:]
         else: out += "\n" + r.stdout
+    global V1ISET
+    if V1ISET is None: V1ISET = Path(tempfile.mkdtemp()); make_v1idx_set(V1ISET)
+    r = subprocess.run([str(workdir / "t"), str(V1ISET), "v1gridhist"], capture_output=True, text=True, timeout=900)
+    if r.returncode: rc = 1; out += "\nFAIL scenario v1gridhist\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-2500:]
+    else: out += "\n" + r.stdout
     global L1SET
     if L1SET is None: L1SET = Path(tempfile.mkdtemp()); make_lib1_set(L1SET)
     for sc in ("lib1", "lib1resume", "lib1resumeA", "lib1resumeC", "lib1details"):
@@ -528,6 +540,16 @@ def mutants(setdir, tail=None):
         ("gallery_app.c", "*put_u(b, hist->n) = 0;", "*put_u(b, hist->n + 1u) = 0;"),
         ("gallery_app.c", "hist->is_fine ? HS_FINE : HS_BINS", "hist->is_fine ? HS_BINS : HS_FINE"),
         ("gallery_app.c", "const uint32_t mx = hs_plot_max(hist, h), step = hist->is_fine ? 1u : 8u;", "const uint32_t mx = hs_plot_max(hist, h), step = 1u;"),
+    ]
+    muts += [                                                                                                      # the view is hidden while a turn or a mask redraws the plane; the details page's histograms from the grid
+        ("gallery_app.c", "            hide_view();\n            const int r = view_reopen();", "            const int r = view_reopen();"),
+        ("gallery_app.c", "            hide_view();\n            if (edge & KEY_L1) {", "            if (edge & KEY_L1) {"),
+        ("gallery_app.c", "    if (!view_hidden) { if (rot_o == 0u)", "    if (1) { if (rot_o == 0u)"),
+        ("gallery_app.c", "            if (mask_i) mask_apply();\n            show_view();", "            if (mask_i) mask_apply();\n            view_hidden = 0u;"),
+        ("gallery_app.c", "            show_view();\n            continue;\n        }\n        if (rot_o != 0u && (edge & (KEY_UP | KEY_DOWN)))", "            view_hidden = 0u;\n            continue;\n        }\n        if (rot_o != 0u && (edge & (KEY_UP | KEY_DOWN)))"),
+        ("gallery_app.c", "if (from_grid && hist_for != sel && head.version == 1u) {", "if (0 && hist_for != sel && head.version == 1u) {"),
+        ("gallery_app.c", "if (from_grid && hist_for != sel && head.version == 1u) {", "if (from_grid && head.version == 1u) {"),
+        ("gallery_app.c", "if (from_grid && hist_for != sel && head.version == 1u) {", "if (from_grid && hist_for != sel) {"),
     ]
     only = sys.argv[sys.argv.index("--only") + 1] if "--only" in sys.argv else None                                   # --only TEXT: just the mutants whose original code contains TEXT (Tier B of CLAUDE.md section 4: the mutants of the code you changed)
     if only: muts = [m for m in muts if only in m[1]]; assert muts, "no mutant matches --only"

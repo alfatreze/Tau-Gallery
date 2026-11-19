@@ -16,6 +16,7 @@
 #define T_STAGE 0xE28000u
 static uint16_t mem[HW_N];                         /* SDRAM, halfwords: the plane at 0x200000 */
 static uint16_t fb[512u * 1024u];                  /* the UI framebuffer, halfwords, stride 512 */
+static uint32_t vlog[256], vlog_n, vsnap[256], vsnap_n;                                                          /* every write of the view base since the last checkpoint (the snapshot is what the checkpoint sees) */
 static uint32_t clk, irq_pend, vid_req, vid_bus, vid_sw, vid_due, vbase, vstride, land_base, land_words, land_ovf, input_n;
 static int force_ovf, force_short, viewer_dead, fail_pic_reads, pass_pic_reads; static uint32_t v1_starts_before, land_unaligned, zt_n_212, rwd_241;
 static int zb_ok_phase = 0; static int32_t map_cx, map_cy, map_rx1, map_rw2, map_x0, map_y0, map_rx0, map_ry0, map_ex, map_ey, map_rw1;
@@ -83,7 +84,7 @@ static void wr(uint32_t a, uint32_t v)
     case 0x80000270u: hs_data = hs_bin[(v >> 8) & 3u][v & 255u]; hs_n = hs_cnt; hs_rd_busy = 2u; break;
     case 0x80000254u: { const uint32_t ch = (v >> 16) & 3u; if (pix_busy || (pix_ctrl & 4u) || ch > 2u) pix_bad++; else { pix_lut[ch][(v >> 8) & 255u] = v & 255u; pix_stores++; pix_busy = 3u; } } break;
     case 0x800001ECu: vid_req = v & 1u; vid_due = clk + 2u * 1111111u; break;
-    case 0x800001F0u: vbase = v & 0x1FFFFFFu; { const uint32_t wn = (vbase >= T_WIN1 && vbase < T_STAGE) ? 1u : (vbase >= T_WIN0 && vbase < T_WIN1) ? 0u : 9u; if (wn != 9u && wn != last_win) { if (last_win != 9u) win_flips++; last_win = wn; } } break;
+    case 0x800001F0u: vbase = v & 0x1FFFFFFu; if (vlog_n < 256u) vlog[vlog_n++] = vbase; { const uint32_t wn = (vbase >= T_WIN1 && vbase < T_STAGE) ? 1u : (vbase >= T_WIN0 && vbase < T_WIN1) ? 0u : 9u; if (wn != 9u && wn != last_win) { if (last_win != 9u) win_flips++; last_win = wn; } } break;
     case 0x800001F4u: vstride = v & 0xFFFFu; break;
     case 0x80000200u: land_base = v & 0x1FFFFFFu; break;
     case 0x80000204u: if (v & 1u) { land_words = 0; land_ovf = 0; } break;
@@ -661,9 +662,17 @@ static int big_grid_ok(void)                                                    
 }
 static void clear_texts(void);
 static void lib1_cp(int n);
+static uint32_t starts_570;
+static int hid_pairs(void)                                                                                           /* a turn or a mask redraws a plane that is on the screen: each time the screen is pointed at the black plane first and at a picture plane after, never at a half drawn one */
+{
+    if (vsnap_n < 2u || (vsnap_n & 1u)) return 0;
+    for (uint32_t i = 0; i < vsnap_n; i++) if ((vsnap[i] == 0x300000u) != ((i & 1u) == 0u)) return 0;
+    return 1;
+}
 static void checkpoint(int n)
 {
     char want[64]; char path[200];
+    vsnap_n = vlog_n; memcpy(vsnap, vlog, vlog_n * sizeof vlog[0]); vlog_n = 0u;
     if (lib1_on) { lib1_cp(n); return; }
     if (getenv("APP_DEBUG") && n == 35) printf("cp35: thumbs %d px %04x bg %04x level %u gi %u sel %u page %u count %u last '%s'\n", thumbs_on_screen(0, count < 16u ? count : 16u), fb[100u * 512u + 399u], th_role[TR_BG_BOTTOM], level, gi, sel, page, count, last_text());
     switch (n) {
@@ -737,21 +746,21 @@ static void checkpoint(int n)
     case 229: chk(229, said("PICTURE READ FAILED") && vid_bus == 0u && zk < 0); force_short = 0; clear_texts(); break;                                                     /* is not accepted either */
     case 225: chk(225, land_unaligned == 0u); break;                                                                                                                         /* no landing read of a picture was unaligned (the tile streams read as 4 KB aligned supersets) */
     case 206: chk(206, said("NEEDS THE HW DECODER") && tg.starts == 0u); clear_texts(); break;                                                                                /* a core without the decoder */
-    case 470: chk(470, rot_o == 6u && rot_plane_ok("v00.rgb", 6u, 800u, 720u) && vbase == GAL_ROT_BASE + 40u * GAL_LINE_WORDS16 && vstride == GAL_LINE_WORDS16 && !said("ERROR") && !said("FAILED")); break;      /* Y: turned 90 degrees clockwise: the plane holds the turned picture (720 wide, 800 tall, black margins), the view is centred on it */
+    case 470: chk(470, hid_pairs() && rot_o == 6u && rot_plane_ok("v00.rgb", 6u, 800u, 720u) && vbase == GAL_ROT_BASE + 40u * GAL_LINE_WORDS16 && vstride == GAL_LINE_WORDS16 && !said("ERROR") && !said("FAILED")); break;      /* Y: turned 90 degrees clockwise: the plane holds the turned picture (720 wide, 800 tall, black margins), the view is centred on it */
     case 471: chk(471, rot_pan == 60u && vbase == GAL_ROT_BASE + 60u * GAL_LINE_WORDS16); break;                                     /* Down pans 20 rows */
     case 472: chk(472, rot_pan == 80u && vbase == GAL_ROT_BASE + 80u * GAL_LINE_WORDS16); break;                                     /* the pan stops at the last row */
     case 473: chk(473, rot_pan == 0u && vbase == GAL_ROT_BASE); break;                                                                 /* and at the first */
-    case 474: chk(474, rot_o == 3u && rot_pan_max == 0u && rot_plane_ok("v00.rgb", 3u, 800u, 720u) && vbase == GAL_ROT_BASE); break;       /* Y again: 180 degrees, no pan needed */
-    case 475: chk(475, rot_o == 6u && rot_plane_ok("v00.rgb", 6u, 800u, 720u) && vbase == GAL_ROT_BASE + 40u * GAL_LINE_WORDS16); break;   /* X: counter-clockwise from 180 is 90 clockwise; the margins are black again (the 180 picture was there) */
-    case 476: chk(476, rot_o == 0u && vbase == GAL_PLANE_BASE && plane_is_rgb("v00.rgb")); break;                                    /* X: upright again, the upright plane is shown and is still the picture */
+    case 474: chk(474, hid_pairs() && rot_o == 3u && rot_pan_max == 0u && rot_plane_ok("v00.rgb", 3u, 800u, 720u) && vbase == GAL_ROT_BASE); break;       /* Y again: 180 degrees, no pan needed */
+    case 475: chk(475, hid_pairs() && rot_o == 6u && rot_plane_ok("v00.rgb", 6u, 800u, 720u) && vbase == GAL_ROT_BASE + 40u * GAL_LINE_WORDS16); break;   /* X: counter-clockwise from 180 is 90 clockwise; the margins are black again (the 180 picture was there) */
+    case 476: chk(476, hid_pairs() && rot_o == 0u && vbase == GAL_PLANE_BASE && plane_is_rgb("v00.rgb")); break;                                    /* X: upright again, the upright plane is shown and is still the picture */
     case 477: chk(477, rot_o == 5u && rot_plane_ok("v00.rgb", 5u, 800u, 720u) && vbase == GAL_ROT_BASE + 40u * GAL_LINE_WORDS16); break;     /* X: 90 counter-clockwise; the details page and back keep the turned view */
     case 478: chk(478, zk >= 0 && rot_o == 0u && mask_i == 0u); break;                               /* A (zoom) on a turned picture: it goes upright and the 1:1 level is shown (the zoom views are upright) */
     case 479: chk(479, rot_o == 0u && vbase == GAL_PLANE_BASE); break;                                                                 /* the next picture is upright */
     case 480: chk(480, rot_o == 0u && vbase == GAL_PLANE_BASE && sel == 1u); break;                                                    /* a turned picture left with B and opened again from the grid is upright */
-    case 500: chk(500, mask_i == 1u && mask_painted && plane_mask_ok("v00.rgb", 0u, 40u, 0u, 760u, 720u) && vbase == GAL_PLANE_BASE); break;                         /* L1: the square mask: the plane is the picture with everything outside the centred 720 x 720 black */
-    case 501: chk(501, mask_i == 2u && mask_p == 0u && plane_mask_ok("v00.rgb", 0u, 0u, 40u, 800u, 680u)); break;                                                          /* L1: 4:5 in the picture's own (landscape) orientation is 5:4: 800 x 640; the picture shows again where the square mask had hidden it */
-    case 502: chk(502, mask_i == 2u && mask_p == 1u && plane_mask_ok("v00.rgb", 0u, 112u, 0u, 688u, 720u)); break;                                                         /* Start: the mask turned: 4:5 portrait is 576 x 720 */
-    case 503: chk(503, mask_i == 0u && !mask_painted && plane_is_rgb("v00.rgb") && vbase == GAL_PLANE_BASE); break;                                                        /* L1 until off: the whole picture again */
+    case 500: chk(500, hid_pairs() && mask_i == 1u && mask_painted && plane_mask_ok("v00.rgb", 0u, 40u, 0u, 760u, 720u) && vbase == GAL_PLANE_BASE); break;                         /* L1: the square mask: the plane is the picture with everything outside the centred 720 x 720 black */
+    case 501: chk(501, hid_pairs() && mask_i == 2u && mask_p == 0u && plane_mask_ok("v00.rgb", 0u, 0u, 40u, 800u, 680u)); break;                                                          /* L1: 4:5 in the picture's own (landscape) orientation is 5:4: 800 x 640; the picture shows again where the square mask had hidden it */
+    case 502: chk(502, hid_pairs() && mask_i == 2u && mask_p == 1u && plane_mask_ok("v00.rgb", 0u, 112u, 0u, 688u, 720u)); break;                                                         /* Start: the mask turned: 4:5 portrait is 576 x 720 */
+    case 503: chk(503, hid_pairs() && mask_i == 0u && !mask_painted && plane_is_rgb("v00.rgb") && vbase == GAL_PLANE_BASE); break;                                                        /* L1 until off: the whole picture again */
     case 504: chk(504, rot_o == 6u && mask_i == 1u && plane_mask_ok("v00.rgb", 6u, 40u, 40u, 760u, 760u)); break;                                                           /* a picture turned 90 degrees: the square mask is on the turned plane (720 wide, 800 tall: 40 rows black above and below) */
     case 505: chk(505, rot_o == 3u && mask_i == 0u && !mask_painted && plane_mask_ok("v00.rgb", 3u, 0u, 0u, 800u, 720u)); break;                                              /* turning the picture drops the mask */
     case 506: chk(506, rot_o == 0u && mask_i == 0u && vbase == GAL_PLANE_BASE); break;                                                                                      /* the next picture has no mask */
@@ -764,10 +773,10 @@ static void checkpoint(int n)
     case 532: chk(532, said("DETAILS  HISTOGRAMS") && said("2/2") && said("FROM THE THUMBNAIL") && !said("COUNTED FROM") && det_hist.n <= 96u * 72u); clear_texts(); break;     /* a picture that was not decoded in the viewer: the thumbnail's count, said so */
     case 533: chk(533, said("DETAILS  HISTOGRAMS") && said("COUNTED FROM THE DECODED PICTURE") && hist_dec_ok() && det_hist.n == (uint32_t)pic.rw * pic.rh && det_hist.n < 800u * 720u); clear_texts(); break;      /* v01 (500 x 300, black bars on the fit canvas): only the picture's rectangle was counted */
     case 534: chk(534, said("DETAILS  HISTOGRAMS") && said("FROM THE THUMBNAIL") && !said("COUNTED FROM") && sel == 1u); clear_texts(); break;      /* v01 was counted, then v11's decode counted 20 tiles and failed: the counters are not v01's any more, so its details fall back to the thumbnail */
-    case 540: chk(540, rot_o == 1u && mask_i == 0u && rot_plane_ok("v00.rgb", 1u, 800u, 720u) && vbase == GAL_ROT_BASE); break;                                       /* Start + X: mirrored left-right (the view is the rotated plane, no pan needed) */
-    case 541: chk(541, rot_o == 3u && rot_plane_ok("v00.rgb", 3u, 800u, 720u)); break;                                                                                 /* Start + Y from the mirror: top-bottom as well = turned 180 degrees */
-    case 542: chk(542, rot_o == 1u && rot_plane_ok("v00.rgb", 1u, 800u, 720u)); break;                                                                                 /* Start + Y again: the flip undoes itself */
-    case 543: chk(543, rot_o == 7u && rot_plane_ok("v00.rgb", 7u, 800u, 720u)); break;                                                                                 /* Y (a turn clockwise) of the mirrored picture is the anti-transposed one */
+    case 540: chk(540, hid_pairs() && rot_o == 1u && mask_i == 0u && rot_plane_ok("v00.rgb", 1u, 800u, 720u) && vbase == GAL_ROT_BASE); break;                                       /* Start + X: mirrored left-right (the view is the rotated plane, no pan needed) */
+    case 541: chk(541, hid_pairs() && rot_o == 3u && rot_plane_ok("v00.rgb", 3u, 800u, 720u)); break;                                                                                 /* Start + Y from the mirror: top-bottom as well = turned 180 degrees */
+    case 542: chk(542, hid_pairs() && rot_o == 1u && rot_plane_ok("v00.rgb", 1u, 800u, 720u)); break;                                                                                 /* Start + Y again: the flip undoes itself */
+    case 543: chk(543, hid_pairs() && rot_o == 7u && rot_plane_ok("v00.rgb", 7u, 800u, 720u)); break;                                                                                 /* Y (a turn clockwise) of the mirrored picture is the anti-transposed one */
     case 544: chk(544, rot_o == 7u && rot_plane_ok("v00.rgb", 7u, 800u, 720u) && mask_i == 0u); break;                                                                  /* Start alone changes nothing without a mask */
     case 545: chk(545, rot_o == 4u && rot_plane_ok("v00.rgb", 4u, 800u, 720u)); break;                                                                                 /* four counter-clockwise turns leave the picture as it was; Start + Y flips it top-bottom */
     case 546: chk(546, mask_i == 1u && mask_painted && rot_o == 7u); break;                                                                                                /* L1: a crop mask on the turned picture */
@@ -775,6 +784,9 @@ static void checkpoint(int n)
     case 512: chk(512, mask_i == 1u && mask_painted && zk < 0 && zn == 0u); break;                                                                                         /* v01 has no zoom level: A with a mask on changes nothing, the mask stays */
     case 513: chk(513, mask_i == 0u && zk < 0 && rot_o == 0u && !mask_painted && plane_is_rgb("v00.rgb") && vbase == GAL_PLANE_BASE); break;                                /* back from the zoom to fit: the plane is the whole picture again, no black bands */
     case 514: chk(514, rot_o == 0u && zk < 0 && plane_is_rgb("v00.rgb") && vbase == GAL_PLANE_BASE); break;                                                                  /* back from the zoom to fit after a turn: the upright plane */
+    case 570: starts_570 = tg.starts; if (getenv("APP_DEBUG")) printf("570: hist %d said-dec %d thumb %d dec_ok %d fine %d n %u pic %u hist_for %u sel %u v1on %u\n", said("DETAILS  HISTOGRAMS"), said("COUNTED FROM THE DECODED PICTURE"), said("THUMBNAIL"), hist_dec_ok(), hist_fine_screen_ok(), det_hist.n, (unsigned)pic.rw * pic.rh, hist_for, sel, v1_on);
+              chk(570, said("DETAILS  HISTOGRAMS") && said("COUNTED FROM THE DECODED PICTURE") && !said("THUMBNAIL") && hist_dec_ok() && hist_fine_screen_ok() && det_hist.n == (uint32_t)pic.rw * pic.rh); clear_texts(); break;      /* Select on the grid, then Right: the picture was decoded for the page (the thumbnail is a crop of it), the decoder counted it */
+    case 571: chk(571, said("COUNTED FROM THE DECODED PICTURE") && tg.starts == starts_570 && hist_dec_ok()); clear_texts(); break;      /* the same page opened again: the picture was counted already, it is not decoded a second time */
     case 560: chk(560, rot_o == 0u && gset.lut == 1u && pix_ctrl == 5u && pix_stores == 768u && pix_bad == 0u && pix_tables_are(1u)); break;                                  /* X: the next colour filter (BRIGHT): the tables are loaded and on, the picture is not turned */
     case 561: chk(561, rot_o == 1u && gset.lut == 1u && pix_ctrl == 5u && pix_stores == 768u); break;                                                                     /* Start + X mirrors and leaves the filter alone */
     case 562: chk(562, rot_o == 1u && gset.lut == 7u && pix_ctrl == 5u && pix_bad == 0u && pix_tables_are(7u)); break;                                                    /* six more: INVERT, and the mirror is still there */
@@ -1105,6 +1117,13 @@ int main(int argc, char **argv)
     if (argc > 2 && !strcmp(argv[2], "v1mirror")) {                                                       /* the mirror keys (Start held + X or Y) on the fit view of a version 1 picture */
         const uint32_t SM[] = { KEY_A, 0, CP(200), KEY_START | KEY_X, 0, CP(540), KEY_START | KEY_Y, 0, CP(541), KEY_START | KEY_Y, 0, CP(542), KEY_Y, 0, CP(543), KEY_START, 0, CP(544), KEY_L1, 0, CP(546), KEY_START | KEY_X, 0, CP(547), KEY_Y, 0, KEY_Y, 0, KEY_Y, 0, KEY_Y, 0, KEY_START | KEY_Y, 0, CP(545), KEY_R1, 0, CP(548), END };
         nscript = (int)(sizeof SM / sizeof SM[0]); memcpy(script, SM, sizeof SM);
+        if (!setjmp(done)) gallery_app_main();
+        printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
+    }
+    if (argc > 2 && !strcmp(argv[2], "v1gridhist")) {                                                    /* the histograms page opened from the grid counts the decoded picture, not the cropped thumbnail */
+        caps_val = 0x80000007u;
+        const uint32_t SG[] = { KEY_SELECT, 0, KEY_RIGHT, 0, CP(570), KEY_B, 0, KEY_SELECT, 0, KEY_RIGHT, 0, CP(571), END };
+        nscript = (int)(sizeof SG / sizeof SG[0]); memcpy(script, SG, sizeof SG);
         if (!setjmp(done)) gallery_app_main();
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
     }

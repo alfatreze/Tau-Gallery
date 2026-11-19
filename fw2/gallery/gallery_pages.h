@@ -294,6 +294,8 @@ static inline int gi_input(uint32_t edge) { return (edge & (GP_KEY_LEFT | GP_KEY
 #define GD_NOT_READ "NOT READ YET"
 #define GD_HIST_NOTE "NOT COMPUTED YET"                                            /* a frame without a thumbnail to count (its read failed) */
 #define GD_HIST_SRC "FROM THE THUMBNAIL"
+#define GD_HIST_SRC_CROP "FROM THE THUMBNAIL'S CROP"                                  /* a version 1 index's thumbnail is the picture cropped to a square: only its centre is counted */
+#define GD_HIST_WAIT "COUNTING THE PICTURE ..."
 #define GD_HIST_SRC_DEC "COUNTED FROM THE DECODED PICTURE"
 /* What the viewer's keys do, shown under the preview on the INFO and SHOT pages (Select opens them from the grid or the picture), 8 pixels a character from x 112. */
 #define GD_KEYS_N 6u

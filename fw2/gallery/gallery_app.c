@@ -269,6 +269,27 @@ static void mask_apply(void)
     mask_black(base, 0u, GT_CANVAS_W, 0u, y0); mask_black(base, 0u, GT_CANVAS_W, y1, rows); mask_black(base, 0u, x0, y0, y1); mask_black(base, x1, GT_CANVAS_W, y0, y1);
     gfx_fence(); mask_painted = 1u;
 }
+/* ---- hiding the view while a turn or a mask redraws the plane (owner, 2026-11-19: the half-drawn picture showed, and a turned picture appeared a few rows too high and dropped into place when its pan was set). The plane being drawn on
+ * is the one on the screen, so the screen is pointed at a black plane for the time: one register write, applied at the next vertical blank (about 17 ms, waited for). The black plane lies between the picture plane and the landing window and is
+ * made once. ---- */
+#define GAL_BLACK_BASE 0x300000u                 /* halfword address of 720 black lines (a multiple of 0x40000: the copy command's base); 0x2D2F00 is where the upright plane ends and 0x400000 where the landing window starts */
+static uint32_t black_ready, view_hidden;
+static void wait_ms(uint32_t ms) { const uint32_t t0 = cycles(); while ((uint32_t)(cycles() - t0) < ms * (CLK_HZ / 1000u)) { } }
+static void hide_view(void)
+{
+    if (!black_ready) {
+        for (uint32_t i = 0; i < 64u; i++) gfx_mb_write(GAL_ROTZERO + 2u * i, 0u);
+        const uint32_t total = GT_CANVAS_H * GAL_LINE_WORDS16;
+        for (uint32_t hw = 0; hw < total; hw += 127u) gfx_blit_raw(GAL_ROTZERO, GAL_BLACK_BASE + (hw / 0x40000u) * 0x40000u, 0u, hw % 0x40000u, total - hw < 127u ? total - hw : 127u);
+        gfx_fence(); black_ready = 1u;
+    }
+    REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16); REG_WR(R_VIEW_BASE, GAL_BLACK_BASE); view_hidden = 1u; wait_ms(40u);
+}
+static void show_view(void)                                                                       /* the plane of the current orientation back on the screen */
+{
+    view_hidden = 0u;
+    if (rot_o == 0u) { REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16); REG_WR(R_VIEW_BASE, GAL_PLANE_BASE); } else rot_view();
+}
 static int open_v1(int show_progress)
 {
     v1_on = 0u;
@@ -786,12 +807,12 @@ static int map_mode(void)
         }
     }
 }
-static void run_details(void);
+static void run_details(int from_grid);
 static int view_reopen(void)                                                                       /* the open picture decoded again (in the current orientation) and the view pointed at its plane */
 {
     const int r = open_timed(sel, 0); if (r) return r;
     mask_painted = 0u;
-    if (rot_o == 0u) { REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16); REG_WR(R_VIEW_BASE, GAL_PLANE_BASE); } else rot_view();
+    if (!view_hidden) { if (rot_o == 0u) { REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16); REG_WR(R_VIEW_BASE, GAL_PLANE_BASE); } else rot_view(); }      /* hidden: the caller shows the plane when it has finished (a mask is painted first) */
     return 0;
 }
 static void viewer(void)
@@ -822,7 +843,7 @@ static void viewer(void)
             zoom_goto(-1);
         }
         if ((edge & KEY_SELECT) && !(edge & (KEY_LEFT | KEY_RIGHT))) {                                                                 /* Select: the details page (not Select + Left / Right) */
-            gal_view_off(); run_details();                                                                                            /* the picture's plane in SDRAM is not touched by the page: the view is simply switched on again */
+            gal_view_off(); run_details(0);                                                                                            /* the picture's plane in SDRAM is not touched by the page: the view is simply switched on again */
             if (!gal_view_on()) { loaded_page = 0xFFFFFFFFu; draw_page(); say("VIEWER DID NOT START", BAD); return; }
             rot_view(); prev = REG_RD(R_INPUT) & 0xFFFFu; held = 0u; next_tick = cycles(); continue;
         }
@@ -833,8 +854,10 @@ static void viewer(void)
         if (edge & (KEY_X | KEY_Y)) {                                                                                                 /* Y: turn the picture clockwise; with Start held: X mirrors left-right, Y top-bottom (version 1 pictures: the hardware decoder draws it so) */
             if (!v1_on) continue;
             rot_o = (keys & KEY_START) ? ((edge & KEY_Y) ? gr_flip(rot_o) : gr_mirror(rot_o)) : gr_turn(rot_o, 1); mask_i = 0u;
+            hide_view();
             const int r = view_reopen();
-            if (r) { rot_o = 0u; gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); say(open_msg[r], BAD); return; }
+            if (r) { rot_o = 0u; view_hidden = 0u; gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); say(open_msg[r], BAD); return; }
+            show_view();
             continue;
         }
         if (rot_o != 0u && (edge & (KEY_UP | KEY_DOWN))) {                                                                            /* a turned picture taller than the screen: Up and Down pan it */
@@ -844,15 +867,17 @@ static void viewer(void)
         }
         if (edge & (KEY_L1 | KEY_START)) {                                                                                           /* L1: the next crop mask; Start: turn the mask (landscape / portrait) */
             if ((edge & KEY_START) && !(mask_i && gm_can_turn(mask_i))) continue;
+            hide_view();
             if (edge & KEY_L1) {
-                if (mask_painted) { const int r = view_reopen(); if (r) { rot_o = 0u; mask_i = 0u; gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); say(open_msg[r], BAD); return; } }
+                if (mask_painted) { const int r = view_reopen(); if (r) { rot_o = 0u; mask_i = 0u; view_hidden = 0u; gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); say(open_msg[r], BAD); return; } }
                 mask_i = gm_next(mask_i);
                 if (mask_i == 1u) { uint32_t x, y, w, h; pic_rect_shown(&x, &y, &w, &h); mask_p = h > w; }                          /* the first mask opens in the picture's own orientation */
             } else {
                 mask_p ^= 1u;
-                { const int r = view_reopen(); if (r) { rot_o = 0u; mask_i = 0u; gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); say(open_msg[r], BAD); return; } }
+                { const int r = view_reopen(); if (r) { rot_o = 0u; mask_i = 0u; view_hidden = 0u; gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); say(open_msg[r], BAD); return; } }
             }
             if (mask_i) mask_apply();
+            show_view();
             continue;
         }
         if ((rot_o != 0u || mask_i != 0u) && (edge & (KEY_A | KEY_R1))) {                                                             /* zoom from a turned, mirrored or masked view: the zoom views are upright, so the picture goes upright first (owner decision B, 2026-11-13) */
@@ -1035,7 +1060,7 @@ static void draw_dpage(const gdp_t *p, const gd_t *d, const gd_meta_t *m, const 
                 if (bh) gfx_rect(x + DET_BX + i, y + DET_PH - DET_BB - bh, step == 1u ? 1u : step - 1u, bh, bar_col[h]);
             }
         }
-        gfx_text(6, 324, hist ? (from_dec ? GD_HIST_SRC_DEC : GD_HIST_SRC) : GD_HIST_NOTE, DIM, BG);
+        gfx_text(6, 324, hist ? (from_dec ? GD_HIST_SRC_DEC : head.version == 1u ? GD_HIST_SRC_CROP : GD_HIST_SRC) : GD_HIST_NOTE, DIM, BG);
     }
     draw_indicator(p);
     page_foot("LEFT RIGHT PAGE   B OR SELECT BACK", 0, 0);
@@ -1047,7 +1072,7 @@ static uint32_t next_edge(uint32_t *prev)
 }
 /* The details pages of the selected picture; returns when B or Select closes them. The caller redraws what was under them. The picture's details (at most 255 bytes) are read from the index when the pages open, its histograms when
  * the HISTOGRAMS page is first shown. */
-static void run_details(void)
+static void run_details(int from_grid)
 {
     const gx_entry_t *e = &EN(sel); const gd_t d = { e->name, sel - cur_first, cur_count, e->size, e->width, e->height };
     gd_meta_t m; m.has = 0u;
@@ -1056,6 +1081,9 @@ static void run_details(void)
     uint32_t prev = REG_RD(R_INPUT) & 0xFFFFu; int hist_ok = -1, from_dec = 0;
     for (;;) {
         if (pg.id[pg.cur] == GDP_HIST && hist_ok < 0) {
+            if (from_grid && hist_for != sel && head.version == 1u) {                                   /* opened from the grid: the thumbnail is the picture CROPPED to a square, its histograms are the crop's, not the picture's. Decode the fit level (about a quarter of a second) and have the decoder count it, as the viewer does; a failure leaves the thumbnail's count */
+                gfx_text(6, 324, GD_HIST_WAIT, ACC, BG); (void)open_picture(sel, 0);
+            }
             static uint32_t c[GD_HIST_N][HS_FINE]; uint32_t n = 0u;
             if (hist_for == sel && !tgy_hw_hist_read256(c, &n) && n != 0u) { hs_from_counts(&det_hist, c, n); hist_ok = 1; from_dec = 1; }      /* the viewer decoded this picture's fit level and the unit counted it */
             else hist_ok = thumb_hist(gx_thumb_off(&head, e->thumb), &det_hist, e->width, e->height);
@@ -1179,6 +1207,6 @@ int main(void)
         }
         else if (edge & KEY_B) { if (level == 0u && head.folder_count > 1u) { enter_folders(); draw_page(); } rep_key = 0u; }
         else if (edge & KEY_START) { run_pages(); apply_grid(); draw_page(); prev = REG_RD(R_INPUT) & 0xFFFFu; rep_key = 0u; }
-        else if ((edge & KEY_SELECT) && level == 0u) { run_details(); draw_page(); prev = REG_RD(R_INPUT) & 0xFFFFu; rep_key = 0u; }
+        else if ((edge & KEY_SELECT) && level == 0u) { run_details(1); draw_page(); prev = REG_RD(R_INPUT) & 0xFFFFu; rep_key = 0u; }
     }
 }
