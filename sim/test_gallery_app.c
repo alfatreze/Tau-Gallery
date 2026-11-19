@@ -297,7 +297,7 @@ static int hist_screen_ok(uint32_t i)    /* the details page's four histograms a
         if (diff > 40u) ok = 0;                                                                                        /* the luma bin may differ by one at a bin edge: a few pixels move to a neighbour, never many */
         const uint32_t fx0 = DET_PX, fy0 = DET_PY0 + k * DET_PSTEP;
         for (uint32_t b = 0; b < 32u; b++) {
-            const uint32_t n = det_hist.bin[k][b], h = n ? ((uint32_t)((uint64_t)n * 44u / max) < 1u ? 1u : (uint32_t)((uint64_t)n * 44u / max)) : 0u;
+            const uint32_t n = det_hist.bin[k][b], h = n ? ((uint32_t)(44.0 * floor(sqrt((double)(n << 8))) / floor(sqrt((double)(max << 8)))) < 1u ? 1u : (uint32_t)(44.0 * floor(sqrt((double)(n << 8))) / floor(sqrt((double)(max << 8))))) : 0u;
             const uint32_t px = fx0 + 3u + b * 8u + 1u, bottom = fy0 + 68u - 4u;                                       /* a thumbnail's bin is a bar 7 pixels wide in an 8 pixel slot, 44 pixels high at most, 4 above the frame's bottom */
             for (uint32_t r = 0; r < 45u; r++) { const uint32_t yy = bottom - 1u - r; const int on = fb[yy * 512u + px] == col[k]; if (on != (r < h)) ok = 0; }
             if (fb[(bottom - 1u) * 512u + fx0 + 3u + b * 8u + 7u] == col[k]) ok = 0;                                  /* the gap column between bars is clear */
@@ -312,7 +312,7 @@ static int hist_fine_screen_ok(void)                                            
         uint32_t max = 0u; for (uint32_t i = 0; i < 256u; i++) if (det_hist.fine[k][i] > max) max = det_hist.fine[k][i];
         const uint32_t fx0 = DET_PX, fy0 = DET_PY0 + k * DET_PSTEP, bottom = fy0 + 68u - 4u;
         for (uint32_t i = 0; i < 256u; i++) {
-            const uint32_t n = det_hist.fine[k][i], h = n ? ((uint32_t)((uint64_t)n * 44u / max) < 1u ? 1u : (uint32_t)((uint64_t)n * 44u / max)) : 0u;
+            const uint32_t n = det_hist.fine[k][i], h = n ? ((uint32_t)(44.0 * floor(sqrt((double)(n << 8))) / floor(sqrt((double)(max << 8)))) < 1u ? 1u : (uint32_t)(44.0 * floor(sqrt((double)(n << 8))) / floor(sqrt((double)(max << 8))))) : 0u;
             for (uint32_t r = 0; r < 45u; r++) { const int on = fb[(bottom - 1u - r) * 512u + fx0 + 3u + i] == col[k]; if (on != (r < h)) ok = 0; }
             if (fb[(bottom - 1u) * 512u + fx0 + 3u + i + 1u] == col[k] && i == 255u) ok = 0;                          /* nothing right of the last level */
         }

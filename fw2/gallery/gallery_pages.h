@@ -496,15 +496,20 @@ static inline uint32_t hs_fmax(const hs_t *h, uint32_t k) { uint32_t m = 0u; for
 /* The bar of level i of histogram k as the page draws it: its count, and in how many pixels' width (a fine histogram is 1 pixel a level; a thumbnail's 32 bins are 8 pixels each, so both fill the 256 pixel plot). */
 static inline uint32_t hs_bar(const hs_t *h, uint32_t k, uint32_t i) { return h->is_fine ? h->fine[k][i & 255u] : h->bin[k][(i & 255u) >> 3]; }
 static inline uint32_t hs_plot_max(const hs_t *h, uint32_t k) { return h->is_fine ? hs_fmax(h, k) : hs_max(h, k); }
-/* Height in pixels of a bar of `count` when the tallest bin is `max` and the plot is `hmax` pixels high. */
+/* Height in pixels of a bar of `count` when the tallest bin is `max` and the plot is `hmax` pixels high. The height goes with the SQUARE ROOT of the count (owner, 2026-11-19: "some histograms still seem quite wrong"): a picture with
+ * a black sky or a dark sea has more than half its pixels in one bin, and on a linear scale every other bin shrinks to a line. The counts are right; the plot hid them. */
+static inline uint32_t hs_isqrt(uint32_t v) { uint32_t r = 0u, b = 1u << 30; while (b > v) b >>= 2; while (b) { if (v >= r + b) { v -= r + b; r = (r >> 1) + b; } else r >>= 1; b >>= 2; } return r; }
 static inline uint32_t hs_height(uint32_t count, uint32_t max, uint32_t hmax)
 {
     if (count == 0u || max == 0u) return 0u;
 #if BUG == 19
-    const uint32_t v = count * hmax / max;                                                                                           /* a small bin vanishes */
+    const uint32_t v = (uint32_t)((uint64_t)hs_isqrt(count << 8) * hmax / hs_isqrt(max << 8));                                      /* a small bin vanishes */
     return v;
+#elif BUG == 22
+    const uint32_t v = (uint32_t)(((uint64_t)count * hmax) / max);                                                                   /* linear, as before */
+    return v < 1u ? 1u : v;
 #else
-    const uint32_t v = (uint32_t)(((uint64_t)count * hmax) / max);
+    const uint32_t v = (uint32_t)((uint64_t)hs_isqrt(count << 8) * hmax / hs_isqrt(max << 8));                                      /* 16 sqrt(count): the counts are at most 65,535 after the shift, so 8 bits of fraction fit */
     return v < 1u ? 1u : v;
 #endif
 }
