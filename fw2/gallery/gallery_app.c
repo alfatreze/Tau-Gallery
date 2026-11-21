@@ -861,13 +861,14 @@ static int view_reopen(void)                                                    
 #define Z2_FOLLOW 8                              /* output pixels a pass the shown view moves toward the wanted one, and the most a frame of the keys moves it (a quarter of a second to cross a tile at 2x) */
 static uint32_t z2_wtx[2], z2_wty[2]; static uint8_t z2_res[2][25];
 static uint32_t z2_s, z2_tx, z2_ty, z2_np;       /* the scale (2 or 4), the window in source tiles, the planes */
+static struct { uint32_t on, p, k, dst, off, us; int32_t tx, ty; } z2_job;      /* the tile being decoded, one pass of s * s a turn of the loop (the keys and the view are served between them): its plane, passes done, destination, stream offset, microseconds so far */
 static int32_t z2_vx, z2_vy, z2_maxx, z2_maxy, z2_dirx, z2_diry; static uint32_t z2_shown, z2_active, z2_ncopy, z2_nrecentre;      /* the view on screen (output pixels, the level times the scale): its corner, the limits of the corner, the pan's direction, 1 once a view shows */
 static uint32_t z2_ot(void) { return 128u * z2_s; }                                                   /* output pixels of a source tile */
 static uint32_t z2_pitch(void) { return z2_tx * z2_ot() * 3u; }                                       /* bytes of a plane row */
 static uint32_t z2_base(uint32_t p) { return z2_s == 2u ? (p ? GAL_WIN1 : GAL_WIN0) : (p ? GAL_WIN0 : GAL_Z4P0); }
 static void z2_setup(uint32_t s)
 {
-    z2_s = s; z2_tx = s == 2u ? 5u : 4u; z2_ty = s == 2u ? 5u : 3u; z2_np = 2u;
+    z2_s = s; z2_tx = s == 2u ? 5u : 4u; z2_ty = s == 2u ? 5u : 3u; z2_np = 2u; z2_job.on = 0u;
     const uint32_t W2 = s * v1z.w, H2 = s * v1z.h;
     z2_maxx = (int32_t)((W2 > (uint32_t)GV_SCREEN_W ? W2 - (uint32_t)GV_SCREEN_W : 0u) & ~3u); z2_maxy = (int32_t)(H2 > (uint32_t)GV_SCREEN_H ? H2 - (uint32_t)GV_SCREEN_H : 0u);
 }
@@ -909,20 +910,29 @@ static void z2_aim(uint32_t p, int32_t wx, int32_t wy)                          
     if (mx < 0) mx = 0; if (my < 0) my = 0;
     if (tx > mx) tx = mx; if (ty > my) ty = my;
     z2_wtx[p] = (uint32_t)tx; z2_wty[p] = (uint32_t)ty; for (uint32_t i = 0; i < 25u; i++) z2_res[p][i] = 0u;
+    if (z2_job.on && z2_job.p == p) z2_job.on = 0u;                                                                          /* a tile on its way into this plane belongs to the old window */
 }
 static uint32_t z2_us(uint32_t t0) { return (uint32_t)(cycles() - t0) / (CLK_HZ / 1000000u); }
-static int z2_decode(uint32_t p, int32_t tx, int32_t ty)                                         /* the tile's stream once from the card, the tile s * s times into the blocks; 1 on a failure */
+static int z2_job_begin(uint32_t p, int32_t tx, int32_t ty)                                      /* the tile's stream once from the card (about 7 ms); the passes follow, one a turn of the loop; 1 on a failure */
 {
     uint32_t off; if (v1_land_stream(tx, ty, 0u, &off)) return 1;
-    const uint32_t t0 = cycles(), pitch = z2_pitch(), ot = z2_ot(), col = (uint32_t)tx - z2_wtx[p], row = (uint32_t)ty - z2_wty[p], dst = z2_base(p) * 2u + row * ot * pitch + col * ot * 3u;
-    int r = 0; tgy_hw_scatter(1, (int32_t)(3u * z2_s), (int32_t)(z2_s * pitch));
-    for (uint32_t k = 0; k < z2_s * z2_s && !r; k++) {
-        const uint32_t a = k % z2_s, b = k / z2_s;
-        if (tgy_hw_start_from(&v1fz, &v1z, (uint32_t)tx, (uint32_t)ty, dst + a * 3u + b * pitch, pitch, v1_stream_hw(0u) * 2u + off) != TH_OK || tgy_hw_finish() != TH_OK) r = 1;
-    }
+    const uint32_t pitch = z2_pitch(), ot = z2_ot(), col = (uint32_t)tx - z2_wtx[p], row = (uint32_t)ty - z2_wty[p];
+    z2_job.on = 1u; z2_job.p = p; z2_job.k = 0u; z2_job.tx = tx; z2_job.ty = ty; z2_job.off = off; z2_job.us = 0u; z2_job.dst = z2_base(p) * 2u + row * ot * pitch + col * ot * 3u;
+    return 0;
+}
+static int z2_job_step(void)                                                                     /* one pass of the tile in hand: 4.4 to 5.4 ms; 1 on a failure */
+{
+    const uint32_t t0 = cycles(), pitch = z2_pitch(), a = z2_job.k % z2_s, b = z2_job.k / z2_s; int r = 0;
+    tgy_hw_scatter(1, (int32_t)(3u * z2_s), (int32_t)(z2_s * pitch));
+    if (tgy_hw_start_from(&v1fz, &v1z, (uint32_t)z2_job.tx, (uint32_t)z2_job.ty, z2_job.dst + a * 3u + b * pitch, pitch, v1_stream_hw(0u) * 2u + z2_job.off) != TH_OK || tgy_hw_finish() != TH_OK) r = 1;
     tgy_hw_scatter(0, 3, 0);
-    if (!r) { const uint32_t us = z2_us(t0); z2_res[p][row * z2_tx + col] = 1u; info.zt_dec_n++; info.zt_dec_sum += us; if (us > info.zt_dec_max) info.zt_dec_max = us; info.copy_ms = us / 1000u; }
-    return r;
+    z2_job.us += z2_us(t0);
+    if (r) { z2_job.on = 0u; return 1; }
+    if (++z2_job.k >= z2_s * z2_s) {
+        z2_job.on = 0u; z2_res[z2_job.p][((uint32_t)z2_job.ty - z2_wty[z2_job.p]) * z2_tx + ((uint32_t)z2_job.tx - z2_wtx[z2_job.p])] = 1u;
+        info.zt_dec_n++; info.zt_dec_sum += z2_job.us; if (z2_job.us > info.zt_dec_max) info.zt_dec_max = z2_job.us; info.copy_ms = z2_job.us / 1000u;
+    }
+    return 0;
 }
 static void z2_copy(uint32_t f, uint32_t b, int32_t tx, int32_t ty)                              /* the tile from plane f (whole there) to plane b: Talos copies its rows, 96 halfwords a command */
 {
@@ -941,6 +951,7 @@ static void z2_show(uint32_t p, int32_t vx, int32_t vy)
 /* The next tile of plane tp for the view at (wx, wy): first the tiles of the view itself, then the rest of what it needs (ahead of the pan first), nearest to the view's centre; from plane `from` (whole there) it is copied, else decoded. 0: none left, 1: done one, -1: a read failed. */
 static int z2_work(uint32_t tp, uint32_t from, int32_t wx, int32_t wy)
 {
+    if (z2_job.on) return z2_job_step() ? -1 : 1;                                                                          /* a tile under way: its next pass */
     int32_t bx = 0, by = 0, best = -1, bd = 0x7FFFFFFF;
     for (int pass = 0; pass < 2 && best < 0; pass++) {
         int32_t rx = wx, ry = wy, rw = GV_SCREEN_W, rh = GV_SCREEN_H, a, b, c, d; if (pass) z2_need(wx, wy, &rx, &ry, &rw, &rh);
@@ -953,7 +964,8 @@ static int z2_work(uint32_t tp, uint32_t from, int32_t wx, int32_t wy)
     }
     if (best < 0) return 0;
     if (from != tp && z2_isres(from, bx, by)) { z2_copy(from, tp, bx, by); return 1; }
-    return z2_decode(tp, bx, by) ? -1 : 1;
+    if (z2_job_begin(tp, bx, by)) return -1;
+    return z2_job_step() ? -1 : 1;
 }
 static void z2_stats_reset(void) { info.zt_n = info.zt_land_sum = info.zt_land_max = info.zt_dec_n = info.zt_dec_sum = info.zt_dec_max = info.zt_pass_max = info.zt_catch = info.zt_moved = info.zt_stall_run_max = 0u; info.zoom_ms = GI_NONE; }
 /* The zoom loop. level: 2 or 4. (*cx, *cy): the screen's centre in the level's own pixels, in and out. Returns 0 for the 1:1 view, 1 for the fit view, 2 to leave for the grid, 3 for the 1:1 view's map, -1 when a tile could not be read. */
@@ -982,36 +994,39 @@ static int z2_run(int32_t *cx, int32_t *cy, uint32_t level)
             wx = (int32_t)z2_s * *cx - GV_SCREEN_W / 2; wy = (int32_t)z2_s * *cy - GV_SCREEN_H / 2; z2_clampv(&wx, &wy);
             z2_aim(f, wx, wy);
         }
-        const uint32_t now = cycles();
-        if ((int32_t)(now - next_tick) >= 0) {                                                                                 /* a frame: the held direction moves the wanted corner */
-            next_tick = now + ZOOM_FRAME;
+        const uint32_t now = cycles(); int32_t frames = 0;                                                                      /* the frames that went by since the last turn (at most 4): the pan's speed is in pixels a second, whatever the turn took */
+        while ((int32_t)(now - next_tick) >= 0 && frames < 4) { next_tick += ZOOM_FRAME; frames++; }
+        if (frames == 4) next_tick = now + ZOOM_FRAME;
+        if (frames > 0) {
             const int dx = (keys & KEY_RIGHT) ? 1 : (keys & KEY_LEFT) ? -1 : 0, dy = (keys & KEY_DOWN) ? 1 : (keys & KEY_UP) ? -1 : 0;
             held = (dx || dy) ? held + 1u : 0u;
             if (dx || dy) { z2_dirx = dx; z2_diry = dy; }                                                                      /* the pan's direction (kept when the keys let go: the next pan is likely the same way) */
-            if (z2_shown) { wx += dx * Z2_FOLLOW; wy += dy * Z2_FOLLOW; z2_clampv(&wx, &wy); if (wx != z2_vx || wy != z2_vy) info.zt_catch++; }
+            if (z2_shown) { wx += dx * Z2_FOLLOW * frames; wy += dy * Z2_FOLLOW * frames; z2_clampv(&wx, &wy); if (wx != z2_vx || wy != z2_vy) info.zt_catch += (uint32_t)frames; }
         }
-        if (z2_shown) {                                                                                                       /* the plane on screen must cover what the wanted view needs; if it does not, the other one is aimed there and composed */
-            int32_t nx, ny, nw, nh; z2_need(wx, wy, &nx, &ny, &nw, &nh); const uint32_t b = 1u - f;
-            if (!z2_covers(f, nx, ny, nw, nh)) { if (!composing || !z2_covers(b, nx, ny, nw, nh)) { z2_aim(b, wx, wy); composing = 1u; t_comp = cycles(); z2_nrecentre++; } }
+        const int32_t sx = z2_shown ? z2_vx : wx, sy = z2_shown ? z2_vy : wy;                                                   /* the view that is on the screen (before the first one: the wanted one): the planes are kept for IT, so that one can take over from the other without the picture moving */
+        if (z2_shown) {                                                                                                       /* the plane on screen must cover what the shown view needs; if it does not, the other one is aimed there and composed */
+            int32_t nx, ny, nw, nh; z2_need(sx, sy, &nx, &ny, &nw, &nh); const uint32_t b = 1u - f;
+            if (!z2_covers(f, nx, ny, nw, nh)) { if (!composing || !z2_covers(b, nx, ny, nw, nh)) { z2_aim(b, sx, sy); composing = 1u; t_comp = cycles(); z2_nrecentre++; } }
             else composing = 0u;
         }
-        { const int w = composing ? z2_work(1u - f, f, wx, wy) : z2_work(f, f, wx, wy); if (w < 0) { ret = -1; break; } }
+        { const int w = composing ? z2_work(1u - f, f, sx, sy) : z2_work(f, f, sx, sy); if (w < 0) { ret = -1; break; } }
         int moved = 0;
-        if (composing && z2_whole(1u - f, wx, wy, GV_SCREEN_W, GV_SCREEN_H)) { f = 1u - f; composing = 0u; z2_show(f, wx, wy); moved = 1; info.flip_ms = z2_us(t_comp) / 1000u; }   /* the other plane has the view: it goes on screen */
+        if (composing && z2_shown && z2_whole(1u - f, z2_vx, z2_vy, GV_SCREEN_W, GV_SCREEN_H)) { f = 1u - f; composing = 0u; z2_show(f, z2_vx, z2_vy); info.flip_ms = z2_us(t_comp) / 1000u; }      /* the other plane holds the view that is on the screen (its shared tiles were copied): it takes over without the picture moving, and the view goes on from there */
         else if (!z2_shown) { if (z2_whole(f, wx, wy, GV_SCREEN_W, GV_SCREEN_H)) { z2_show(f, wx, wy); info.zoom_ms = (uint32_t)(cycles() - t_level) / (CLK_HZ / 1000u); } }                          /* the first view */
         else {                                                                                                              /* the shown view follows the wanted one where its tiles are whole */
-            int32_t nx = z2_vx + (wx - z2_vx > Z2_FOLLOW ? Z2_FOLLOW : wx - z2_vx < -Z2_FOLLOW ? -Z2_FOLLOW : wx - z2_vx), ny = z2_vy + (wy - z2_vy > Z2_FOLLOW ? Z2_FOLLOW : wy - z2_vy < -Z2_FOLLOW ? -Z2_FOLLOW : wy - z2_vy);
+            const int32_t fo = Z2_FOLLOW * (frames > 0 ? frames : 0);                                                         /* the view moves on the frames only */
+            int32_t nx = z2_vx + (wx - z2_vx > fo ? fo : wx - z2_vx < -fo ? -fo : wx - z2_vx), ny = z2_vy + (wy - z2_vy > fo ? fo : wy - z2_vy < -fo ? -fo : wy - z2_vy);
             nx = z2_floor4(nx);
-            if (nx != z2_vx || ny != z2_vy) {
+            if (frames > 0 && (nx != z2_vx || ny != z2_vy)) {
                 if (z2_whole(f, nx, ny, GV_SCREEN_W, GV_SCREEN_H)) { z2_show(f, nx, ny); moved = 1; }
                 else if (nx != z2_vx && z2_whole(f, nx, z2_vy, GV_SCREEN_W, GV_SCREEN_H)) { z2_show(f, nx, z2_vy); moved = 1; }
                 else if (ny != z2_vy && z2_whole(f, z2_vx, ny, GV_SCREEN_W, GV_SCREEN_H)) { z2_show(f, z2_vx, ny); moved = 1; }
             }
-            if (wx != z2_vx || wy != z2_vy) { if (moved) { info.zt_moved++; z_run = 0u; } else { z_run++; if (z_run > info.zt_stall_run_max) info.zt_stall_run_max = z_run; } } else z_run = 0u;
+            if (frames > 0) { if (wx != z2_vx || wy != z2_vy) { if (moved) { info.zt_moved += (uint32_t)frames; z_run = 0u; } else { z_run += (uint32_t)frames; if (z_run > info.zt_stall_run_max) info.zt_stall_run_max = z_run; } } else z_run = 0u; }
         }
         { const uint32_t us = z2_us(pass_t0); if (us > info.zt_pass_max) info.zt_pass_max = us; }
     }
-    z2_active = 0u; view_hidden = 0u;
+    z2_active = 0u; view_hidden = 0u; z2_job.on = 0u;
     if (ret >= 0) { const int32_t vx = z2_shown ? z2_vx : wx, vy = z2_shown ? z2_vy : wy; *cx = (vx + GV_SCREEN_W / 2) / (int32_t)z2_s; *cy = (vy + GV_SCREEN_H / 2) / (int32_t)z2_s; }
     return ret;
 }

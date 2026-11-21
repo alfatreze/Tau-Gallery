@@ -579,6 +579,8 @@ def mutants(setdir, tail=None):
         ("gallery_app.c", "else if (zl.layout == 2u && z_shown) { zoom_to_grid = 0u; z2_enter();", "else if (zl.layout == 2u) { zoom_to_grid = 0u; z2_enter();"),
         ("gallery_app.c", "    if (r == 0) zoom_open(k, cx - GV_SCREEN_W / 2, cy - GV_SCREEN_H / 2);", "    if (r == 0) zoom_open(k, 0, 0);"),
         ("gallery_app.c", "z2_tx = s == 2u ? 5u : 4u;", "z2_tx = s == 2u ? 5u : 3u;"),
+        ("gallery_app.c", "if (++z2_job.k >= z2_s * z2_s) {", "if (++z2_job.k >= z2_s * z2_s - 1u) {"),
+        ("gallery_app.c", "while ((int32_t)(now - next_tick) >= 0 && frames < 4) { next_tick += ZOOM_FRAME; frames++; }", "if ((int32_t)(now - next_tick) >= 0) { next_tick += ZOOM_FRAME; frames = 1; }"),
         ("gallery_app.c", "if (from != tp && z2_isres(from, bx, by)) { z2_copy(from, tp, bx, by); return 1; }", "if (0 && z2_isres(from, bx, by)) { z2_copy(from, tp, bx, by); return 1; }"),
         ("gallery_app.c", "if (edge & KEY_START) { ret = 3; break; }", "if (edge & KEY_START) { ret = 0; break; }"),
         ("gallery_app.c", "    if (!z2_hold) {info.zt_n", "    if (1) {info.zt_n"),
