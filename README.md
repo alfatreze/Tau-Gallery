@@ -20,9 +20,10 @@ The core shows an empty library until you convert pictures. Your originals are n
 
 - **Hardware decoding.** Pictures are stored in **TGY**, a tiled format (128 x 128 pixel tiles) designed together with the decoder: an adaptive range coder, the integer DCT and 4:2:0 or 4:4:4 colour are all done in the FPGA. A tile takes about 6 ms on the Pocket; the CPU does only the bookkeeping.
 - **Huge pictures.** Each picture is stored as a small "fit" level (what you see first) plus its full-resolution level, cut into independent tiles. Zoom and pan read and decode only the tiles on screen. Pictures of more than 400 megapixels have been converted and opened on a Pocket; the measurements below were taken on a 21-megapixel (6000 x 3575) picture.
+- **2x and 4x pixel zoom.** Past the 1:1 view, A shows every pixel as a 2 x 2 block and A again as a 4 x 4 block (the core doubles pixels at scan-out; the firmware decodes each tile once for 2x). Panning follows the time, not the card, and Start opens a navigator sized for the level on the full picture, which stays in memory, so it is up at once.
 - **Lossless from JPEG.** A baseline or progressive JPEG goes in as its own DCT coefficients, re-packed without re-encoding: no quality loss, and the result is **smaller than the JPEG** (see [compression](#compression)).
 - **Grid of four sizes**, 4 x 3, 5 x 4, 6 x 4 or 8 x 6 pictures a page, with square thumbnails that fill their cell, rounded corners and a rounded selection frame, drawn by the core's own graphics engine.
-- **Folders and details.** One level of folders (your subfolders become folders of the gallery). Each picture has a details page set with a page indicator: INFO, SHOT (camera, lens, date taken, shutter, aperture, ISO, focal length: only the fields the picture has) and HISTOGRAMS (luma, red, green, blue, **counted by the hardware decoder** while the picture is opened in the viewer; from the thumbnail otherwise).
+- **Folders and details.** Folders inside folders: your folder tree is copied to the card as it is, and a Settings choice (FOLDERS) shows it flat (a top folder holds every picture under it) or nested (you walk down the tree). Each picture has a details page set with a page indicator: INFO, SHOT (camera, lens, date taken, shutter, aperture, ISO, focal length: only the fields the picture has) HISTOGRAMS (luma, red, green, blue, **counted by the hardware decoder** while the picture is opened in the viewer; from the thumbnail otherwise; A changes the height scale: square root, linear or log; with the mean and the share of black and white) and an OVERLAY page that draws the four over one another across the whole width.
 - **Look and viewing tools.** Turn a picture 90 degrees either way, mirror it, overlay **crop masks** (1:1, 4:5, 3:2, 16:9, CinemaScope, XPan, 3:1, each turnable) to see how a picture looks at a different crop, and choose a **colour preset** (normal, bright, contrast, midtones, faded, warm, cool, invert). A hardware **dither** (ordered, or ordered with motion) hides the banding the Pocket's 5/6/5-bit panel would show.
 - **Comfort.** Resume on the last picture, one-key map to jump around a zoomed picture, themes with 19 accent colours and a dark or light mode, a Controls page and an Info page with timings.
 
@@ -32,7 +33,7 @@ The core shows an empty library until you convert pictures. Your originals are n
 |---|---|
 | **Grid** | Left / Right previous / next, Up / Down one row, L1 / R1 page back / on, A open, Select details, Start menu |
 | **Picture** | Left / Right previous / next, A zoom in, B back to the grid, X / Y turn, Start + X / Y mirror, L1 crop mask (Start turns it), Select details |
-| **Zoomed in** | D-pad pan, Start map (jump to a spot), L1 / R1 zoom out / in, A or B back to fit, Select + Left / Right previous / next |
+| **Zoomed in** | D-pad pan, Start navigator (jump to a spot, at this zoom level), A zoom in (1:1, then 2x, then 4x), B or L1 back one level (hold B for the grid), Select details |
 
 ## Speed
 
