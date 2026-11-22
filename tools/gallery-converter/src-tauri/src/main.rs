@@ -35,9 +35,14 @@ fn scan(path: String) -> Scan {
     if p.is_dir() {
         let count = |d: &Path| std::fs::read_dir(d).map(|rd| rd.filter_map(|e| e.ok()).filter(|e| e.path().is_file() && is_picture(&e.path())).count()).unwrap_or(0);
         let top = count(p);
-        // one level of folders: a subfolder that holds pictures is a folder of the library (hidden ones are not looked at)
-        let subs: Vec<usize> = std::fs::read_dir(p).map(|rd| rd.filter_map(|e| e.ok()).filter(|e| e.path().is_dir() && !e.file_name().to_string_lossy().starts_with('.')).map(|e| count(&e.path())).filter(|n| *n > 0).collect()).unwrap_or_default();
-        return Scan { kind: "folder".into(), name, pictures: top + subs.iter().sum::<usize>(), folders: subs.len() };
+        // every depth: a folder that holds pictures is a folder of the library (hidden ones are not looked at); the library keeps the tree and the Pocket shows it flat or nested
+        fn walk(d: &Path, count: &dyn Fn(&Path) -> usize) -> (usize, usize) {
+            let n = count(d); let (mut pics, mut folders) = (n, usize::from(n > 0));
+            if let Ok(rd) = std::fs::read_dir(d) { for e in rd.filter_map(|e| e.ok()) { if e.path().is_dir() && !e.file_name().to_string_lossy().starts_with('.') { let (a, b) = walk(&e.path(), count); pics += a; folders += b; } } }
+            (pics, folders)
+        }
+        let (pics, folders) = walk(p, &count);
+        return Scan { kind: "folder".into(), name, pictures: pics, folders: folders - usize::from(top > 0) };
     }
     Scan { kind: "missing".into(), name, pictures: 0, folders: 0 }
 }
@@ -293,6 +298,14 @@ mod tests {
         run_conversion(&job, &opts(&src, &d.join("out0"), false), |_| {}).unwrap();
         let g = std::fs::read(d.join("out0/Assets/tau_gallery/common/photos/big.tgy")).unwrap();
         assert_eq!(u16::from_le_bytes([g[4], g[5]]), 0, "version 0 stays version 0");
+    }
+
+    #[test]
+    fn the_scan_counts_pictures_and_folders_at_every_depth() {
+        let d = tmp("scan_tree"); let t = |p: &str| { let f = d.join(p); std::fs::create_dir_all(f.parent().unwrap()).unwrap(); std::fs::write(f, b"x").unwrap(); };
+        t("top.jpg"); t("Trip/a.jpg"); t("Trip/Day 1/b.png"); t("Trip/Day 2/Deep/c.jpg"); t("Trip/.hid/h.jpg"); t("Empty/readme.txt"); t("Misc/d.jpg");
+        let s = scan(d.to_string_lossy().into_owned());
+        assert_eq!((s.kind.as_str(), s.pictures, s.folders), ("folder", 5, 4), "5 pictures (the hidden folder is not read) in 4 folders: Trip, Day 1, Deep, Misc (the pictures of the folder itself are not a folder)");
     }
 
     #[test]
