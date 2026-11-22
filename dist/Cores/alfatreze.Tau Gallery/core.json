@@ -17,7 +17,7 @@
             "version_required": "1.1",
             "sleep_supported": false,
             "dock": {
-                "supported": false,
+                "supported": true,
                 "analog_output": false
             },
             "hardware": {
