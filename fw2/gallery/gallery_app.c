@@ -68,7 +68,7 @@ static uint32_t hist_for = 0xFFFFFFFFu, hist_counted;                           
 static uint32_t sel, page, loaded_page = 0xFFFFFFFFu, n_on_page;                                    /* sel: the selected entry, an index into the library (or into the folders on the folder level) */
 static uint32_t cur_first, cur_count, level, cur_folder;                                            /* the open folder is the range [cur_first, cur_first + cur_count) of the entries; level 1 shows the folders themselves */
 #define EN(i) ent[(i) - (cur_first + page * pp)]                                                    /* the loaded page's record of entry i */
-static uint8_t v1z_idx[24576u]; static uint32_t v1z_idx_ok;                                         /* the zoom's tile index; also the buffer of the index pages and the folder table while no picture is open */
+static uint8_t v1z_idx[20480u]; static uint32_t v1z_idx_ok;                                         /* the zoom's tile index; also the buffer of the index pages and the folder table while no picture is open */
 
 static void say(const char *s, uint16_t color) { gfx_rect(0, 336, GFX_W, 24, BG); gfx_text(6, 338, s, color, BG); }
 static void cell_xy(uint32_t k, uint32_t *x, uint32_t *y) { *x = GR.x0 + (k % GR.cols) * GR.dx; *y = GY0 + GR.y0 + (k / GR.cols) * GR.dy; }
@@ -495,7 +495,7 @@ _Static_assert(GAL_ROT_BASE == GAL_WIN0 && GAL_ROTZERO == GAL_STAGE + 0x7000u, "
 #define GAL_STREAM (GAL_STAGE + 0x10000u)        /* one landed tile stream, 128 KB (halfword address): past the staging tile (0x6000) and the bar save area (GAL_STAGE + 0x8000, 0x3000 used) */
 #define SDRAM_HZ 100000000u                      /* the decoder's cycle counter runs on the SDRAM clock */
 #define V1Z_STREAM_MAX 122880u                   /* a stream longer than this (a tile of noise at the highest quality is about 60 KB) is not decoded */
-#define V1Z_IDX_MAX 24576u                       /* the full level's tile index kept in RAM: 12 bytes a tile, 2,048 tiles (a 33 megapixel picture); a bigger level's index stays on the card and is read an entry at a time (it was 32 KB, 2,730 tiles, before the 2x and 4x zoom needed the RAM) */
+#define V1Z_IDX_MAX 20480u                       /* the full level's tile index kept in RAM: 12 bytes a tile, 2,048 tiles (a 33 megapixel picture); a bigger level's index stays on the card and is read an entry at a time (it was 32 KB, 2,730 tiles, before the 2x and 4x zoom needed the RAM) */
 static tgy_file_t v1fz; static tgy_level_t v1z; static uint32_t v1z_cap = V1Z_IDX_MAX, v1z_smax = V1Z_STREAM_MAX;      /* v1z_cap: the index size accepted (a variable so the host test can lower it) */
 /* An index that does not fit the buffer (more than 2,730 tiles) stays on the card: its checksum is checked once in pieces, and each tile's 12 byte entry is read through a small block cache over the same buffer (v1c_n blocks of v1c_bs bytes,
  * least recently used out; variables so the host test can make them tiny). The index is row by row, so the entries a window needs are a few blocks. Above V1Z_VERIFY_MAX the checksum is not checked (reading it would take seconds):
