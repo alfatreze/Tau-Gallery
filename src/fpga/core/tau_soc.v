@@ -1049,7 +1049,8 @@ module tau_soc #(
 `ifdef TAU_TGY
     // Tau Gallery hardware TGY decoder: new MMIO registers 0x220-0x24C and interrupt source 4, a different contract from every earlier core (with or without the 128 KB RAM option; the firmware that drives it is linked for this value).
     // rev 30 (Tau Gallery 1.0 pixel RTL): the pixel effects (PIX_CTRL 0x250, PIX_LUT 0x254, VIEW_CAPS 0x80000007), the histogram unit (0x260-0x278), OP_CORNERS and OP_DSBLIT in the draw engine, 4:4:4 in the decoder
-    localparam [31:0] CORE_VERSION = 32'h4D50331E;   // "MP3" + rev 30 (rev 29 + the Gallery 1.0 pixel RTL)
+    // rev 31 (2026-11-22): pixel doubling of the viewer (R_PIX_CTRL bit 3, VIEW_CAPS bit 3, tau_scanout_v / tau_talos); nothing else changes
+    localparam [31:0] CORE_VERSION = 32'h4D50331F;   // "MP3" + rev 31 (rev 30 + the viewer's pixel doubling)
 `elsif TAU_RAM_128K
     // Tau Gallery 128 KB main RAM: a different contract from the 192 KB one (a firmware linked for 192 KB must be refused, and the gallery firmware linked for 128 KB must refuse the older core).
     localparam [31:0] CORE_VERSION = 32'h4D50331C;   // "MP3" + rev 28 (rev 27 + 128 KB main RAM)

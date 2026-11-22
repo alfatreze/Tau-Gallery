@@ -34,7 +34,7 @@ module tb_tgy_soc;
     always @(posedge clk) if (u_soc.con_wr) begin
         if (u_soc.con_char == 8'd10) begin
             $display("fw: %0s", line);
-            if (line == "VER 4D50331E") seen[0] = 1;
+            if (line == "VER 4D50331F") seen[0] = 1;
             if (line == "ST 80000000") seen[1] = 1;
             if (line == "QCHK 0002C91C") seen[2] = 1;
             if (line == "BUSY 80000001") seen[3] = 1;

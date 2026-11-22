@@ -145,7 +145,7 @@ def run(workdir, setdir):
     if r.returncode: rc = 1; out += "\nFAIL scenario zoom\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-2500:]
     global V1SET
     if V1SET is None: V1SET = Path(tempfile.mkdtemp()); make_v1_set(V1SET)
-    for sc in ("v1", "v1nohw", "v1zoom", "v1map", "v1rot", "v1mask", "v1hist", "v1mirror", "v1filter", "v1zoom2"):
+    for sc in ("v1", "v1nohw", "v1zoom", "v1map", "v1rot", "v1mask", "v1hist", "v1mirror", "v1filter", "v1zoom2", "v1zoom2d"):
         r = subprocess.run([str(workdir / "t"), str(V1SET), sc], capture_output=True, text=True, timeout=900)
         if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-2500:]
         else: out += "\n" + r.stdout

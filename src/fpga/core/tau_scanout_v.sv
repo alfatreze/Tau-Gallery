@@ -133,7 +133,7 @@ module tau_scanout_v #(
     // read pointer: pair index within the line, restarted at hc 11 (hc 7 in a doubled frame, so that address 0 also lasts the two clocks every other address does), one per tick in the first three of every four ticks
     reg [9:0] pa = 10'd0;
     reg [1:0] ph = 2'd0;                                                                   // fetch phase (a normal frame: hc[1:0], 12 is a multiple of 4)
-    wire [9:0] f_start = dbl_i ? 10'd7 : 10'd11, fw_lo = dbl_i ? 10'd9 : 10'd12, fw_hi = dbl_i ? ((BUG == 14) ? 10'd1009 : 10'd809) : 10'd812;      // BUG 14: the doubled window as long as a normal one
+    wire [9:0] f_start = dbl_i ? 10'd7 : 10'd11, fw_lo = dbl_i ? 10'd9 : 10'd12, fw_hi = dbl_i ? 10'd809 : 10'd812;                   // (a longer doubled window only reads words nothing uses: an equivalent mutant, so there is none)
     wire      fetch_win = (hc >= fw_lo) && (hc < fw_hi);
     always @(posedge clk_vid) begin
         if (hc == f_start) begin pa <= 10'd0; ph <= 2'd0; end

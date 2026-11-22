@@ -815,12 +815,12 @@ test-rtl-scanout-v: | $(RTL_BUILD_DIR)
 	grep -q "PASS  BUG=0 SLOW=0 DBL=0" $(RTL_BUILD_DIR)/tb_tau_scanout_v.log; grep -q "PASS  BUG=0 SLOW=1" $(RTL_BUILD_DIR)/tb_tau_scanout_v_slow.log; grep -q "PASS  BUG=0 SLOW=0 DBL=1" $(RTL_BUILD_DIR)/tb_tau_scanout_v_dbl.log
 test-rtl-scanout-v-mutation: | $(RTL_BUILD_DIR)
 	@set -e; \
-	for b in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do \
+	for b in 1 2 3 4 5 6 7 8 9 10 11 12 13 15 16; do \
 	  s=0; [ $$b = 10 ] && s=1; d=0; [ $$b -ge 12 ] && d=1; \
 	  $(IVERILOG) -g2012 -Isrc/fpga/core -Ptb_tau_scanout_v.BUG=$$b -Ptb_tau_scanout_v.SLOW=$$s -Ptb_tau_scanout_v.DBL=$$d -o $(RTL_BUILD_DIR)/tb_tau_scanout_v_m$$b.vvp $(SCANOUT_V_SRC); \
 	  ( $(VVP) $(RTL_BUILD_DIR)/tb_tau_scanout_v_m$$b.vvp > $(RTL_BUILD_DIR)/tb_tau_scanout_v_m$$b.log 2>&1 & ); \
 	done; \
-	for b in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do \
+	for b in 1 2 3 4 5 6 7 8 9 10 11 12 13 15 16; do \
 	  while ! grep -qE "PASS|FAILED|TIMEOUT" $(RTL_BUILD_DIR)/tb_tau_scanout_v_m$$b.log 2>/dev/null; do sleep 2; done; \
 	  if grep -q "^FAILED" $(RTL_BUILD_DIR)/tb_tau_scanout_v_m$$b.log || grep -q TIMEOUT $(RTL_BUILD_DIR)/tb_tau_scanout_v_m$$b.log; then echo "mutant $$b killed"; else echo "MUTANT $$b SURVIVED"; exit 1; fi; \
 	done
