@@ -809,17 +809,18 @@ test-rtl-scanout-v: | $(RTL_BUILD_DIR)
 	@set -e; \
 	$(IVERILOG) -g2012 -Isrc/fpga/core -o $(RTL_BUILD_DIR)/tb_tau_scanout_v.vvp $(SCANOUT_V_SRC); \
 	$(IVERILOG) -g2012 -Isrc/fpga/core -Ptb_tau_scanout_v.SLOW=1 -o $(RTL_BUILD_DIR)/tb_tau_scanout_v_slow.vvp $(SCANOUT_V_SRC); \
-	( $(VVP) $(RTL_BUILD_DIR)/tb_tau_scanout_v.vvp > $(RTL_BUILD_DIR)/tb_tau_scanout_v.log 2>&1 & $(VVP) $(RTL_BUILD_DIR)/tb_tau_scanout_v_slow.vvp > $(RTL_BUILD_DIR)/tb_tau_scanout_v_slow.log 2>&1 & wait ); \
-	grep -E "PASS|FAIL" $(RTL_BUILD_DIR)/tb_tau_scanout_v.log $(RTL_BUILD_DIR)/tb_tau_scanout_v_slow.log; \
-	grep -q "PASS  BUG=0 SLOW=0" $(RTL_BUILD_DIR)/tb_tau_scanout_v.log; grep -q "PASS  BUG=0 SLOW=1" $(RTL_BUILD_DIR)/tb_tau_scanout_v_slow.log
+	$(IVERILOG) -g2012 -Isrc/fpga/core -Ptb_tau_scanout_v.DBL=1 -o $(RTL_BUILD_DIR)/tb_tau_scanout_v_dbl.vvp $(SCANOUT_V_SRC); \
+	( $(VVP) $(RTL_BUILD_DIR)/tb_tau_scanout_v.vvp > $(RTL_BUILD_DIR)/tb_tau_scanout_v.log 2>&1 & $(VVP) $(RTL_BUILD_DIR)/tb_tau_scanout_v_slow.vvp > $(RTL_BUILD_DIR)/tb_tau_scanout_v_slow.log 2>&1 & $(VVP) $(RTL_BUILD_DIR)/tb_tau_scanout_v_dbl.vvp > $(RTL_BUILD_DIR)/tb_tau_scanout_v_dbl.log 2>&1 & wait ); \
+	grep -E "PASS|FAIL" $(RTL_BUILD_DIR)/tb_tau_scanout_v.log $(RTL_BUILD_DIR)/tb_tau_scanout_v_slow.log $(RTL_BUILD_DIR)/tb_tau_scanout_v_dbl.log; \
+	grep -q "PASS  BUG=0 SLOW=0 DBL=0" $(RTL_BUILD_DIR)/tb_tau_scanout_v.log; grep -q "PASS  BUG=0 SLOW=1" $(RTL_BUILD_DIR)/tb_tau_scanout_v_slow.log; grep -q "PASS  BUG=0 SLOW=0 DBL=1" $(RTL_BUILD_DIR)/tb_tau_scanout_v_dbl.log
 test-rtl-scanout-v-mutation: | $(RTL_BUILD_DIR)
 	@set -e; \
-	for b in 1 2 3 4 5 6 7 8 9 10 11; do \
-	  s=0; [ $$b = 10 ] && s=1; \
-	  $(IVERILOG) -g2012 -Isrc/fpga/core -Ptb_tau_scanout_v.BUG=$$b -Ptb_tau_scanout_v.SLOW=$$s -o $(RTL_BUILD_DIR)/tb_tau_scanout_v_m$$b.vvp $(SCANOUT_V_SRC); \
+	for b in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do \
+	  s=0; [ $$b = 10 ] && s=1; d=0; [ $$b -ge 12 ] && d=1; \
+	  $(IVERILOG) -g2012 -Isrc/fpga/core -Ptb_tau_scanout_v.BUG=$$b -Ptb_tau_scanout_v.SLOW=$$s -Ptb_tau_scanout_v.DBL=$$d -o $(RTL_BUILD_DIR)/tb_tau_scanout_v_m$$b.vvp $(SCANOUT_V_SRC); \
 	  ( $(VVP) $(RTL_BUILD_DIR)/tb_tau_scanout_v_m$$b.vvp > $(RTL_BUILD_DIR)/tb_tau_scanout_v_m$$b.log 2>&1 & ); \
 	done; \
-	for b in 1 2 3 4 5 6 7 8 9 10 11; do \
+	for b in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do \
 	  while ! grep -qE "PASS|FAILED|TIMEOUT" $(RTL_BUILD_DIR)/tb_tau_scanout_v_m$$b.log 2>/dev/null; do sleep 2; done; \
 	  if grep -q "^FAILED" $(RTL_BUILD_DIR)/tb_tau_scanout_v_m$$b.log || grep -q TIMEOUT $(RTL_BUILD_DIR)/tb_tau_scanout_v_m$$b.log; then echo "mutant $$b killed"; else echo "MUTANT $$b SURVIVED"; exit 1; fi; \
 	done
@@ -832,16 +833,18 @@ test-rtl-gfx-view: | $(RTL_BUILD_DIR)
 	@set -e; \
 	$(IVERILOG) -g2012 -Isrc/fpga/core -o $(RTL_BUILD_DIR)/tb_tau_gfx_view.vvp $(GFX_VIEW_SRC); \
 	$(IVERILOG) -g2012 -Isrc/fpga/core -Ptb_tau_gfx_view.SLOW=3 -o $(RTL_BUILD_DIR)/tb_tau_gfx_view_slow.vvp $(GFX_VIEW_SRC); \
-	( $(VVP) $(RTL_BUILD_DIR)/tb_tau_gfx_view.vvp > $(RTL_BUILD_DIR)/tb_tau_gfx_view.log 2>&1 & $(VVP) $(RTL_BUILD_DIR)/tb_tau_gfx_view_slow.vvp > $(RTL_BUILD_DIR)/tb_tau_gfx_view_slow.log 2>&1 & wait ); \
-	grep -E "PASSED|FAILED|DIFF|FAIL" $(RTL_BUILD_DIR)/tb_tau_gfx_view.log $(RTL_BUILD_DIR)/tb_tau_gfx_view_slow.log; \
-	grep -q "^PASSED" $(RTL_BUILD_DIR)/tb_tau_gfx_view.log; grep -q "^PASSED" $(RTL_BUILD_DIR)/tb_tau_gfx_view_slow.log
+	$(IVERILOG) -g2012 -Isrc/fpga/core -Ptb_tau_gfx_view.DBL=1 -o $(RTL_BUILD_DIR)/tb_tau_gfx_view_dbl.vvp $(GFX_VIEW_SRC); \
+	( $(VVP) $(RTL_BUILD_DIR)/tb_tau_gfx_view.vvp > $(RTL_BUILD_DIR)/tb_tau_gfx_view.log 2>&1 & $(VVP) $(RTL_BUILD_DIR)/tb_tau_gfx_view_slow.vvp > $(RTL_BUILD_DIR)/tb_tau_gfx_view_slow.log 2>&1 & $(VVP) $(RTL_BUILD_DIR)/tb_tau_gfx_view_dbl.vvp > $(RTL_BUILD_DIR)/tb_tau_gfx_view_dbl.log 2>&1 & wait ); \
+	grep -E "PASSED|FAILED|DIFF|FAIL" $(RTL_BUILD_DIR)/tb_tau_gfx_view.log $(RTL_BUILD_DIR)/tb_tau_gfx_view_slow.log $(RTL_BUILD_DIR)/tb_tau_gfx_view_dbl.log; \
+	grep -q "^PASSED" $(RTL_BUILD_DIR)/tb_tau_gfx_view.log; grep -q "^PASSED" $(RTL_BUILD_DIR)/tb_tau_gfx_view_slow.log; grep -q "^PASSED" $(RTL_BUILD_DIR)/tb_tau_gfx_view_dbl.log
 test-rtl-gfx-view-mutation: | $(RTL_BUILD_DIR)
 	@set -e; \
-	for b in 1 2 3 4 5; do \
-	  $(IVERILOG) -g2012 -Isrc/fpga/core -Ptb_tau_gfx_view.BUG_VIEW=$$b -o $(RTL_BUILD_DIR)/tb_tau_gfx_view_m$$b.vvp $(GFX_VIEW_SRC); \
+	for b in 1 2 3 4 5 6; do \
+	  d=0; [ $$b = 6 ] && d=1; \
+	  $(IVERILOG) -g2012 -Isrc/fpga/core -Ptb_tau_gfx_view.BUG_VIEW=$$b -Ptb_tau_gfx_view.DBL=$$d -o $(RTL_BUILD_DIR)/tb_tau_gfx_view_m$$b.vvp $(GFX_VIEW_SRC); \
 	  ( $(VVP) $(RTL_BUILD_DIR)/tb_tau_gfx_view_m$$b.vvp > $(RTL_BUILD_DIR)/tb_tau_gfx_view_m$$b.log 2>&1 & ); \
 	done; \
-	for b in 1 2 3 4 5; do \
+	for b in 1 2 3 4 5 6; do \
 	  while ! grep -qE "^PASSED|^FAILED" $(RTL_BUILD_DIR)/tb_tau_gfx_view_m$$b.log 2>/dev/null; do sleep 2; done; \
 	  if grep -q "^FAILED" $(RTL_BUILD_DIR)/tb_tau_gfx_view_m$$b.log; then echo "mutant $$b killed"; else echo "MUTANT $$b SURVIVED"; exit 1; fi; \
 	done

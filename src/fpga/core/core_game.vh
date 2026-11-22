@@ -148,7 +148,7 @@ wire        soc_gfx_idle;   wire [31:0] soc_gfx_fence;   wire [8:0] soc_gfx_free
 // Tau Gallery hardware TGY decoder (TAU_TGY, tau_tgy_unit.sv): the MMIO window tau_soc <-> unit
 wire [9:0]  soc_tgy_addr;  wire soc_tgy_we;  wire [31:0] soc_tgy_wdata, soc_tgy_rdata;  wire soc_tgy_hit, soc_tgy_irq;
 wire [24:0] soc_land_base;  wire soc_land_clear;  wire land_idle_w;  wire [31:0] land_words_w, land_ovf_w;   // Tau Gallery landing path (M0.5), tau_soc <-> tau_land
-wire        soc_view_req;   wire [24:0] soc_view_base;   wire [15:0] soc_view_stride;   wire [1:0] soc_pix_mode;   wire soc_pix_lut_on, soc_pix_lut_we, gfx_pix_lut_busy;   wire [17:0] soc_pix_lut_word;   // Tau Gallery viewer (M0.3), tau_soc -> tau_gfx
+wire        soc_view_req;   wire [24:0] soc_view_base;   wire [15:0] soc_view_stride;   wire [1:0] soc_pix_mode;   wire soc_view_dbl;   wire soc_pix_lut_on, soc_pix_lut_we, gfx_pix_lut_busy;   wire [17:0] soc_pix_lut_word;   // Tau Gallery viewer (M0.3), tau_soc -> tau_gfx
 wire        gfx_vid_cur, gfx_vid_pend;   wire [15:0] gfx_vid_switches;   // and tau_gfx -> tau_soc
 wire        soc_text_light, fb_text_light;   // theme/gamma: text weight table select, clk_sys -> clk_sdram
 // Phase F B1 (section 9): sticky blit addressing state, tau_soc -> tau_gfx.
@@ -542,7 +542,7 @@ tau_soc #(.VIEW_ENABLE(`TAU_VIEW_EN), .LAND_ENABLE(`TAU_LAND_EN), .TGY_ENABLE(`T
     .fb_font_wdata(soc_font_wdata),
     .fb_cmd_full  (soc_fb_cmd_full),
     .fb_gfx_idle(soc_gfx_idle), .fb_gfx_fence(soc_gfx_fence), .fb_gfx_free(soc_gfx_free), .fb_gfx_ovf(soc_gfx_ovf), .fb_gfx_underflow(soc_gfx_underflow),
-    .fb_view_req(soc_view_req), .fb_view_base(soc_view_base), .fb_view_stride(soc_view_stride), .fb_pix_mode(soc_pix_mode), .fb_pix_lut_on(soc_pix_lut_on), .fb_pix_lut_we(soc_pix_lut_we), .fb_pix_lut_word(soc_pix_lut_word), .fb_pix_lut_busy(gfx_pix_lut_busy), .fb_vid_cur(gfx_vid_cur), .fb_vid_pend(gfx_vid_pend), .fb_vid_switches(gfx_vid_switches),
+    .fb_view_req(soc_view_req), .fb_view_base(soc_view_base), .fb_view_stride(soc_view_stride), .fb_pix_mode(soc_pix_mode), .fb_view_dbl(soc_view_dbl), .fb_pix_lut_on(soc_pix_lut_on), .fb_pix_lut_we(soc_pix_lut_we), .fb_pix_lut_word(soc_pix_lut_word), .fb_pix_lut_busy(gfx_pix_lut_busy), .fb_vid_cur(gfx_vid_cur), .fb_vid_pend(gfx_vid_pend), .fb_vid_switches(gfx_vid_switches),
     .fb_land_base(soc_land_base), .fb_land_clear(soc_land_clear), .fb_land_idle(land_idle_w), .fb_land_words(land_words_w), .fb_land_ovf(land_ovf_w),
     .fb_tgy_addr(soc_tgy_addr), .fb_tgy_we(soc_tgy_we), .fb_tgy_wdata(soc_tgy_wdata), .fb_tgy_hit(soc_tgy_hit), .fb_tgy_rdata(soc_tgy_rdata), .fb_tgy_irq(soc_tgy_irq),
 
@@ -1075,7 +1075,7 @@ tau_gfx #(.BLIT_BLEND_ENABLE(`TAU_BLIT_BLEND_EN), .DBUF_ENABLE(`TAU_DBUF_EN), .F
 
     .video_rgb(vid_rgb_w), .video_de(vid_de_w), .video_hs(vid_hs_w), .video_vs(vid_vs_w), .scan_vc(vid_vc_w),
     .gfx_idle(soc_gfx_idle), .gfx_fence(soc_gfx_fence), .gfx_free(soc_gfx_free), .gfx_ovf(soc_gfx_ovf), .gfx_underflow(soc_gfx_underflow),
-    .view_en(soc_view_req), .view_base(soc_view_base), .view_stride(soc_view_stride), .pix_mode(soc_pix_mode), .pix_lut_on(soc_pix_lut_on), .pix_lut_we(soc_pix_lut_we), .pix_lut_word(soc_pix_lut_word), .pix_lut_busy(gfx_pix_lut_busy), .vid_cur(gfx_vid_cur), .vid_pend(gfx_vid_pend), .vid_switches(gfx_vid_switches)
+    .view_en(soc_view_req), .view_base(soc_view_base), .view_stride(soc_view_stride), .pix_mode(soc_pix_mode), .view_dbl(soc_view_dbl), .pix_lut_on(soc_pix_lut_on), .pix_lut_we(soc_pix_lut_we), .pix_lut_word(soc_pix_lut_word), .pix_lut_busy(gfx_pix_lut_busy), .vid_cur(gfx_vid_cur), .vid_pend(gfx_vid_pend), .vid_switches(gfx_vid_switches)
 );
 
 `ifdef TAU_PHASE2_PROBE

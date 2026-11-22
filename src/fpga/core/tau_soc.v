@@ -222,6 +222,7 @@ module tau_soc #(
     output wire [15:0]  fb_view_stride,
     // Tau Gallery pixel effects of the viewer (tau_pixfx): the dither mode, the colour tables (a store strobe and word) and the busy flag from the scan-out (clk_sys)
     output wire [1:0]   fb_pix_mode,
+    output wire         fb_view_dbl,         // R_PIX_CTRL bit 3: the viewer shows every source pixel twice across and every source line twice down (400 x 360 of the plane)
     output wire         fb_pix_lut_on,
     output wire         fb_pix_lut_we,
     output wire [17:0]  fb_pix_lut_word,
@@ -1286,6 +1287,8 @@ module tau_soc #(
     // PIX_LUT write {channel [17:16] 0 R 1 G 2 B, index [15:8], value [7:0]}: one store, ignored while busy (poll PIX_CTRL bit 8 before the next)
     localparam [9:0] R_PIX_CTRL = 10'h250, R_PIX_LUT = 10'h254;
     reg  [1:0]  pix_mode_r = 2'd0;
+    reg         view_dbl_r = 1'b0;
+    assign fb_view_dbl = (VIEW_ENABLE != 0) && view_dbl_r;
     reg         pix_lut_on_r = 1'b0, pix_lut_we_r = 1'b0;
     reg  [17:0] pix_lut_word_r = 18'd0;
     assign fb_pix_mode     = (VIEW_ENABLE != 0) ? pix_mode_r : 2'd0;
@@ -1583,7 +1586,7 @@ module tau_soc #(
                 R_LAND_CTRL:   if (LAND_ENABLE != 0 && dDAT_MOSI[0]) land_clear_r <= 1'b1;   // a one-clock pulse: restart the word and drop counts
                 R_IRQ_PEND:    if (IRQ_ENABLE != 0) begin irq_clr_d <= dDAT_MOSI; irq_clr_we <= 1'b1; end
                 R_VIEW_BASE:   if (VIEW_ENABLE != 0) view_base_r <= dDAT_MOSI[24:0];
-                R_PIX_CTRL:    if (VIEW_ENABLE != 0) begin pix_mode_r <= dDAT_MOSI[1:0]; pix_lut_on_r <= dDAT_MOSI[2]; end
+                R_PIX_CTRL:    if (VIEW_ENABLE != 0) begin pix_mode_r <= dDAT_MOSI[1:0]; pix_lut_on_r <= dDAT_MOSI[2]; view_dbl_r <= dDAT_MOSI[3]; end
                 R_PIX_LUT:     if (VIEW_ENABLE != 0) begin pix_lut_word_r <= dDAT_MOSI[17:0]; pix_lut_we_r <= 1'b1; end
                 R_VIEW_STRIDE: if (VIEW_ENABLE != 0) view_stride_r <= dDAT_MOSI[15:0];
                 9'h100:     begin poly_clear <= dDAT_MOSI[0]; poly_go <= dDAT_MOSI[1]; end
@@ -1747,9 +1750,9 @@ module tau_soc #(
             R_IRQ_PEND:    mmio_rdata = (IRQ_ENABLE != 0) ? irq_pend : 32'd0;
             R_VID_MODE:    mmio_rdata = (VIEW_ENABLE != 0) ? {fb_vid_switches, 13'd0, view_req_r, fb_vid_pend, fb_vid_cur} : 32'd0;   // [31:16] completed switches, [2] requested, [1] pending, [0] on the bus
             R_VIEW_BASE:   mmio_rdata = (VIEW_ENABLE != 0) ? {7'd0, view_base_r} : 32'd0;
-            R_PIX_CTRL:    mmio_rdata = (VIEW_ENABLE != 0) ? {23'd0, fb_pix_lut_busy, 5'd0, pix_lut_on_r, pix_mode_r} : 32'd0;
+            R_PIX_CTRL:    mmio_rdata = (VIEW_ENABLE != 0) ? {23'd0, fb_pix_lut_busy, 4'd0, view_dbl_r, pix_lut_on_r, pix_mode_r} : 32'd0;
             R_VIEW_STRIDE: mmio_rdata = (VIEW_ENABLE != 0) ? {16'd0, view_stride_r} : 32'd0;
-            R_VIEW_CAPS:   mmio_rdata = (VIEW_ENABLE != 0) ? 32'h80000007 : 32'd0;                    // [31] present, [2] pixel effects (dither, colour tables), [1] 800 x 720 viewer, [0] mode sequencer
+            R_VIEW_CAPS:   mmio_rdata = (VIEW_ENABLE != 0) ? 32'h8000000F : 32'd0;                    // [31] present, [3] pixel doubling (R_PIX_CTRL bit 3), [2] pixel effects (dither, colour tables), [1] 800 x 720 viewer, [0] mode sequencer
             R_SDA_VAL:     mmio_rdata = (SDA_ENABLE != 0) ? sda_val : 32'd0;             // the snapshot of the selected counter (stable until the next select)
             R_STATS_DATA:  mmio_rdata = stats_rd;                                      // audio statistics read-out word at STATS_IDX (0 when not built)
             R_FONT_IDX:    mmio_rdata = (FONT_RAM_ENABLE != 0) ? {19'd0, font_idx} : 32'd0;

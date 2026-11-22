@@ -311,6 +311,7 @@ module tau_talos #(
     input  wire        view_en,
     input  wire [24:0] view_base,
     input  wire [15:0] view_stride,
+    input  wire        view_dbl,       // quasi-static CPU register, latched with the base and stride at the next vblank: the plane line of screen line l is l / 2 (pixel doubling, tau_scanout_v)
     output reg         vlb_we    = 1'b0,
     output reg  [11:0] vlb_waddr = 12'd0,
     output reg  [15:0] vlb_wdata = 16'd0,
@@ -804,6 +805,8 @@ module tau_talos #(
     reg        view_l = 1'b0;                       // latched at a vblank edge
     reg [24:0] vbase_l = 25'd0;
     reg [15:0] vstride_l = 16'd0;
+    reg        vdbl_l = 1'b0;
+    wire [9:0] src_line = (vdbl_l && BUG_VIEW != 6) ? {1'b0, fill_line[9:1]} : fill_line;        // BUG_VIEW 6: a doubled frame reads plane line l, not l / 2
     reg [25:0] vo_p1 = 26'd0, vo = 26'd0;           // line * stride, two registered stages (a DSP block)
     reg [1:0]  fill_age = 2'd0;                     // clocks since the line number changed: the product is valid at 3
     reg [1:0]  fill_chunk = 2'd0;                   // 0..2: the third of the line being read or just read
@@ -817,8 +820,8 @@ module tau_talos #(
     always @(posedge clk_sdram) begin
         if (VIEW_ENABLE != 0) begin
             if (reset) view_l <= 1'b0;
-            else if (vblank_edge) begin view_l <= view_en; vbase_l <= view_base; vstride_l <= view_stride; end
-            vo_p1 <= (BUG_VIEW == 4) ? (fill_line * 16'd1200) : (fill_line * vstride_l);
+            else if (vblank_edge) begin view_l <= view_en; vbase_l <= view_base; vstride_l <= view_stride; vdbl_l <= view_dbl; end
+            vo_p1 <= (BUG_VIEW == 4) ? (src_line * 16'd1200) : (src_line * vstride_l);
             vo    <= vo_p1;
             if (fill_req_edge) fill_age <= 2'd0; else if (fill_age != 2'd3) fill_age <= fill_age + 2'd1;
         end

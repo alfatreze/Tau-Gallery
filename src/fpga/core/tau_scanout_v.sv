@@ -30,6 +30,7 @@ module tau_scanout_v #(
     input  wire        clk_vid,
 
     input  wire        enable,            // clk_sys level: show the picture (black until it is set)
+    input  wire        view_dbl,          // clk_sys level, taken at the start of a frame: every source pixel on two clocks and every source line on two lines (the plane is then 400 x 360 pixels of its 1,200 word lines)
     input  wire        hold,              // clk_vid: clear the counters (the module is not the picture)
     input  wire [23:0] slot_word,         // the scaler-slot word, sent in the RGB word right after DE falls on every line
 
@@ -120,13 +121,26 @@ module tau_scanout_v #(
         else              bank_o[wr_pair] <= lb_wdata;
     end
 
-    // read pointer: pair index within the line, restarted at hc 11, one per clock in the first three of every four clocks
+    // ---- pixel doubling: view_dbl crosses into clk_vid (three flops) and is taken at the first clock of a frame, so a frame is wholly one mode ----
+    reg [2:0] dbl_sync = 3'b000;
+    always @(posedge clk_vid) dbl_sync <= {dbl_sync[1:0], view_dbl};
+    reg dbl_f = 1'b0;
+    always @(posedge clk_vid) if (reset || hold) dbl_f <= 1'b0; else if (hc == 10'd0 && vc == 10'd0) dbl_f <= dbl_sync[2];
+    wire dbl_i = (BUG == 12) ? 1'b0 : dbl_f;                                                // BUG 12: never doubles
+    // the fetch runs in TICKS: every clock, or in a doubled frame every other (the odd ones: the group of four source pixels is loaded on the last clock of the eight it is shown for)
+    wire fe = !dbl_i || ((BUG == 13) ? ~hc[0] : hc[0]);                                     // BUG 13: the even clocks (the group would change one clock before its last pixel)
+
+    // read pointer: pair index within the line, restarted at hc 11 (hc 7 in a doubled frame, so that address 0 also lasts the two clocks every other address does), one per tick in the first three of every four ticks
     reg [9:0] pa = 10'd0;
-    wire      fetch_win = (hc >= 10'd12) && (hc < 10'd812);
-    wire [1:0] ph = hc[1:0];                                                               // fetch phase: 12 is a multiple of 4
+    reg [1:0] ph = 2'd0;                                                                   // fetch phase (a normal frame: hc[1:0], 12 is a multiple of 4)
+    wire [9:0] f_start = dbl_i ? 10'd7 : 10'd11, fw_lo = dbl_i ? 10'd9 : 10'd12, fw_hi = dbl_i ? ((BUG == 14) ? 10'd1009 : 10'd809) : 10'd812;      // BUG 14: the doubled window as long as a normal one
+    wire      fetch_win = (hc >= fw_lo) && (hc < fw_hi);
     always @(posedge clk_vid) begin
-        if (hc == 10'd11) pa <= 10'd0;
-        else if (fetch_win && ph != 2'd3) pa <= pa + 10'd1;
+        if (hc == f_start) begin pa <= 10'd0; ph <= 2'd0; end
+        else if (fe) begin
+            ph <= ph + 2'd1;
+            if (fetch_win && ph != 2'd3) pa <= pa + 10'd1;
+        end
     end
 
     wire        half   = (BUG == 7) ? ~vc[0] : vc[0];                                       // BUG 7: wrong line half
@@ -138,12 +152,15 @@ module tau_scanout_v #(
     end
     wire [31:0] rd_w = {rd_o, rd_e};
 
-    reg [31:0] n0 = 32'd0, n1 = 32'd0;
+    reg [31:0] n0 = 32'd0, n1 = 32'd0, rd_d = 32'd0;
     reg [95:0] grp = 96'd0;
-    always @(posedge clk_vid) begin
-        if (ph == 2'd1) n0 <= rd_w;
-        if (ph == 2'd2) n1 <= (BUG == 8) ? n0 : rd_w;                                        // BUG 8: second word taken as the first
-        if (ph == 2'd3) grp <= {rd_w, n1, n0};
+    // a read is back one clock after its address: one tick later in a normal frame (a tick is a clock), already in the same tick in a doubled one, so a doubled frame takes the word one tick late, which makes the latency two ticks in both
+    wire [31:0] cap = (BUG == 16) ? rd_w : (dbl_i ? rd_d : rd_w);                           // BUG 16: no delay in a doubled frame
+    always @(posedge clk_vid) if (fe) begin
+        rd_d <= rd_w;
+        if (ph == 2'd1) n0 <= cap;
+        if (ph == 2'd2) n1 <= (BUG == 8) ? n0 : cap;                                         // BUG 8: second word taken as the first
+        if (ph == 2'd3) grp <= {cap, n1, n0};
     end
 
     // ---- stage 1: pixel pick and flags -------------------------------------
@@ -161,8 +178,9 @@ module tau_scanout_v #(
         s1_x <= hc[2:0] - X0[2:0];
         s1_y <= vc[2:0] - Y0[2:0];
     end
+    wire [1:0] pick = dbl_i ? ((BUG == 15) ? hc[1:0] : hc[2:1]) : hc[1:0];                  // a doubled frame: a source pixel for two clocks (hc 16 is a multiple of 8); BUG 15: not halved
     always @(posedge clk_vid) begin
-        case (hc[1:0])
+        case (pick)
             2'd0: s1_px <= grp[23:0];
             2'd1: s1_px <= grp[47:24];
             2'd2: s1_px <= grp[71:48];

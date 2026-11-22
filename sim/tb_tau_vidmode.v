@@ -26,7 +26,7 @@ module tb_tau_vidmode #(parameter integer BUG = 0);
         .lb_we(1'b0), .lb_waddr(10'd0), .lb_wdata(16'd0), .fill_done_inc(1'b0), .fill_done_line(10'd0), .fill_seen(1'b0), .underflow_cnt(u_uf),
         .fill_req_tgl(u_ftgl), .fill_line_req(u_fl), .vblank_tgl(u_vbl), .video_rgb(u_rgb), .video_de(u_de), .video_hs(u_hs), .video_vs(u_vs), .scan_vc(u_vc),
         .hold(hold_ui), .slot_word(slot_word), .frame_end(ui_fend));
-    tau_scanout_v vw (.reset(reset), .clk_sys(clk_sys), .clk_sdram(clk_sdram), .clk_vid(clk_vid), .enable(1'b1), .hold(hold_v), .slot_word(slot_word),
+    tau_scanout_v vw (.reset(reset), .clk_sys(clk_sys), .clk_sdram(clk_sdram), .clk_vid(clk_vid), .enable(1'b1), .view_dbl(1'b0), .hold(hold_v), .slot_word(slot_word),
         .fx_mode(2'd0), .fx_lut_on(1'b0), .fx_lut_we(1'b0), .fx_lut_word(18'd0), .fx_lut_busy(),
         .lb_we(1'b0), .lb_waddr(12'd0), .lb_wdata(16'd0), .fill_done_line(10'd0), .fill_seen(1'b0), .underflow_cnt(v_uf),
         .fill_req_tgl(v_ftgl), .fill_line_req(v_fl), .vblank_tgl(v_vbl), .video_rgb(v_rgb), .video_de(v_de), .video_hs(v_hs), .video_vs(v_vs), .scan_vc(v_vc), .frame_end(v_fend));

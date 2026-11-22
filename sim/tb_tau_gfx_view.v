@@ -56,13 +56,13 @@ module vw_sdram_stub #(parameter integer BASE = 0, STRIDE = 0, SLOWRD = 0) (
     end
 endmodule
 
-module tb_tau_gfx_view #(parameter integer BUG_VIEW = 0, parameter integer SLOW = 0);
+module tb_tau_gfx_view #(parameter integer BUG_VIEW = 0, parameter integer SLOW = 0, parameter integer DBL = 0);
     localparam integer BASE = 4096, STRIDE = 1208;
     reg clk_sdram = 0, clk_sys = 0, clk_vid = 0, reset = 1;
     always #5    clk_sdram = ~clk_sdram;     // 100 MHz
     always #7.5  clk_sys   = ~clk_sys;       // 66.667 MHz
     always #12.5 clk_vid   = ~clk_vid;       // 40 MHz
-    reg view_en = 0;
+    reg view_en = 0; reg view_dbl = (DBL != 0);                                       // DBL = 1: pixel doubling, the screen shows plane line y / 2 and pixel x / 2
     wire [24:0] p0_addr; wire [15:0] p0_data; wire [10:0] p0_len; wire p0_str, p0_wr, p0_rd, p0_eb;
     wire [15:0] p0_q; wire p0_av, p0_rdy, p0_da; wire [10:0] wsa; wire [15:0] wsq;
     wire [23:0] rgb; wire de, hs, vs; wire [15:0] uf; wire [8:0] svc;
@@ -80,7 +80,7 @@ module tb_tau_gfx_view #(parameter integer BUG_VIEW = 0, parameter integer SLOW 
         .p0_wr_req(p0_wr), .p0_rd_req(p0_rd), .p0_end_burst_req(p0_eb), .p0_available(p0_av), .p0_ready(p0_rdy), .p0_data_available(p0_da), .wsrc_addr(wsa), .wsrc_q(wsq),
         .video_rgb(rgb), .video_de(de), .video_hs(hs), .video_vs(vs), .scan_vc(svc),
         .gfx_idle(), .gfx_fence(), .gfx_free(), .gfx_ovf(), .gfx_underflow(uf),
-        .view_en(view_en), .view_base(BASE[24:0]), .view_stride(STRIDE[15:0]), .pix_mode(2'd0), .pix_lut_on(1'b0), .pix_lut_we(1'b0), .pix_lut_word(18'd0), .pix_lut_busy(), .vid_cur(), .vid_pend(), .vid_switches());
+        .view_en(view_en), .view_base(BASE[24:0]), .view_stride(STRIDE[15:0]), .view_dbl(view_dbl), .pix_mode(2'd0), .pix_lut_on(1'b0), .pix_lut_we(1'b0), .pix_lut_word(18'd0), .pix_lut_busy(), .vid_cur(), .vid_pend(), .vid_switches());
     vw_sdram_stub #(.BASE(BASE), .STRIDE(STRIDE), .SLOWRD(SLOW)) mem (.clk(clk_sdram), .p0_addr(p0_addr), .p0_data(p0_data), .p0_wr_len(p0_len), .p0_wr_stream(p0_str),
         .p0_wr_req(p0_wr), .p0_rd_req(p0_rd), .p0_end_burst_req(p0_eb), .p0_q(p0_q), .p0_available(p0_av), .p0_ready(p0_rdy), .p0_data_available(p0_da), .wsrc_addr(wsa), .wsrc_q(wsq));
 
@@ -103,7 +103,7 @@ module tb_tau_gfx_view #(parameter integer BUG_VIEW = 0, parameter integer SLOW 
         if (checking) begin
             if (de) begin
                 if (!de_q) begin y = y + 1; x = 0; de_lines = de_lines + 1; end
-                if (!SLOW && rgb !== pix(x, y)) begin pix_bad = pix_bad + 1; if (pix_bad < 4) $display("DIFF f=%0d x=%0d y=%0d got %h want %h", frames_done, x, y, rgb, pix(x, y)); end
+                if (!SLOW && rgb !== (DBL ? pix(x / 2, y / 2) : pix(x, y))) begin pix_bad = pix_bad + 1; if (pix_bad < 4) $display("DIFF f=%0d x=%0d y=%0d got %h want %h", frames_done, x, y, rgb, (DBL ? pix(x / 2, y / 2) : pix(x, y))); end
                 x = x + 1;
             end
             if (v_fend) begin
@@ -122,7 +122,7 @@ module tb_tau_gfx_view #(parameter integer BUG_VIEW = 0, parameter integer SLOW 
         if (SLOW) begin if (uf == uf0) begin errors = errors + 1; $display("FAIL: slow memory but no late line counted"); end end
         else if (uf != uf0) begin errors = errors + 1; $display("FAIL: %0d late lines in the checked frames", uf - uf0); end
         if (!SLOW && pix_bad != 0) errors = errors + 1;
-        $display("%s  BUG_VIEW=%0d SLOW=%0d: pix_bad=%0d late_delta=%0d errors=%0d", errors == 0 ? "PASSED" : "FAILED", BUG_VIEW, SLOW, pix_bad, uf - uf0, errors);
+        $display("%s  BUG_VIEW=%0d SLOW=%0d DBL=%0d: pix_bad=%0d late_delta=%0d errors=%0d", errors == 0 ? "PASSED" : "FAILED", BUG_VIEW, SLOW, DBL, pix_bad, uf - uf0, errors);
         $finish;
     end
     initial begin #900000000; $display("FAILED TIMEOUT"); $finish; end

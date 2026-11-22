@@ -233,6 +233,7 @@ module tau_gfx #(
     input  wire        view_en,         // clk_sys level: the requested mode, 1 = 800 x 720 viewer (scaler slot 1), 0 = 400 x 360 UI (slot 0); see tau_vidmode.sv
     input  wire [24:0] view_base,       // word address of plane line 0
     input  wire [15:0] view_stride,     // words per plane line
+    input  wire        view_dbl,        // clk_sys: pixel doubling of the viewer (400 x 360 source pixels shown 800 x 720)
     input  wire [1:0]  pix_mode,        // clk_sys: the viewer's pixel effects (tau_pixfx): 0 off, 1 ordered dither, 2 ordered + temporal
     input  wire        pix_lut_on,      // clk_sys: the viewer's colour tables on
     input  wire        pix_lut_we,      // clk_sys: a colour table store strobe
@@ -334,7 +335,7 @@ module tau_gfx #(
         .lb_we(lb_we), .lb_waddr(lb_waddr), .lb_wdata(lb_wdata),
         .fill_done_inc(fill_done_inc), .fill_done_line(fill_done_line), .fill_seen(fill_seen),
         .gfx_idle(gfx_idle), .gfx_fence(gfx_fence), .gfx_free(gfx_free), .gfx_ovf(gfx_ovf),
-        .view_en(view_target), .view_base(view_base), .view_stride(view_stride),
+        .view_en(view_target), .view_base(view_base), .view_stride(view_stride), .view_dbl(view_dbl),
         .vlb_we(vlb_we), .vlb_waddr(vlb_waddr), .vlb_wdata(vlb_wdata), .view_active(view_active_w)
     );
 
@@ -367,7 +368,7 @@ module tau_gfx #(
                 .cur_view(cur), .pend(pend), .tgt_view(tgt), .hold_ui(u_hold), .hold_v(v_hold), .slot_word(slot_w), .target_view(target), .switches(sw));
             tau_scanout_v u_scanout_v (
                 .reset(reset), .clk_sys(clk_sys), .clk_sdram(clk_sdram), .clk_vid(clk_vid),
-                .enable(view_en), .hold(v_hold), .slot_word(slot_w),
+                .enable(view_en), .view_dbl(view_dbl), .hold(v_hold), .slot_word(slot_w),
                 .fx_mode(pix_mode), .fx_lut_on(pix_lut_on), .fx_lut_we(pix_lut_we), .fx_lut_word(pix_lut_word), .fx_lut_busy(pix_lut_busy),
                 .lb_we(vlb_we), .lb_waddr(vlb_waddr), .lb_wdata(vlb_wdata),
                 .fill_done_line(fill_done_line), .fill_seen(fill_seen),
