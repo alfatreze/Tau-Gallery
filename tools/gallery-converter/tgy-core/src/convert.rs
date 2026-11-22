@@ -318,16 +318,19 @@ pub fn run(a: &Options, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) -> i32
         if cancel.load(Ordering::Relaxed) { emit(json!({"event": "error", "error": "Stopped."})); return 2; }
         let stem0 = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         let fname = p.file_name().unwrap().to_string_lossy().into_owned();
-        let base = ascii_stem(&stem0);
-        let (mut stem, mut n) = (base.clone(), 1);
+        let base0 = ascii_stem(&stem0);
         let dkey = dirs.join("/");
-        while used.contains(&format!("{dkey}/{}", stem.to_lowercase())) { n += 1; stem = format!("{base}_{n}"); }
-        let shown = if n == 1 { stem0.clone() } else { format!("{stem0}_{n}") };
-        let path = if dirs.is_empty() { format!("{card_dir}/{stem}.tgy") } else { format!("{card_dir}/{}/{stem}.tgy", dkey) };
-        if path.len() >= index::PATH_BYTES {
-            emit(json!({"event": "skip", "file": fname, "error": format!("the card path is {} bytes, the limit is {}: shorten the file name or the card folder", path.len(), index::PATH_BYTES - 1)}));
+        let prefix = if dirs.is_empty() { format!("{card_dir}/") } else { format!("{card_dir}/{dkey}/") };
+        let room = (index::PATH_BYTES - 1).saturating_sub(prefix.len() + ".tgy".len());                      // a long file name is always shortened so that the card path fits (the display name keeps the whole name, up to its own limit)
+        if room < 1 {
+            emit(json!({"event": "skip", "file": fname, "error": format!("the card folders alone are {} bytes: no file name fits in the {} the index allows", prefix.len(), index::PATH_BYTES - 1)}));
             skipped += 1; continue;
         }
+        let base: String = base0.chars().take(room).collect();
+        let (mut stem, mut n) = (base.clone(), 1);
+        while used.contains(&format!("{dkey}/{}", stem.to_lowercase())) { n += 1; let suf = format!("_{n}"); stem = format!("{}{}", base.chars().take(room.saturating_sub(suf.len())).collect::<String>(), suf); }
+        let shown = if n == 1 { stem0.clone() } else { format!("{stem0}_{n}") };
+        let path = format!("{prefix}{stem}.tgy");
         let prep = match std::fs::read(p).map_err(|e| e.to_string()).and_then(|d| picture::prepare(&d)) { Ok(x) => x, Err(e) => { emit(json!({"event": "skip", "file": fname, "error": e})); skipped += 1; continue; } };
         let (canvas, rect, thumb) = render(&prep, a.upscale);
         let levels = if a.levels && !a.format_v1 { zoom_levels(&prep) } else { vec![] };

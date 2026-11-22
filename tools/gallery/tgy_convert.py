@@ -125,12 +125,15 @@ def main(argv=None):
         except ValueError as e: print(json.dumps({"event": "warning", "error": "the old index is not readable and is rebuilt without it: " + str(e)}))
     print(json.dumps({"event": "plan", "files": len(jobs), "kept": len(old)}))
     for p, folder, dirs in jobs:
-        base = ascii_stem(p.stem); stem = base; n = 1
-        while (dirs, stem.lower()) in used: n += 1; stem = f"{base}_{n}"
+        base = ascii_stem(p.stem); n = 1
+        prefix = f"{card_dir}/{'/'.join(dirs) + '/' if dirs else ''}"
+        room = tgy.PATH_BYTES - 1 - len(prefix.encode("utf-8")) - len(".tgy")                              # a long file name is always shortened so that the card path fits (the display name keeps the whole name, up to its own limit)
+        if room < 1:
+            print(json.dumps({"event": "skip", "file": p.name, "error": f"the card folders alone are {len(prefix.encode('utf-8'))} bytes: no file name fits in the {tgy.PATH_BYTES - 1} the index allows"})); skipped += 1; continue
+        base = base[:room]; stem = base
+        while (dirs, stem.lower()) in used: n += 1; suf = f"_{n}"; stem = base[:room - len(suf)] + suf
         shown = p.stem if n == 1 else f"{p.stem}_{n}"                  # the display name keeps the original characters (Latin-1) and the same suffix
-        path = f"{card_dir}/{'/'.join(dirs) + '/' if dirs else ''}{stem}.tgy"
-        if len(path.encode("utf-8")) >= tgy.PATH_BYTES:              # never cut a name (M1 decision 7): the file is skipped, said so, and the rest of the folder still converts
-            print(json.dumps({"event": "skip", "file": p.name, "error": f"the card path is {len(path.encode('utf-8'))} bytes, the limit is {tgy.PATH_BYTES - 1}: shorten the file name or the card folder"})); skipped += 1; continue
+        path = f"{prefix}{stem}.tgy"
         try:
             im = Image.open(p); fmt = (im.format or "").upper(); details = tgy.exif_details(im, fmt) if v1 else {}      # the EXIF and the format, before the orientation is applied
             prep = tgy.prepare(im); canvas, rect, thumb, size = tgy.render_prepared(prep, upscale=a.upscale)
