@@ -579,6 +579,8 @@ def mutants(setdir, tail=None):
         ("gallery_app.c", "else if (zl.layout == 2u && z_shown) { zoom_to_grid = 0u; z2_enter();", "else if (zl.layout == 2u) { zoom_to_grid = 0u; z2_enter();"),
         ("gallery_app.c", "    if (r == 0) zoom_open(k, cx - GV_SCREEN_W / 2, cy - GV_SCREEN_H / 2);", "    if (r == 0) zoom_open(k, 0, 0);"),
         ("gallery_app.c", "z2_tx = s == 2u ? 5u : 4u;", "z2_tx = s == 2u ? 5u : 3u;"),
+        ("gallery_app.c", "if (w == -2) { if (++z2_fail >= 5u) { ret = -1; break; } wait_ms(100u); }", "if (w == -2) { ret = -1; break; }"),
+        ("gallery_app.c", "if ((edge & KEY_SELECT) && !(keys & (KEY_LEFT | KEY_RIGHT))) {                                                         /* Select: the details pages", "if (0) {                                                         /* Select: the details pages"),
         ("gallery_app.c", "lab_show_at(z2_s == 2u ? \"2X ZOOM\" : \"4X ZOOM\", z2_disp_view, z2_disp_stride); last_pct = 101u;", "last_pct = 101u;"),
         ("gallery_app.c", "if (!z2_shown && z2_disp_ok && !view_hidden) {", "if (0) {"),
         ("gallery_app.c", "lab_show_at(z2_s == 2u ? \"2X ZOOM\" : \"4X ZOOM\", z2_disp_view, z2_disp_stride);", "lab_show_at(\"2X ZOOM\", z2_disp_view, z2_disp_stride);"),

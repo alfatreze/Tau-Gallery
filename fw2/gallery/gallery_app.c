@@ -295,7 +295,7 @@ static void show_view(void)                                                     
 /* ---- the label: the name of what a key changed, a black bar with white text over the last 32 rows of the picture on the screen (gallery_label.h). The rows under it are copied to a save area first (between the black plane and the
  * landing window) and back when the bar goes: at the next key press or after two seconds. ---- */
 #define GAL_LABSAVE 0x3D3000u                    /* halfword address of the 32 saved rows (38,400 halfwords): after the black plane (which ends at 0x3D2F00), before the landing window at 0x400000 */
-static char lab_last[32]; static uint32_t lab_nload;                                                  /* the text last written, and how many times a loader's percentage was (for the host test) */
+static char lab_last[32];                                                                             /* the text last written (for the host test) */
 static uint32_t lab_on, lab_t0, lab_base, lab_view, lab_stride = GAL_LINE_WORDS16, lab_draws;       /* 1 while the bar is on the plane; when it went up; the plane address of its first row; of the first row on the screen; a row of the plane in halfwords; the times the text was written */
 static void lab_copy(int back)
 {
@@ -315,7 +315,7 @@ static void lab_draw(const char *text)                                          
         }
     }
     gfx_fence(); lab_t0 = cycles(); lab_draws++;
-    { uint32_t n = 0u; while (text[n] && n < 31u) { lab_last[n] = text[n]; n++; } lab_last[n] = 0; if (text[0] == 'L' && text[1] == 'O') lab_nload++; }
+    { uint32_t n = 0u; while (text[n] && n < 31u) { lab_last[n] = text[n]; n++; } lab_last[n] = 0; }
 }
 static void lab_show_at(const char *text, uint32_t view, uint32_t stride)                            /* the bar over the last 32 rows of the screen's picture: view = the plane address of its first row on the screen, stride = a plane row */
 {
@@ -323,7 +323,6 @@ static void lab_show_at(const char *text, uint32_t view, uint32_t stride)       
     lab_view = view; lab_stride = stride; lab_base = view + GLB_Y0 * stride;
     lab_copy(0); lab_draw(text); lab_on = 1u;
 }
-static void lab_update(const char *text) { if (lab_on) lab_draw(text); }                              /* the text of a bar that is up, changed (the loader's percentage) */
 static void lab_show(const char *text)
 {
     lab_show_at(text, rot_o ? GAL_ROT_BASE + rot_pan * GAL_LINE_WORDS16 : GAL_PLANE_BASE, GAL_LINE_WORDS16);
@@ -507,7 +506,8 @@ static uint32_t zoom_scale(int k) { return k < 0 ? (uint32_t)(((uint64_t)pic.rw 
 #define ZB_HW0 480u                              /* pixel 320 of a plane row: 320 x 3 / 2 halfwords */
 #define ZB_HW 240u                               /* 160 pixels */
 #define GAL_BARSAVE (GAL_STAGE + 0x8000u)        /* the saved pixels of the two rows, past the staging tile */
-static uint32_t zb_row(uint32_t r) { return GAL_PLANE_BASE + (ZB_Y + r) * GAL_LINE_WORDS16 + ZB_HW0; }
+static uint32_t zb_view = GAL_PLANE_BASE, zb_stride = GAL_LINE_WORDS16;                                  /* the plane the bar is on (the fit plane; a 2x or 4x level's loader puts it on the plane on the screen) */
+static uint32_t zb_row(uint32_t r) { return zb_view + (ZB_Y + r) * zb_stride + ZB_HW0; }
 static uint16_t zb_half(uint32_t h, uint32_t fillpx)       /* halfword h of the bar's row: two bytes of the R, G, B stream */
 {
     const uint16_t tr = LDR_TRACK, ac = ACC; uint32_t v = 0;
@@ -538,7 +538,7 @@ static void zb_set(uint32_t done, uint32_t total)
     const uint32_t px = total ? (done > total ? 160u : (uint32_t)((uint64_t)done * 160u / total)) : 0u;
     if (px > zb_px) { zb_write(zb_px, px, px); zb_px = px; }
 }
-static void zb_end(void) { if (!zb_on) return; zb_on = 0u; zb_copy(1); }
+static void zb_end(void) { if (!zb_on) return; zb_on = 0u; zb_copy(1); zb_view = GAL_PLANE_BASE; zb_stride = GAL_LINE_WORDS16; }
 static void zoom_shown_now(void) { zb_end(); if (z_first) { z_first = 0u; if (!z2_hold) info.zoom_ms = (cycles() - z_t0) / (CLK_HZ / 1000u); } }       /* the first zoomed view is on screen */
 static void zoom_leave(void)
 {
@@ -872,7 +872,7 @@ static int view_reopen(void)                                                    
 static uint32_t z2_wtx[2], z2_wty[2]; static uint8_t z2_res[2][25];
 static uint32_t z2_s, z2_tx, z2_ty, z2_np;       /* the scale (2 or 4), the window in source tiles, the planes */
 static struct { uint32_t on, p, k, dst, off, us; int32_t tx, ty; } z2_job;      /* the tile being decoded, one pass of s * s a turn of the loop (the keys and the view are served between them): its plane, passes done, destination, stream offset, microseconds so far */
-static int32_t z2_vx, z2_vy, z2_maxx, z2_maxy, z2_dirx, z2_diry; static uint32_t z2_shown, z2_active, z2_ncopy, z2_nrecentre, z2_disp_view, z2_disp_stride, z2_disp_ok;      /* z2_disp_*: where the picture on the screen is (plane address of its first row, a row in halfwords), for the bar; ok when there is one */      /* the view on screen (output pixels, the level times the scale): its corner, the limits of the corner, the pan's direction, 1 once a view shows */
+static int32_t z2_vx, z2_vy, z2_maxx, z2_maxy, z2_dirx, z2_diry; static uint32_t z2_zb_calls, z2_shown, z2_active, z2_ncopy, z2_nrecentre, z2_disp_view, z2_disp_stride, z2_disp_ok;      /* z2_disp_*: where the picture on the screen is (plane address of its first row, a row in halfwords), for the bar; ok when there is one */      /* the view on screen (output pixels, the level times the scale): its corner, the limits of the corner, the pan's direction, 1 once a view shows */
 static uint32_t z2_ot(void) { return 128u * z2_s; }                                                   /* output pixels of a source tile */
 static uint32_t z2_pitch(void) { return z2_tx * z2_ot() * 3u; }                                       /* bytes of a plane row */
 static uint32_t z2_base(uint32_t p) { return z2_s == 2u ? (p ? GAL_WIN1 : GAL_WIN0) : (p ? GAL_WIN0 : GAL_Z4P0); }
@@ -954,7 +954,7 @@ static void z2_copy(uint32_t f, uint32_t b, int32_t tx, int32_t ty)             
 static void z2_show(uint32_t p, int32_t vx, int32_t vy)
 {
     const uint32_t pitch = z2_pitch(), base = z2_base(p) + (uint32_t)(vy - (int32_t)(z2_wty[p] * z2_ot())) * (pitch / 2u) + (uint32_t)(vx - (int32_t)(z2_wtx[p] * z2_ot())) * 3u / 2u;
-    lab_clear();                                                                                     /* the bar goes from the plane that is leaving the screen (its rows are put back) */
+    lab_clear(); zb_end();                                                                           /* the bars go from the plane that is leaving the screen (its rows are put back) */
     REG_WR(R_VIEW_STRIDE, pitch / 2u); REG_WR(R_VIEW_BASE, base);
     z2_vx = vx; z2_vy = vy; z2_shown = 1u; view_hidden = 0u; z2_disp_view = base; z2_disp_stride = pitch / 2u; z2_disp_ok = 1u;
 }
@@ -974,14 +974,14 @@ static int z2_work(uint32_t tp, uint32_t from, int32_t wx, int32_t wy)
     }
     if (best < 0) return 0;
     if (from != tp && z2_isres(from, bx, by)) { z2_copy(from, tp, bx, by); return 1; }
-    if (z2_job_begin(tp, bx, by)) return -1;
+    if (z2_job_begin(tp, bx, by)) return -2;                                                                                 /* the card did not answer (a screenshot stalls it for seconds): the caller tries again */
     return z2_job_step() ? -1 : 1;
 }
 static void z2_stats_reset(void) { info.zt_n = info.zt_land_sum = info.zt_land_max = info.zt_dec_n = info.zt_dec_sum = info.zt_dec_max = info.zt_pass_max = info.zt_catch = info.zt_moved = info.zt_stall_run_max = 0u; info.zoom_ms = GI_NONE; }
 /* The zoom loop. level: 2 or 4. (*cx, *cy): the screen's centre in the level's own pixels, in and out. Returns 0 for the 1:1 view, 1 for the fit view, 2 to leave for the grid, 3 for the 1:1 view's map, -1 when a tile could not be read. */
 static int z2_run(int32_t *cx, int32_t *cy, uint32_t level)
 {
-    uint32_t f = 1u - t_shown_win, composing = 0u, held = 0u, next_tick = cycles(), prev = REG_RD(R_INPUT) & 0xFFFFu, b_t0 = 0u, b_on = 0u, z_run = 0u, t_level = cycles(), t_comp = 0u, last_pct = 101u; int ret = 0;
+    uint32_t f = 1u - t_shown_win, composing = 0u, held = 0u, next_tick = cycles(), prev = REG_RD(R_INPUT) & 0xFFFFu, b_t0 = 0u, b_on = 0u, z_run = 0u, t_level = cycles(), t_comp = 0u, last_pct = 101u, z2_fail = 0u; int ret = 0;
     z2_setup(level); z2_shown = 0u; z2_active = 1u; z2_ncopy = z2_nrecentre = 0u; z2_dirx = z2_diry = 0; v1_pre.valid = 0u; z2_stats_reset();
     int32_t wx = (int32_t)z2_s * *cx - GV_SCREEN_W / 2, wy = (int32_t)z2_s * *cy - GV_SCREEN_H / 2; z2_clampv(&wx, &wy);                  /* the wanted corner: the keys move it at once */
     z2_aim(f, wx, wy);                                                                                                        /* the first plane is composed where the 1:1 view is not: that view stays on the screen until the zoom's first view is ready */
@@ -992,6 +992,12 @@ static int z2_run(int32_t *cx, int32_t *cy, uint32_t level)
         if (lab_on && (edge || (z2_shown && (uint32_t)(cycles() - lab_t0) > 2u * CLK_HZ))) lab_clear();                         /* the bar (the loader's, or the level's name) goes at the next key press; the name after two seconds as well */
         int32_t nlevel = 0;                                                                                                   /* a level change asked for: -1 = the 1:1 view, 2 or 4 = that scale */
         if (edge & KEY_START) { ret = 3; break; }                                                                              /* Start: the 1:1 view's map, to choose the area */
+        if ((edge & KEY_SELECT) && !(keys & (KEY_LEFT | KEY_RIGHT))) {                                                         /* Select: the details pages (Info and histograms), then the view again */
+            lab_clear(); zb_end(); gal_view_off(); run_details(0);
+            if (!gal_view_on()) { ret = 2; break; }
+            if (z2_shown) z2_show(f, z2_vx, z2_vy); else zoom_reshow();
+            prev = REG_RD(R_INPUT) & 0xFFFFu; next_tick = cycles(); continue;
+        }
         if (edge & (KEY_A | KEY_R1)) { if (z2_s == 2u) nlevel = 4; }                                                           /* A again: the next level in (4x is the last) */
         if (edge & KEY_L1) nlevel = z2_s == 4u ? 2 : -1;
         if (edge & KEY_B) { b_t0 = cycles(); b_on = 1u; }                                                                      /* B: back a level on release, the grid when held */
@@ -999,7 +1005,7 @@ static int z2_run(int32_t *cx, int32_t *cy, uint32_t level)
         else if (b_on && (uint32_t)(cycles() - b_t0) > B_LONG) { ret = 2; break; }
         if (nlevel == -1) { ret = 0; break; }
         if (nlevel != 0) {                                                                                                     /* 2x <-> 4x: the centre kept, the first plane of the new scale composed while the old view stays on the screen */
-            lab_clear();
+            lab_clear(); zb_end();
             *cx = ((z2_shown ? z2_vx : wx) + GV_SCREEN_W / 2) / (int32_t)z2_s; *cy = ((z2_shown ? z2_vy : wy) + GV_SCREEN_H / 2) / (int32_t)z2_s;
             if (z2_s == 4u && f == 1u) { hide_view(); z2_disp_ok = 0u; }                                                                            /* the 4x plane in the second place covers both windows: nothing is left to compose the 2x one in while it is on the screen */
             z2_setup((uint32_t)nlevel); z2_shown = 0u; composing = 0u; f = nlevel == 4 ? 0u : 1u; z2_dirx = z2_diry = 0; z2_stats_reset(); t_level = cycles(); held = 0u; last_pct = 101u;
@@ -1021,13 +1027,15 @@ static int z2_run(int32_t *cx, int32_t *cy, uint32_t level)
             if (!z2_covers(f, nx, ny, nw, nh)) { if (!composing || !z2_covers(b, nx, ny, nw, nh)) { z2_aim(b, sx, sy); composing = 1u; t_comp = cycles(); z2_nrecentre++; } }
             else composing = 0u;
         }
-        { const int w = composing ? z2_work(1u - f, f, sx, sy) : z2_work(f, f, sx, sy); if (w < 0) { ret = -1; break; } }
-        if (!z2_shown && z2_disp_ok && !view_hidden) {                                                                         /* the level is loading, the old view still on the screen: a bar with the share of the view's tiles that are whole */
+        { const int w = composing ? z2_work(1u - f, f, sx, sy) : z2_work(f, f, sx, sy);
+          if (w == -2) { if (++z2_fail >= 5u) { ret = -1; break; } wait_ms(100u); }                                                              /* up to five tries, the keys served between them: B still gets out */
+          else if (w < 0) { ret = -1; break; } else if (w > 0) z2_fail = 0u; }
+        if (!z2_shown && z2_disp_ok && !view_hidden) {                                                                         /* the level is loading, the old view still on the screen: the loader's own bar (the one every other load has) on it, the share of the view's tiles that are whole */
             int32_t a, b, c, d, whole = 0; z2_rect(wx, wy, GV_SCREEN_W, GV_SCREEN_H, &a, &b, &c, &d);
             const int32_t total = (c - a + 1) * (d - b + 1);
             for (int32_t ty = b; ty <= d; ty++) for (int32_t tx = a; tx <= c; tx++) if (z2_isres(f, tx, ty)) whole++;
-            const uint32_t pct = total > 0 ? (uint32_t)(whole * 100 / total) : 0u;
-            if (pct != last_pct || !lab_on) { char t[32]; char *q = glb_cat(t, z2_s == 2u ? "LOADING 2X " : "LOADING 4X "); q = put_u(q, pct); *q++ = '%'; *q = 0; if (lab_on) lab_update(t); else lab_show_at(t, z2_disp_view, z2_disp_stride); last_pct = pct; }
+            if (!zb_on) { zb_view = z2_disp_view; zb_stride = z2_disp_stride; zb_begin(); z2_zb_calls++; }
+            zb_set((uint32_t)whole, (uint32_t)total); z2_zb_calls++;
         }
         int moved = 0;
         if (composing && z2_shown && z2_whole(1u - f, z2_vx, z2_vy, GV_SCREEN_W, GV_SCREEN_H)) { f = 1u - f; composing = 0u; z2_show(f, z2_vx, z2_vy); info.flip_ms = z2_us(t_comp) / 1000u; }      /* the other plane holds the view that is on the screen (its shared tiles were copied): it takes over without the picture moving, and the view goes on from there */
@@ -1045,7 +1053,7 @@ static int z2_run(int32_t *cx, int32_t *cy, uint32_t level)
         }
         { const uint32_t us = z2_us(pass_t0); if (us > info.zt_pass_max) info.zt_pass_max = us; }
     }
-    lab_clear(); z2_active = 0u; view_hidden = 0u; z2_job.on = 0u;
+    lab_clear(); zb_end(); z2_active = 0u; view_hidden = 0u; z2_job.on = 0u;
     if (ret >= 0) { const int32_t vx = z2_shown ? z2_vx : wx, vy = z2_shown ? z2_vy : wy; *cx = (vx + GV_SCREEN_W / 2) / (int32_t)z2_s; *cy = (vy + GV_SCREEN_H / 2) / (int32_t)z2_s; }
     return ret;
 }
@@ -1081,6 +1089,12 @@ static void viewer(void)
                 continue;
             }
             if (edge & KEY_L1) { zoom_goto(zk > 0 ? zk - 1 : -1); held = 0u; next_tick = cycles(); continue; }
+            if ((edge & KEY_SELECT) && !(keys & (KEY_LEFT | KEY_RIGHT))) {                              /* Select: the details pages (Info and histograms), then the zoom view again (or the fit view if the zoom is still loading) */
+                gal_view_off(); run_details(0);
+                if (!gal_view_on()) { zoom_leave(); loaded_page = 0xFFFFFFFFu; draw_page(); say("VIEWER DID NOT START", BAD); return; }
+                if (z_shown) zoom_reshow();
+                prev = REG_RD(R_INPUT) & 0xFFFFu; held = 0u; next_tick = cycles(); b_on = 0u; continue;
+            }
             if (!((keys & KEY_SELECT) && (edge & (KEY_LEFT | KEY_RIGHT)))) {                          /* Select + Left/Right leave the zoom and go to the next picture below; anything else pans */
                 const int dx = (keys & KEY_RIGHT) ? 1 : (keys & KEY_LEFT) ? -1 : 0, dy = (keys & KEY_DOWN) ? 1 : (keys & KEY_UP) ? -1 : 0;
                 int tick = 0; const uint32_t now = cycles();                                           /* the frame clock keeps its phase: a pass longer than a frame is paid back with the frames that went by, so the pan's speed does not follow the pass lengths */
