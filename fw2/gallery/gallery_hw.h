@@ -19,6 +19,7 @@ extern const uint32_t gal_land_len[GAL_LAND_KINDS];                   /* 4 KB, 1
 uint32_t gal_fill(uint32_t pat, void (*progress)(uint32_t y));
 /* The viewer: points the scan-out at the plane and asks for the viewer / the UI. Each waits up to 0.5 s for the mode on the bus and returns the wait in clk cycles, or 0 on timeout. */
 uint32_t gal_view_on(void);
+uint32_t gal_view_on_at(uint32_t base, uint32_t stride);
 uint32_t gal_view_off(void);
 uint32_t gal_vid_switches(void);                                        /* completed switches (R_VID_MODE [31:16]) */
 

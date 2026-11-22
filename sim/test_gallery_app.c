@@ -19,6 +19,7 @@ static uint16_t fb[512u * 1024u];                  /* the UI framebuffer, halfwo
 static uint32_t hist_boost = 1u;                                                                                 /* every bin the histogram unit reports times this (a scenario sets it so the counts pass 65,535 and the page must scale them)  */
 static uint32_t z2_vis_hits;                                                                                     /* decoder writes into the rows the screen is reading while the 2x loop runs (there must be none: only tiles outside the shown view are ever decoded) */
 static uint32_t vlog[256], vlog_n, vsnap[256], vsnap_n;                                                          /* every write of the view base since the last checkpoint (the snapshot is what the checkpoint sees) */
+static uint32_t leave_bad;                          /* times the viewer mode was switched off while a picture was still on the screen (the black plane must be shown first) */
 static uint32_t clk, irq_pend, vid_req, vid_bus, vid_sw, vid_due, vbase, vstride, land_base, land_words, land_ovf, input_n;
 static int force_ovf, force_short, viewer_dead, fail_pic_reads, pass_pic_reads; static uint32_t v1_starts_before, land_unaligned, zt_n_212, rwd_241;
 static int zb_ok_phase = 0; static int32_t map_cx, map_cy, map_rx1, map_rw2, map_x0, map_y0, map_rx0, map_ry0, map_ex, map_ey, map_rw1;
@@ -86,7 +87,7 @@ static void wr(uint32_t a, uint32_t v)
     case 0x80000264u: hs_rect0 = v; break; case 0x80000268u: hs_rect1 = v; break; case 0x8000026Cu: hs_org = v; hs_starts++; break;
     case 0x80000270u: hs_data = (hs_bin[(v >> 8) & 3u][v & 255u] * hist_boost) & 0xFFFFFFu; hs_n = hs_cnt; hs_rd_busy = 2u; break;
     case 0x80000254u: { const uint32_t ch = (v >> 16) & 3u; if (pix_busy || (pix_ctrl & 4u) || ch > 2u) pix_bad++; else { pix_lut[ch][(v >> 8) & 255u] = v & 255u; pix_stores++; pix_busy = 3u; } } break;
-    case 0x800001ECu: vid_req = v & 1u; vid_due = clk + 2u * 1111111u; break;
+    case 0x800001ECu: if (!(v & 1u) && vid_bus == 1u && vbase != 0x300000u) leave_bad++; vid_req = v & 1u; vid_due = clk + 2u * 1111111u; break;
     case 0x800001F0u: vbase = v & 0x1FFFFFFu; if (vlog_n < 256u) vlog[vlog_n++] = vbase; { const uint32_t wn = (vbase >= T_WIN1 && vbase < T_STAGE) ? 1u : (vbase >= T_WIN0 && vbase < T_WIN1) ? 0u : 9u; if (wn != 9u && wn != last_win) { if (last_win != 9u) win_flips++; last_win = wn; } } break;
     case 0x800001F4u: vstride = v & 0xFFFFu; break;
     case 0x80000200u: land_base = v & 0x1FFFFFFu; break;
@@ -651,7 +652,7 @@ static void lib1_cp(int n)
     case 411: chk(411, sel == 20u && strstr(last_open, "l20.tgy") && vid_bus == 1u); break;                                          /* in the viewer on the first picture of the second folder */
     case 412: chk(412, sel == 22u && strstr(last_open, "l22.tgy")); break;                                                           /* Left in the viewer wraps INSIDE the folder: the last picture of the folder, not the one before the first of the library */
     case 413: chk(413, sel == 20u && strstr(last_open, "l20.tgy")); break;                                                           /* Right wraps back */
-    case 414: chk(414, vid_bus == 0u && level == 0u && sel == 21u && !strcmp(last_text(), "2/3") && lib1_page_ok(0, 20, 3) && lib1_ring_ok(0, 3, 1)); break;      /* B: the folder's grid with the picture shown last selected */
+    case 414: chk(414, leave_bad == 0u && vid_bus == 0u && level == 0u && sel == 21u && !strcmp(last_text(), "2/3") && lib1_page_ok(0, 20, 3) && lib1_ring_ok(0, 3, 1)); break;      /* B: the folder's grid with the picture shown last selected */
     case 430: case 440: { const uint32_t per = LG[gsel].cols * LG[gsel].rows, tot = n == 430 ? 20u : 60u, nn = per < tot ? per : tot; char f[16]; snprintf(f, sizeof f, "1/%u", tot);
               chk(n, level == 0u && gi == gsel && pp == per && cur_count == tot && n_on_page == nn && !strcmp(last_text(), f) && lib1_page_ok(gsel, cur_first, nn) && lib1_ring_ok(gsel, nn, 0) && corner_ops > 0u && dsblit_ops == (gsel ? nn : 0u) && dsblit_bad == 0u); break; }   /* the grid of the setting: every cell scaled by the engine (or as it is), rounded, the ring on the first */
     case 431: { const uint32_t cols = LG[gsel].cols, per = cols * LG[gsel].rows, nn = per < 20u ? per : 20u; char f[16]; snprintf(f, sizeof f, "%u/20", cols + 1u); chk(431, sel == cols && !strcmp(last_text(), f) && lib1_ring_ok(gsel, nn, cols)); break; }   /* Down: one row (cols entries) on */
@@ -872,7 +873,7 @@ static void checkpoint(int n)
     case 595: chk(595, said("DETAILS  INFO") && vid_bus == 0u); clear_texts(); break;
     case 596: chk(596, said("DETAILS  HISTOGRAMS")); clear_texts(); break;
     case 597: chk(597, vid_bus == 1u && z2_shown && z2_view_ok("v00_full.rgb", 1000u, 900u, 2u)); break;
-    case 598: chk(598, said("DETAILS  INFO") && vid_bus == 0u); clear_texts(); break;
+    case 598: chk(598, leave_bad == 0u && said("DETAILS  INFO") && vid_bus == 0u); clear_texts(); break;
     case 578: chk(578, z_shown || (zk == 0 && vstride == z2_pitch() / 2u && ((pix_ctrl & 8u) != 0u) == (z2_dbl == 2) && vbase != GAL_PLANE_BASE)); break;      /* B at 2x: until the 1:1 view is up the 2x plane stays on the screen (not the fit picture, not black), doubling kept */
     case 599: chk(599, vid_bus == 1u && z2_shown && z2_level == 2u && z2_view_ok("v00_full.rgb", 1000u, 900u, 2u)); break;
     case 590: { int32_t okx = 0, oky = 0, a, b, w, h; zoom_off(zk, &okx, &oky); gv_map_rect(zoom_scale(-1), (int32_t)pic.rx, (int32_t)pic.ry, zoom_scale(zk), okx, oky, 0, 0, &a, &b, &w, &h); nv590 = z2_vx;

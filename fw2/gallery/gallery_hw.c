@@ -34,7 +34,8 @@ static uint32_t go(uint32_t want)
     const uint32_t d = cycles() - t0;
     return d ? d : 1u;
 }
-uint32_t gal_view_on(void) { REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16); REG_WR(R_VIEW_BASE, GAL_PLANE_BASE); return go(1u); }
+uint32_t gal_view_on_at(uint32_t base, uint32_t stride) { REG_WR(R_VIEW_STRIDE, stride); REG_WR(R_VIEW_BASE, base); return go(1u); }      /* the viewer mode on, pointing at a plane of the caller's choice (the black one, so no picture shows while the mode switches) */
+uint32_t gal_view_on(void) { return gal_view_on_at(GAL_PLANE_BASE, GAL_LINE_WORDS16); }
 uint32_t gal_view_off(void) { return go(0u); }
 
 void gal_switch_test(gal_sw_t *r, uint32_t round_trips, uint32_t dwell_ms)

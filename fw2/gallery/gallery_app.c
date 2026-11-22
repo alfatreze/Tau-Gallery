@@ -137,10 +137,13 @@ static void footer(void)
 }
 
 static void wait_ms(uint32_t ms);
-/* ---- the grid fades its thumbnails in (owner, 2026-11-22): they arrive one at a time, so each one is blended into its cell in three steps (about 40 %, 80 %, then the exact copy) that are spread over the next two thumbnails' card reads: no wait is added, the card's own pace is
- * the fade. A thumbnail waits in a stash slot (three of them, 100 rows apart below the stash's first row) until its last step; the folder strip and the rounded corners come after it. ---- */
-#define FADE_SLOTS 3u
-typedef struct { uint8_t on, step; uint16_t k, x, y, w, h; } fade_t;
+/* ---- the grid fades its thumbnails in (owner, 2026-11-22; "too abrupt" at three steps): each thumbnail is blended into its cell in six steps (the share of the picture rises 1/6, 2/6 ... then the exact copy), a step at least 24 ms after the last, so a fade takes about 120 ms.
+ * The steps of the thumbnails already drawn go on while the next one is read from the card (no wait is added to the page), what is left at the end is finished with short waits. A thumbnail waits in a stash slot (six, 100 rows apart below the
+ * stash's first row) until its last step; the folder strip and the rounded corners come after it. ---- */
+#define FADE_SLOTS 6u
+#define FADE_BLENDS 5u                                                                                   /* then the exact copy */
+#define FADE_GAP_MS 24u
+typedef struct { uint8_t on, step; uint16_t k, x, y, w, h; uint32_t t; } fade_t;
 static fade_t fade[FADE_SLOTS]; static uint32_t fade_steps;                                              /* fade_steps: the blends that ran (for the host test) */
 static uint32_t fade_y(uint32_t j) { return STASH_Y + j * 100u; }
 static void cell_finish(uint32_t k, uint32_t x, uint32_t y)                                            /* what goes over the thumbnail once it is whole */
@@ -156,22 +159,29 @@ static void cell_finish(uint32_t k, uint32_t x, uint32_t y)                     
 static void fade_advance(uint32_t j)
 {
     fade_t *f = &fade[j]; if (!f->on) return;
-    if (f->step < 2u) { gfx_blend_on(f->step == 0u ? 100u : 200u); gfx_blend_blit(STASH_X, fade_y(j), f->x, f->y, f->w, f->h); gfx_blend_off(); f->step++; fade_steps++; if (GR.rad) gfx_corners(f->x, f->y, GR.cw, GR.ch, GR.rad, BG); }
-    else { gfx_blit_stash(STASH_X, fade_y(j), f->x, f->y, f->w, f->h); f->on = 0u; cell_finish(f->k, f->x, f->y); }
+    if (f->step < FADE_BLENDS) {                                                                         /* the blend weights 1/6, 1/5, 1/4, 1/3, 1/2 of what is left make 1/6 .. 5/6 of the picture */
+        gfx_blend_on(256u / (FADE_BLENDS + 1u - f->step)); gfx_blend_blit(STASH_X, fade_y(j), f->x, f->y, f->w, f->h); gfx_blend_off(); f->step++; fade_steps++;
+        if (GR.rad) gfx_corners(f->x, f->y, GR.cw, GR.ch, GR.rad, BG);
+    } else { gfx_blit_stash(STASH_X, fade_y(j), f->x, f->y, f->w, f->h); f->on = 0u; cell_finish(f->k, f->x, f->y); }
+    f->t = cycles();
 }
-static void fade_flush(void)                                                                          /* the thumbnails still fading finish (two more steps, a frame apart) */
+static void fade_due(void)                                                                           /* the steps that are due (24 ms after the last one) */
 {
-    for (uint32_t round = 0; round < 3u; round++) {
-        uint32_t any = 0u; for (uint32_t j = 0; j < FADE_SLOTS; j++) if (fade[j].on) { any = 1u; fade_advance(j); }
+    for (uint32_t j = 0; j < FADE_SLOTS; j++) if (fade[j].on && (uint32_t)(cycles() - fade[j].t) >= FADE_GAP_MS * (CLK_HZ / 1000u)) fade_advance(j);
+}
+static void fade_flush(void)                                                                          /* the thumbnails still fading finish */
+{
+    while (1) {
+        uint32_t any = 0u; for (uint32_t j = 0; j < FADE_SLOTS; j++) if (fade[j].on) any = 1u;
         if (!any) break;
-        wait_ms(16u);
+        fade_due(); wait_ms(2u);
     }
 }
 static int draw_thumb_fade(uint32_t k, uint32_t x, uint32_t y, uint32_t off)
 {
     const uint32_t ds = GR.ratio != 0xFFu, j = k % FADE_SLOTS, sy = fade_y(j);
-    for (uint32_t i = 0; i < FADE_SLOTS; i++) if (i != j) fade_advance(i);                              /* the older ones go on a step while this one is read */
-    while (fade[j].on) fade_advance(j);
+    fade_due();
+    while (fade[j].on) { fade_advance(j); }                                                             /* the slot's old thumbnail (six back) is finished before it is reused */
     gfx_fence();
     if (!thumb_blit(STASH_X, sy, off)) return 0;
     uint32_t w = 96u, h = head.thumb_bytes / 192u;
@@ -337,6 +347,16 @@ static void show_view(void)                                                     
 {
     view_hidden = 0u;
     if (rot_o == 0u) { REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16); REG_WR(R_VIEW_BASE, GAL_PLANE_BASE); } else rot_view();
+}
+static void view_leave(void)                                                                      /* the viewer mode off with a black plane on the screen: the picture is gone at once, not left half shown while the video mode switches (owner, 2026-11-22: a glitch leaving a picture and opening or closing Info) */
+{
+    hide_view(); gal_view_off(); view_hidden = 0u;
+}
+static uint32_t view_enter(void)                                                                  /* the viewer mode on, pointing at the black plane: the caller puts its real view on the screen as soon as the mode is up */
+{
+    if (!black_ready) hide_view();
+    view_hidden = 0u;
+    return gal_view_on_at(GAL_BLACK_BASE, GAL_LINE_WORDS16);
 }
 /* ---- the label: the name of what a key changed, a black bar with white text over the last 32 rows of the picture on the screen (gallery_label.h). The rows under it are copied to a save area first (between the black plane and the
  * landing window) and back when the bar goes: at the next key press or after two seconds. ---- */
@@ -1103,8 +1123,8 @@ static int z2_run(int32_t *cx, int32_t *cy, uint32_t level)
             tele = 1; *cx = ncx; *cy = ncy;
         }
         if ((edge & KEY_SELECT) && !(keys & (KEY_LEFT | KEY_RIGHT))) {                                                         /* Select: the details pages (Info and histograms), then the view again */
-            lab_clear(); zb_end(); gal_view_off(); run_details(0);
-            if (!gal_view_on()) { ret = 2; break; }
+            lab_clear(); zb_end(); view_leave(); run_details(0);
+            if (!view_enter()) { ret = 2; break; }
             if (z2_shown) z2_show(f, z2_vx, z2_vy); else zoom_reshow();
             prev = REG_RD(R_INPUT) & 0xFFFFu; next_tick = cycles(); continue;
         }
@@ -1198,17 +1218,17 @@ static void viewer(void)
             if (((edge & KEY_START) || zoom_want_map) && z_shown) { zoom_want_map = 0u; map_active = 1u; map_mode(); map_active = 0u; held = 0u; next_tick = cycles(); prev = REG_RD(R_INPUT) & 0xFFFFu; continue; }                   /* START: the map */
             if (edge & KEY_B) { b_t0 = cycles(); b_on = 1u; continue; }                                /* B: back one level when released (fit from the first), the grid when held */
             if (b_on && !(keys & KEY_B)) { b_on = 0u; zoom_goto(zk > 0 ? zk - 1 : -1); held = 0u; next_tick = cycles(); continue; }
-            if (b_on && (uint32_t)(cycles() - b_t0) > B_LONG) { b_on = 0u; zoom_leave(); gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); return; }
+            if (b_on && (uint32_t)(cycles() - b_t0) > B_LONG) { b_on = 0u; zoom_leave(); view_leave(); loaded_page = 0xFFFFFFFFu; draw_page(); return; }
             if (edge & (KEY_A | KEY_R1)) {                                                              /* A (or R1): the next level in: the last stop, then 2x, then 4x (version 1 pictures) */
                 if ((uint32_t)zk + 1u < zn) { zoom_goto(zk + 1); held = 0u; next_tick = cycles(); }
-                else if (zl.layout == 2u && z_shown) { zoom_to_grid = 0u; z2_enter(); prev = REG_RD(R_INPUT) & 0xFFFFu; held = 0u; next_tick = cycles(); b_on = 0u; if (zoom_to_grid) { zoom_to_grid = 0u; gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); return; } }
+                else if (zl.layout == 2u && z_shown) { zoom_to_grid = 0u; z2_enter(); prev = REG_RD(R_INPUT) & 0xFFFFu; held = 0u; next_tick = cycles(); b_on = 0u; if (zoom_to_grid) { zoom_to_grid = 0u; view_leave(); loaded_page = 0xFFFFFFFFu; draw_page(); return; } }
                 continue;
             }
             if (edge & KEY_L1) { zoom_goto(zk > 0 ? zk - 1 : -1); held = 0u; next_tick = cycles(); continue; }
             if ((edge & KEY_SELECT) && !(keys & (KEY_LEFT | KEY_RIGHT))) {                              /* Select: the details pages (Info and histograms), then the zoom view again (or the fit view if the zoom is still loading) */
-                gal_view_off(); run_details(0);
-                if (!gal_view_on()) { zoom_leave(); loaded_page = 0xFFFFFFFFu; draw_page(); say("VIEWER DID NOT START", BAD); return; }
-                if (z_shown) zoom_reshow();
+                view_leave(); run_details(0);
+                if (!view_enter()) { zoom_leave(); loaded_page = 0xFFFFFFFFu; draw_page(); say("VIEWER DID NOT START", BAD); return; }
+                if (z_shown) zoom_reshow(); else show_view();
                 prev = REG_RD(R_INPUT) & 0xFFFFu; held = 0u; next_tick = cycles(); b_on = 0u; continue;
             }
             if (!((keys & KEY_SELECT) && (edge & (KEY_LEFT | KEY_RIGHT)))) {                          /* Select + Left/Right leave the zoom and go to the next picture below; anything else pans */
@@ -1221,15 +1241,15 @@ static void viewer(void)
                     if ((int32_t)(now - next_tick) >= 0) next_tick = now + ZOOM_FRAME;                       /* far behind (a re-centre, a slow card): drop the rest, no burst afterwards */
                     held = (dx || dy) ? held + (uint32_t)tick : 0u; zt_frames += (uint32_t)tick;
                 }
-                if (zoom_pass(dx, dy, held, tick && (dx || dy), tick)) { zoom_goto(-1); gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); say("PICTURE READ FAILED", BAD); return; }
+                if (zoom_pass(dx, dy, held, tick && (dx || dy), tick)) { zoom_goto(-1); view_leave(); loaded_page = 0xFFFFFFFFu; draw_page(); say("PICTURE READ FAILED", BAD); return; }
                 continue;
             }
             zoom_goto(-1);
         }
         if ((edge & KEY_SELECT) && !(edge & (KEY_LEFT | KEY_RIGHT))) {                                                                 /* Select: the details page (not Select + Left / Right) */
-            gal_view_off(); run_details(0);                                                                                            /* the picture's plane in SDRAM is not touched by the page: the view is simply switched on again */
-            if (!gal_view_on()) { loaded_page = 0xFFFFFFFFu; draw_page(); say("VIEWER DID NOT START", BAD); return; }
-            rot_view(); prev = REG_RD(R_INPUT) & 0xFFFFu; held = 0u; next_tick = cycles(); continue;
+            view_leave(); run_details(0);                                                                                            /* the picture's plane in SDRAM is not touched by the page: the view is simply switched on again */
+            if (!view_enter()) { loaded_page = 0xFFFFFFFFu; draw_page(); say("VIEWER DID NOT START", BAD); return; }
+            show_view(); prev = REG_RD(R_INPUT) & 0xFFFFu; held = 0u; next_tick = cycles(); continue;
         }
         if ((edge & KEY_X) && !(keys & KEY_START)) {                                                                                  /* X: the next colour filter (the Settings page's COLOUR list, applied at once to every picture; it is remembered like the setting) */
             gset.lut = (gset.lut + 1u) % GL_PRESETS; fx_apply(); last_act = cycles();
@@ -1241,7 +1261,7 @@ static void viewer(void)
             rot_o = (keys & KEY_START) ? ((edge & KEY_Y) ? gr_flip(rot_o) : gr_mirror(rot_o)) : gr_turn(rot_o, 1); mask_i = 0u;
             hide_view();
             const int r = view_reopen();
-            if (r) { rot_o = 0u; view_hidden = 0u; gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); say(open_msg[r], BAD); return; }
+            if (r) { rot_o = 0u; view_hidden = 0u; view_leave(); loaded_page = 0xFFFFFFFFu; draw_page(); say(open_msg[r], BAD); return; }
             show_view(); lab_turn();
             continue;
         }
@@ -1254,12 +1274,12 @@ static void viewer(void)
             if ((edge & KEY_START) && !(mask_i && gm_can_turn(mask_i))) continue;
             hide_view();
             if (edge & KEY_L1) {
-                if (mask_painted) { const int r = view_reopen(); if (r) { rot_o = 0u; mask_i = 0u; view_hidden = 0u; gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); say(open_msg[r], BAD); return; } }
+                if (mask_painted) { const int r = view_reopen(); if (r) { rot_o = 0u; mask_i = 0u; view_hidden = 0u; view_leave(); loaded_page = 0xFFFFFFFFu; draw_page(); say(open_msg[r], BAD); return; } }
                 mask_i = gm_next(mask_i);
                 if (mask_i == 1u) { uint32_t x, y, w, h; pic_rect_shown(&x, &y, &w, &h); mask_p = h > w; }                          /* the first mask opens in the picture's own orientation */
             } else {
                 mask_p ^= 1u;
-                { const int r = view_reopen(); if (r) { rot_o = 0u; mask_i = 0u; view_hidden = 0u; gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); say(open_msg[r], BAD); return; } }
+                { const int r = view_reopen(); if (r) { rot_o = 0u; mask_i = 0u; view_hidden = 0u; view_leave(); loaded_page = 0xFFFFFFFFu; draw_page(); say(open_msg[r], BAD); return; } }
             }
             if (mask_i) mask_apply();
             show_view(); lab_mask();
@@ -1268,18 +1288,18 @@ static void viewer(void)
         if ((rot_o != 0u || mask_i != 0u) && (edge & (KEY_A | KEY_R1))) {                                                             /* zoom from a turned, mirrored or masked view: the zoom views are upright, so the picture goes upright first (owner decision B, 2026-11-13) */
             if (zn == 0u) continue;                                                                                                   /* no zoom level: nothing to go to, the view stays as it is */
             rot_o = 0u; mask_i = 0u;
-            const int r = view_reopen(); if (r) { gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); say(open_msg[r], BAD); return; }
+            const int r = view_reopen(); if (r) { view_leave(); loaded_page = 0xFFFFFFFFu; draw_page(); say(open_msg[r], BAD); return; }
         }                                                                      /* no zoom while the picture is turned: turn it back first */
         if (edge & KEY_A) { if (zn > 0u) { zoom_goto((int)zn - 1); held = 0u; next_tick = cycles(); } continue; }                   /* A: the last stop (1:1) */
         if (edge & KEY_R1) { if (zn > 0u) { zoom_goto(0); held = 0u; next_tick = cycles(); } continue; }                                /* R1: the first stop */
-        if (edge & KEY_B) { gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); return; }
+        if (edge & KEY_B) { view_leave(); loaded_page = 0xFFFFFFFFu; draw_page(); return; }
         if (edge & (KEY_LEFT | KEY_RIGHT)) {
             const uint32_t rel = sel - cur_first, nrel = (edge & KEY_RIGHT) ? (rel + 1u) % cur_count : (rel + cur_count - 1u) % cur_count, n = cur_first + nrel;      /* the next picture of the folder, wrapping inside it */
             const uint32_t np = nrel / pp;
-            if (np != page) { page = np; if (!load_page()) { gal_view_off(); draw_page(); return; } }
+            if (np != page) { page = np; if (!load_page()) { view_leave(); draw_page(); return; } }
             sel = n; rot_o = 0u; mask_i = 0u; mask_painted = 0u;
             const int r = open_timed(sel, 0);
-            if (r) { gal_view_off(); loaded_page = 0xFFFFFFFFu; draw_page(); say(open_msg[r], BAD); return; }
+            if (r) { view_leave(); loaded_page = 0xFFFFFFFFu; draw_page(); say(open_msg[r], BAD); return; }
             REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16); REG_WR(R_VIEW_BASE, GAL_PLANE_BASE);                                              /* the upright plane (the previous picture may have been turned: the view pointed at the turned plane) */
             remember(sel);
         }
