@@ -92,7 +92,7 @@ Needs nothing else installed. **macOS** (Apple silicon): ad-hoc signed, not nota
 
 ## Status
 
-Version 0.9.0, a beta. The hardware decoder, the graphics and the converter are built and tested in simulation and on a Pocket. The newest parts (rounded corners, filled thumbnails, the latest Settings page) were built after the last full test on a Pocket, and the Dock has not been tried (the core says it is not supported). A picture of hundreds of megapixels converts, but slowly (minutes) and needs several gigabytes of memory.
+Version 1.0.0. The hardware decoder, the graphics, the viewer and the converter are built, tested in simulation and tried on a Pocket (the 2x and 4x zoom, the folder tree and the large pictures too). The Dock is switched on but has not been tried by anyone yet. A picture of hundreds of megapixels converts, but slowly (minutes) and needs several gigabytes of memory.
 
 ## For developers
 

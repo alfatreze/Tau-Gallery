@@ -2,7 +2,7 @@
 
 ## 0.3.0 - 22 November 2026
 
-Folders inside folders, and no more skipped pictures for a long file name. Made with Tau Gallery core 0.9.1 (firmware DEV 038 and later); a library from this version needs that firmware to show the tree (an older one shows every folder as a folder of its pictures).
+Folders inside folders, and no more skipped pictures for a long file name. Made with Tau Gallery core 1.0.0; a library from this version needs that firmware to show the tree (an older one shows every folder as a folder of its pictures).
 
 - **Your folder tree is kept.** The pictures are copied to the card nested, as in your source (`photos/Trip/Day 1/a.tgy`), and the library index holds the whole tree. The Pocket shows it either way, by a setting in the core (Settings, FOLDERS): flat, where a top folder holds every picture under it, or nested, where you walk down the tree. This is the new default ("Keep them"); "flatten" and "join the names" stay as options and copy the pictures flat, with no tree. A folder that holds pictures and folders gets its own pictures into a folder called THIS FOLDER.
 - **Folders are read at every depth.** The window says how many pictures and folders it found; hidden folders are skipped.

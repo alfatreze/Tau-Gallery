@@ -2,9 +2,9 @@
 
 What changed in each release, newest first. Lines starting `- Omega:` are copied into the release's `tau-compat.json` notes for Tau Omega.
 
-## v0.9.1 — 22 November 2026
+## v1.0.0 — 22 November 2026
 
-A new bitstream (core version 4D50331F: the viewer can double pixels at scan-out) and a firmware with the improvements of the DEV 025 to 038 builds, all tried on a Pocket. Pictures converted for 0.9.0 work unchanged; for the folder tree use the converter 0.3.0.
+Tau Gallery 1.0, the first release that is not a beta. Compared with 0.9.0 it has a new bitstream (core version 4D50331F: the viewer can double pixels at scan-out) and a firmware with everything built since, tried on a Pocket: 2x and 4x zoom, a folder tree, the histogram pages, the splash screen and fade-in grid. Pictures converted for 0.9.0 work unchanged; for the folder tree use the converter 0.3.0.
 
 - **Core:** `alfatreze.Tau Gallery` on platform `tau_gallery`, core version 4D50331F (a new fit: setup slack +0.67 ns, hold +0.08 ns at the slow corner, ALMs 91%, RAM blocks 94%). It needs the matching firmware (included).
 - **2x and 4x zoom:** past 1:1, A shows every pixel as a 2 x 2 block and again as 4 x 4. Panning follows the time, not the card; one loader bar, the same everywhere (the whole width at the top; a small one on the thumbnail when a picture opens from the grid); the name of the level (2X ZOOM, 4X ZOOM) in a bar; Select opens the details in every view; Start opens the navigator at once, sized for the level; B goes back a level and the previous view stays on the screen while the next one loads.
@@ -13,7 +13,7 @@ A new bitstream (core version 4D50331F: the viewer can double pixels at scan-out
 - **Grid:** thumbnails fade in (200 ms each, no wait added), a splash screen with a loading bar at power-up, no picture left half shown while the video mode switches.
 - **Viewer:** colour filter, crop mask and turn show their name in a bar; black mask and turn no longer flash; a screenshot taken while a picture loads no longer breaks the view (the loader tries again).
 - **Fixed:** a very large picture (the 21,600 x 10,800 world map, 100 megapixel photos) hung or opened the navigator by itself when panned: the cache of the tile index was bigger than its buffer.
-- **Known limits:** the Dock has not been tried; a library from 0.9.0 shows as a flat list of folders as before; the 2x and 4x views need this core (an older bitstream shows them without pixel doubling, slower).
+- **Known limits:** the Dock is switched on but nobody has tried it (a report is welcome); a library from 0.9.0 shows as a flat list of folders as before; the 2x and 4x views need this core (an older bitstream shows them without pixel doubling, slower).
 - Omega: core revision 31 (viewer pixel doubling, `R_PIX_CTRL` bit 3, `R_VIEW_CAPS` bit 3); library index TGIX 1.1 (folder tree), compatible with 1.0.
 
 ## v0.9.0 — 14 November 2026
