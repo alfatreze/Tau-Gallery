@@ -1590,24 +1590,29 @@ static int find_folder(uint32_t i, gx_folder_t *f, uint32_t *k)                 
     return 0;
 }
 
+/* ---- the splash screen (owner, 2026-11-22): the title and a simple loading bar while the card is read at power-up (the index head, the settings, the folder table, the resume page); the first grid page clears it ---- */
+static uint32_t splash_calls;                                                                         /* the bar's updates (for the host test) */
+static void splash(uint32_t pct) { ldr_h = 4u; loader_bar(pct, 100u); ldr_h = LDR_H; splash_calls++; }
 int main(void)
 {
     if (!platform_version_ok()) platform_halt_pattern();
     theme_init();
     gfx_rect(0, 0, GFX_W, GFX_H, BG);
-    platform_probe();
-    gfx_text(6, 2, "TAU GALLERY", ACC, BG);
+    gfx_text((GFX_W - gfx_text_width("TAU GALLERY")) / 2u, 150, "TAU GALLERY", ACC, BG); splash(0u);
+    platform_probe(); splash(20u);
     { uint8_t *h = v1z_idx; int rc = 100;                                                       /* the boot-time read of the index head borrows the zoom index buffer (32 KB, unused until a zoom opens): 4 KB of RAM less, which the 128 KB link needs */
       if (read_bytes(SLOT_IDX, 0u, 4096u, h)) rc = gx_parse_head(h, 4096u, &head);
       if (rc == 100) { say("NO INDEX: TAU-LIBRARY.TDB NOT READ", BAD); for (;;) { } }
       if (rc) { char b[40], *q = put_s(b, "INDEX NOT USABLE E"); q = put_u(q, (uint32_t)rc); *q = 0; say(b, BAD); for (;;) { } }
       if (head.count == 0u) { say("NO PICTURES IN THE INDEX", BAD); for (;;) { } } }
-    gs_hw_load(&gset); last_act = cycles(); fx_apply();
+    splash(40u);
+    gs_hw_load(&gset); last_act = cycles(); fx_apply(); splash(55u);
     cur_first = 0u; cur_count = head.count; cur_folder = 0u; level = 0u; set_grid(head.version == 0u ? 4u : grid_setting());
     if (head.version == 1u) {                                                                      /* the first folder, or the folder level when there are several */
         gx_folder_t f; if (!folder_rec(0u, &f)) { say("FOLDER TABLE READ FAILED", BAD); for (;;) { } }
         if (head.folder_count > 1u) enter_folders(); else enter_folder(&f, 0u);
     }
+    splash(70u);
     theme_set(gset.theme, gset.pol, gset.pal); gset.theme = th_theme; gset.pol = th_pol; gset.pal = th_pal;      /* the saved look (a value this build does not have falls back to the default) */
     if (gset.resume && gset.last_idx < head.count) {                                           /* resume: only when it is the same picture (index and path CRC); a folder library resumes inside the picture's folder */
         gx_folder_t f; uint32_t k = 0u; int ok = 1;
@@ -1622,6 +1627,7 @@ int main(void)
             else { level = sv_level; cur_first = sv_first; cur_count = sv_count; cur_folder = sv_folder; sel = sv_sel; page = sv_page; set_grid(sv_gi); loaded_page = 0xFFFFFFFFu; }
         }
     }
+    splash(100u);
     draw_page();
     uint32_t prev = 0, rep_key = 0u, rep_next = 0u;                                            /* a held direction key repeats: after REP_DELAY, then every REP_RATE */
     for (;;) {
