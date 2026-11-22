@@ -34,6 +34,10 @@ int main(void)
     w[GS_W_FX] = 2u << 2; v = gs_unpack(w); chk("dither stored 2 means off (0)", v.dither == 0u);
     w[GS_W_FX] = 0x40000000u | (3u << 2); v = gs_unpack(w); chk("a dither value this build does not have (3) falls back to ordered", v.dither == 1u);
     w[GS_W_FX] = 0xFFFFFF80u | 2u; v = gs_unpack(w); chk("only bits 0 to 6 of word 8 are read", v.grid == 2u && v.dither == 1u && v.lut == 0u);
+    w[GS_W_FX] = 0u; v = gs_unpack(w); chk("the package default 0 of word 8 means flat folders", v.nested == 0u);
+    w[GS_W_FX] = 1u << 7; v = gs_unpack(w); chk("bit 7 of word 8 is the nested folders setting", v.nested == 1u && v.grid == 0u && v.lut == 0u);
+    { uint32_t w2[GS_WORDS] = { 0 }; gs_vals_t nv = gs_defaults(); (void)gs_pack(w2, &nv); nv.nested = 1u; chk("pack: nested folders set bit 7 of word 8 and only that word changes", gs_pack(w2, &nv) == (1u << GS_W_FX) && (w2[GS_W_FX] & 0xFFu) == (1u << 7) && gs_unpack(w2).nested == 1u);
+      gs_vals_t a2 = gs_defaults(), b2 = a2; b2.nested = 1u; chk("gs_same: a folders change is seen", !gs_same(&a2, &b2)); }
     w[GS_W_FX] = 0u; w[GS_W_LAYOUT] = 2u << 27; v = gs_unpack(w); chk("another layout gives the default look settings", v.grid == 0u && v.dither == 1u);
     memset(w, 0, sizeof w); w[1] = 0x7000F000u; w[GS_W_LAYOUT] = 0x80000123u; w[GS_W_RESUME] = 0xA0u; w[GS_W_CRC] = 0x80000000u; w[GS_W_INDEX] = 0x80000000u;
     gs_vals_t nv = { 0u, 0x7FFFFFFFu, 0x7FFFFFFFu, 63u, 1u, 31u, 2u, 2u, 5u }; w[GS_W_FX] = 0x80000000u | (1u << 30) | (0x3u << 8);

@@ -87,6 +87,11 @@ def make_v1idx_set(d):
     ents = [dict(path=e["path"], name=e["name"], size=e["size"], width=e["width"], height=e["height"], folder=0, details={"format": "JPEG"}) for e in old["entries"]]
     (d / "tau-library.tdb").write_bytes(tgy.pack_index_v1(ents, [lib1_thumb(i) for i in range(len(ents))], [dict(name="All")]))
 
+def make_libtree_set(d):
+    """A version 1 library with folders inside folders: Misc (2 pictures), Travel {Day 1 (4), Day 2 (3)}: the folder table in depth first order, Travel a container (its range is its two folders')."""
+    ents = [dict(path=f"Assets/tau_gallery/common/photos/{'Misc' if i < 2 else 'Travel/Day 1' if i < 6 else 'Travel/Day 2'}/t{i}.tgy", name=f"Img {i}", size=1000 + i, width=640, height=480, folder=0 if i < 2 else 2 if i < 6 else 3, details={"format": "JPEG"}) for i in range(9)]
+    (d / "tau-library.tdb").write_bytes(tgy.pack_index_v1(ents, [lib1_thumb(i) for i in range(9)], [dict(name="Misc"), dict(name="Travel"), dict(name="Day 1", parent=1), dict(name="Day 2", parent=1)]))
+
 def make_lib1_set(d):
     """A version 1 library of 36 pictures in three folders (Alpha 20, Beta 3, Gamma 13): 96 x 96 thumbnails of their own pattern, and picture files for the three of Beta (the viewer scenario)."""
     ents, ths = [], []
@@ -130,7 +135,7 @@ def build(workdir, fw=None):
     return True
 
 SCENARIOS = ("resume5", "resume17", "badcrc", "toohigh", "off", "layout0", "ocean_light", "badlook", "details")     # boot scenarios: the saved state, the grid must open on picture 6 or 18, or on picture 1 when it is not the same picture / resume is off / the file is not ours
-BIGSET = None; ZSET = None; V1SET = None; V1ISET = None; L1SET = None; LBSET = None
+BIGSET = None; ZSET = None; V1SET = None; V1ISET = None; L1SET = None; LTSET = None; LBSET = None
 def run(workdir, setdir):
     r = subprocess.run([str(workdir / "t"), str(setdir)], capture_output=True, text=True, timeout=600)
     rc, out = r.returncode, r.stdout
@@ -161,6 +166,10 @@ def run(workdir, setdir):
         if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-2500:]
     r = subprocess.run([str(workdir / "t"), str(L1SET), "lib1light"], capture_output=True, text=True, timeout=900)
     if r.returncode: rc = 1; out += "\nFAIL scenario lib1light\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-2500:]
+    global LTSET
+    if LTSET is None: LTSET = Path(tempfile.mkdtemp()); make_libtree_set(LTSET)
+    r = subprocess.run([str(workdir / "t"), str(LTSET), "libtree"], capture_output=True, text=True, timeout=900)
+    if r.returncode: rc = 1; out += "\nFAIL scenario libtree\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-2500:]
     for sc in ("lib1g1", "lib1g2", "lib1g3"):
         r = subprocess.run([str(workdir / "t"), str(L1SET), sc], capture_output=True, text=True, timeout=900)
         if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-2500:]
@@ -619,11 +628,11 @@ def quick(names):
     sets = {}
     def get(kind):
         if kind not in sets:
-            d = Path(tempfile.mkdtemp()); {"base": make_set, "v1": make_v1_set, "v1i": make_v1idx_set, "lib1": make_lib1_set, "libbig": make_libbig_set, "big": make_big_set, "zoom": make_zoom_set}[kind](d); sets[kind] = d
+            d = Path(tempfile.mkdtemp()); {"base": make_set, "v1": make_v1_set, "v1i": make_v1idx_set, "lib1": make_lib1_set, "libtree": make_libtree_set, "libbig": make_libbig_set, "big": make_big_set, "zoom": make_zoom_set}[kind](d); sets[kind] = d
         return sets[kind]
     rc = 0
     for sc in names:
-        kind = "v1i" if sc == "v1gridhist" else "v1" if sc.startswith("v1") else "lib1" if sc.startswith("lib1") else "libbig" if sc.startswith("libbig") or sc == "colour" else "big" if sc.startswith("big") else "zoom" if sc == "zoom" else "base"
+        kind = "libtree" if sc == "libtree" else "v1i" if sc == "v1gridhist" else "v1" if sc.startswith("v1") else "lib1" if sc.startswith("lib1") else "libbig" if sc.startswith("libbig") or sc == "colour" else "big" if sc.startswith("big") else "zoom" if sc == "zoom" else "base"
         r = subprocess.run([str(w / "t"), str(get(kind)), sc], capture_output=True, text=True, timeout=900)
         bad = [l for l in r.stdout.splitlines() if "FAIL" in l]
         print(("FAIL " if r.returncode else "ok   ") + sc + ("  " + " | ".join(bad[:4]) + " " + r.stderr[-300:] if r.returncode else ""))

@@ -670,6 +670,16 @@ static void lib1_cp(int n)
     case 524: chk(524, pix_ctrl == 5u && pix_stores == 3840u && pix_bad == 0u && pix_tables_are(5u)); break;                                                             /* WARM: the tint presets differ per channel, so a wrong channel shows */
     case 525: chk(525, pix_ctrl == 5u && pix_stores == 768u && pix_bad == 0u); break;                                                                                   /* a key that changes nothing (the row moves) does not reload the tables */
     case 523: chk(523, pix_ctrl == 5u && pix_stores == 7680u && pix_bad == 0u && pix_tables_are(7u)); break;                                                            /* Left from NORMAL wraps to INVERT */
+    case 700: chk(700, level == 1u && fl_n == 2u && fl[0] == 0u && fl[1] == 1u && fl_parent1 == 0u && applied_nested == 0u && ent[0].size == 2u && ent[1].size == 7u && said("Misc 2") && said("Travel 7")); break;                      /* flat (the default): the top folders only, Travel holds all seven pictures under it */
+    case 701: chk(701, level == 1u && sel == 1u); break;
+    case 702: chk(702, level == 0u && cur_first == 2u && cur_count == 7u && cur_up == 0u && cur_folder == 1u); break;                                                                                                          /* A on Travel (flat): its pictures, those of Day 1 and Day 2 together */
+    case 703: chk(703, level == 1u && sel == 1u && fl_n == 2u && fl_parent1 == 0u); break;                                                                                                                                    /* B: the folder level, Travel selected */
+    case 704: chk(704, gset.nested == 1u && applied_nested == 1u && level == 1u && fl_n == 2u && fl_parent1 == 0u && sel == 0u); break;                                                                                         /* FOLDERS set to NESTED in Settings: back to the top level */
+    case 705: chk(705, level == 1u && fl_parent1 == 2u && fl_n == 2u && fl[0] == 2u && fl[1] == 3u && ent[0].size == 4u && ent[1].size == 3u && said("Day 1 4") && said("Day 2 3")); break;                                  /* A on Travel (nested): its folders, Day 1 and Day 2 */
+    case 706: chk(706, level == 0u && cur_first == 2u && cur_count == 4u && cur_up == 2u && cur_folder == 2u); break;                                                                                                          /* A on Day 1: its four pictures */
+    case 707: chk(707, level == 1u && fl_parent1 == 2u && sel == 0u && fl_n == 2u); break;                                                                                                                                      /* B: Travel's folders, Day 1 selected */
+    case 708: chk(708, level == 1u && fl_parent1 == 0u && sel == 1u && fl_n == 2u); break;                                                                                                                                      /* B: the top level, Travel selected */
+    case 709: chk(709, level == 1u && fl_parent1 == 0u && sel == 1u); break;                                                                                                                                                   /* B on the top level: nothing happens */
     case 451: { const uint32_t per = LG[1].cols * LG[1].rows; chk(451, level == 0u && gi == 1u && pp == per && sel == 48u && page == 2u && n_on_page == 20u && lib1_page_ok(1, 40, 20) && lib1_ring_ok(1, 20, 8) && !strcmp(last_text(), "49/60")); break; }   /* the grid size changed in Settings (4 x 3 to 5 x 4): the same picture stays selected, on its page of the new grid */
     case 490: chk(490, level == 0u && sel == 0u && lib1_page_ok(0, 0, 12)); clear_texts(); break;
     case 491: dump_fb("info"); chk(491, said("DETAILS  INFO") && said("Canon EOS R5") && said("RF24-70mm F2.8") && said("2024-05-17 13:04") && said("JPEG") && said("1/4") && said("Img 00") && fb[9u * 512u + 324u] == th_role[TR_ACCENT] && fb[9u * 512u + 332u] == th_role[TR_TEXT_SECONDARY] && fb[9u * 512u + 348u] == th_role[TR_TEXT_SECONDARY] && said("IN THE PICTURE") && said("X  NEXT COLOUR FILTER") && said("Y  TURN RIGHT") && said("L1  CROP MASK") && preview_ok(thumb1_of(sel), 168u)); clear_texts(); break;      /* Select on a picture with every detail (the three dots: the first, current page, in the accent colour): INFO has FORMAT, CAMERA, LENS, TAKEN; three pages */
@@ -1130,6 +1140,14 @@ int main(int argc, char **argv)
         lib1_on = 1;
         const uint32_t SC[] = { CP(519), KEY_START, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_A, 0, CP(526), KEY_DOWN, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_RIGHT, 0, CP(520), KEY_UP, 0, CP(525), KEY_DOWN, 0, KEY_RIGHT, 0, CP(521), KEY_RIGHT, 0, KEY_RIGHT, 0, KEY_RIGHT, 0, CP(524), KEY_LEFT, 0, KEY_LEFT, 0, KEY_LEFT, 0, KEY_LEFT, 0, KEY_LEFT, 0, CP(522), KEY_LEFT, 0, CP(523), KEY_B, 0, KEY_B, 0, END };
         nscript = (int)(sizeof SC / sizeof SC[0]); memcpy(script, SC, sizeof SC);
+        if (!setjmp(done)) gallery_app_main();
+        printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
+    }
+    if (argc > 2 && !strcmp(argv[2], "libtree")) {                                                             /* a library with folders inside folders (Misc 2, Travel 7 = Day 1 4 + Day 2 3): flat, then NESTED in Settings, the tree walked down and up */
+        lib1_on = 1;
+        const uint32_t ST[] = { CP(700), KEY_RIGHT, 0, CP(701), KEY_A, 0, CP(702), KEY_B, 0, CP(703), KEY_START, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_A, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_A, 0, KEY_B, 0, KEY_B, 0, CP(704),
+                                KEY_RIGHT, 0, KEY_A, 0, CP(705), KEY_A, 0, CP(706), KEY_B, 0, CP(707), KEY_B, 0, CP(708), KEY_B, 0, CP(709), END };
+        nscript = (int)(sizeof ST / sizeof ST[0]); memcpy(script, ST, sizeof ST);
         if (!setjmp(done)) gallery_app_main();
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
     }

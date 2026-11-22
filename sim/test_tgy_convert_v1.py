@@ -71,8 +71,12 @@ def suite(mod):
     # folders inside folders: flattened into the first level folder (the default) or joined into a folder of their own named with the path
     srcn = d / "Trips"; (srcn / "Trip" / "Day 1").mkdir(parents=True); (srcn / "Trip" / "Day 2" / "Deep").mkdir(parents=True); (srcn / "Trip" / ".hid").mkdir()
     pic(srcn / "Trip" / "t.jpg", (5, 5, 5)); pic(srcn / "Trip" / "Day 1" / "a.jpg", (6, 6, 6)); pic(srcn / "Trip" / "Day 2" / "Deep" / "b.jpg", (7, 7, 7)); pic(srcn / "Trip" / ".hid" / "h.jpg", (8, 8, 8))
-    outf = d / "of"; rc, ev = run(mod or tgy_convert, srcn, outf); lf = load(outf)
-    check("nested folders flatten by default: one folder Trip with the pictures of its subfolders at every depth (a hidden folder is skipped)", rc == 0 and [f["name"] for f in lf["folders"]] == ["Trip"] and sorted(e["name"] for e in lf["entries"]) == ["a", "b", "t"])
+    outt = d / "ot"; rc, ev = run(mod or tgy_convert, srcn, outt); lt = load(outt); card = Path(outt) / "Assets/tau_gallery/common/photos"
+    check("nested folders are kept by default: the pictures are copied nested on the card and the index holds the tree (Trip{Day 1, Day 2{Deep}, THIS FOLDER}, in name order; a hidden folder is skipped)",
+          rc == 0 and [f["name"] for f in lt["folders"]] == ["Trip", "Day 1", "Day 2", "Deep", "THIS FOLDER"] and (card / "Trip" / "Day 1" / "a.tgy").is_file() and (card / "Trip" / "Day 2" / "Deep" / "b.tgy").is_file() and (card / "Trip" / "t.tgy").is_file() and sorted(e["name"] for e in lt["entries"]) == ["a", "b", "t"])
+    check("the tree: Trip holds all three pictures, its own picture sits in THIS FOLDER, the path of each is nested", [(f["name"], f["count"], f["nfold"]) for f in lt["folders"] if f["parent1"] == 0] == [("Trip", 3, 4)] and any(f["name"] == "THIS FOLDER" and f["count"] == 1 for f in lt["folders"]) and sorted(e["path"].split("photos/")[1] for e in lt["entries"]) == ["Trip/Day 1/a.tgy", "Trip/Day 2/Deep/b.tgy", "Trip/t.tgy"])
+    outf = d / "of"; rc, ev = run(mod or tgy_convert, srcn, outf, "--nested", "flatten"); lf = load(outf)
+    check("--nested flatten: one folder Trip with the pictures of its subfolders at every depth, copied flat (a hidden folder is skipped)", rc == 0 and [f["name"] for f in lf["folders"]] == ["Trip"] and sorted(e["name"] for e in lf["entries"]) == ["a", "b", "t"] and all("/" not in e["path"].split("photos/")[1] for e in lf["entries"]))
     outj = d / "oj"; rc, ev = run(mod or tgy_convert, srcn, outj, "--nested", "join"); lj = load(outj)
     check("--nested join: a folder of its own for each, named with the whole path: Trip, Trip - Day 1, Trip - Day 2 - Deep", rc == 0 and [f["name"] for f in lj["folders"]] == ["Trip", "Trip - Day 1", "Trip - Day 2 - Deep"] and sorted(e["name"] for e in lj["entries"]) == ["a", "b", "t"])
     # a path that does not fit is skipped, the rest converts

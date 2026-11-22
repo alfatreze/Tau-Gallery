@@ -34,7 +34,7 @@ pub struct Options {
 
 impl Options {
     pub fn new(src: PathBuf, out: PathBuf) -> Options {
-        Options { src, out, card_dir: "Assets/tau_gallery/common/photos".into(), index_name: "tau-library.tdb".into(), upscale: false, levels: false, format_v1: false, quality: 92, fit_quality: 90, card_layout: false, merge: false, index_v1: true, sort: "name".into(), nested: "flatten".into() }
+        Options { src, out, card_dir: "Assets/tau_gallery/common/photos".into(), index_name: "tau-library.tdb".into(), upscale: false, levels: false, format_v1: false, quality: 92, fit_quality: 90, card_layout: false, merge: false, index_v1: true, sort: "name".into(), nested: "tree".into() }
     }
 }
 
@@ -229,27 +229,65 @@ fn nested_folders(src: &Path, mode: &str, list: &dyn Fn(&Path) -> Vec<PathBuf>) 
     out.sort_by(|a, b| a.0.cmp(&b.0));
     out
 }
-struct Item { path: String, name: String, size: u32, width: u32, height: u32, folder_name: String, taken: u32, details: Vec<u8>, thumb: Vec<u8>, order: usize }
+struct Item { path: String, name: String, size: u32, width: u32, height: u32, folder_name: String, fpath: Vec<String>, taken: u32, details: Vec<u8>, thumb: Vec<u8>, order: usize }
+
+/// `--nested tree`: every picture under `src` with the folders it is in (the names from `src` down; empty for a picture directly in `src`). Hidden folders are skipped at every depth.
+fn tree_pictures(src: &Path, list: &dyn Fn(&Path) -> Vec<PathBuf>) -> Vec<(PathBuf, Vec<String>)> {
+    fn subdirs(d: &Path) -> Vec<PathBuf> {
+        let mut v: Vec<PathBuf> = std::fs::read_dir(d).map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.is_dir() && !p.file_name().unwrap().to_string_lossy().starts_with('.')).collect()).unwrap_or_default();
+        v.sort_by(|x, y| x.file_name().cmp(&y.file_name())); v
+    }
+    fn walk(d: &Path, dirs: &mut Vec<String>, list: &dyn Fn(&Path) -> Vec<PathBuf>, out: &mut Vec<(PathBuf, Vec<String>)>) {
+        for p in list(d) { out.push((p, dirs.clone())); }
+        for q in subdirs(d) { dirs.push(q.file_name().unwrap().to_string_lossy().into_owned()); walk(&q, dirs, list, out); dirs.pop(); }
+    }
+    let mut out = Vec::new(); walk(src, &mut Vec::new(), list, &mut out); out
+}
+
+pub const THIS_FOLDER: &str = "THIS FOLDER";
+/// The folder table of a library whose pictures are in the folders `fpaths`: (path, parent index) in depth first order, siblings in name order (case blind); and where the pictures of each folder are filed (a folder that holds pictures and folders gets its pictures into a child folder, THIS FOLDER).
+fn folder_tree(fpaths: &[Vec<String>]) -> (Vec<(Vec<String>, Option<usize>)>, std::collections::HashMap<Vec<String>, Vec<String>>) {
+    use std::collections::{BTreeSet, HashMap};
+    let mut prefixes: BTreeSet<Vec<String>> = BTreeSet::new();
+    for fp in fpaths { for i in 1..=fp.len() { prefixes.insert(fp[..i].to_vec()); } }
+    let has_kids: BTreeSet<Vec<String>> = prefixes.iter().filter(|p| p.len() > 1).map(|p| p[..p.len() - 1].to_vec()).collect();
+    let mut filed: HashMap<Vec<String>, Vec<String>> = HashMap::new();
+    for fp in fpaths { let f = if has_kids.contains(fp) { let mut x = fp.clone(); x.push(THIS_FOLDER.to_string()); x } else { fp.clone() }; filed.insert(fp.clone(), f); }
+    for f in filed.values() { for i in 1..=f.len() { prefixes.insert(f[..i].to_vec()); } }
+    let mut kids: HashMap<Vec<String>, Vec<Vec<String>>> = HashMap::new();
+    for p in &prefixes { kids.entry(p[..p.len() - 1].to_vec()).or_default().push(p.clone()); }
+    fn walk(fp: &Vec<String>, parent: Option<usize>, kids: &HashMap<Vec<String>, Vec<Vec<String>>>, order: &mut Vec<(Vec<String>, Option<usize>)>) {
+        order.push((fp.clone(), parent)); let me = order.len() - 1;
+        let mut c = kids.get(fp).cloned().unwrap_or_default(); c.sort_by_key(|x| x.last().unwrap().to_lowercase());
+        for k in c { walk(&k, Some(me), kids, order); }
+    }
+    let mut order = Vec::new(); let mut top = kids.get(&Vec::new()).cloned().unwrap_or_default(); top.sort_by_key(|x| x.last().unwrap().to_lowercase());
+    for t in top { walk(&t, None, &kids, &mut order); }
+    (order, filed)
+}
 
 /// Runs a conversion. `emit` receives each event; the result is the exit code (0 done, 2 a usage error). `cancel` stops it between pictures and between tiles.
 pub fn run(a: &Options, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) -> i32 {
     let err = |emit: &mut dyn FnMut(Value), m: String| { emit(json!({"event": "error", "error": m})); 2 };
-    let jobs: Vec<(PathBuf, Option<String>)>;
+    let jobs: Vec<(PathBuf, Option<Vec<String>>, Vec<String>)>;
     if a.src.is_file() {
         let ok = a.src.extension().and_then(|e| e.to_str()).map(|e| EXT.contains(&e.to_ascii_lowercase().as_str())).unwrap_or(false);
         if !ok { return err(emit, format!("not a picture this tool reads: {}", a.src.file_name().unwrap_or_default().to_string_lossy())); }
-        jobs = vec![(a.src.clone(), None)];
+        jobs = vec![(a.src.clone(), None, Vec::new())];
     } else if a.src.is_dir() {
         let list = |d: &Path| -> Vec<PathBuf> { let mut v: Vec<PathBuf> = std::fs::read_dir(d).map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| is_picture(p)).collect()).unwrap_or_default(); v.sort_by(|x, y| x.file_name().cmp(&y.file_name())); v };
         let top = list(&a.src);
-        let subs = nested_folders(&a.src, &a.nested, &list);
-        if a.index_v1 && !subs.is_empty() {
-            let top_name = a.src.file_name().map(|n| n.to_string_lossy().into_owned()).filter(|s| !s.is_empty()).unwrap_or_else(|| index::ALL_PICTURES.to_string());
-            let mut j: Vec<(PathBuf, Option<String>)> = Vec::new();
-            for (n, fl) in &subs { for p in fl { j.push((p.clone(), Some(n.clone()))); } }
-            for p in top { j.push((p, Some(top_name.clone()))); }
+        let tp = if a.nested == "tree" && a.index_v1 { tree_pictures(&a.src, &list) } else { Vec::new() };
+        let subs = if a.nested != "tree" { nested_folders(&a.src, &a.nested, &list) } else { Vec::new() };
+        let top_name = a.src.file_name().map(|n| n.to_string_lossy().into_owned()).filter(|s| !s.is_empty()).unwrap_or_else(|| index::ALL_PICTURES.to_string());
+        if tp.iter().any(|(_, d)| !d.is_empty()) {                                                          // tree: the pictures are copied nested and the index holds the tree
+            jobs = tp.into_iter().map(|(p, d)| { let fp = if d.is_empty() { vec![top_name.clone()] } else { d.clone() }; (p, Some(fp), d) }).collect();
+        } else if a.index_v1 && !subs.is_empty() {
+            let mut j: Vec<(PathBuf, Option<Vec<String>>, Vec<String>)> = Vec::new();
+            for (n, fl) in &subs { for p in fl { j.push((p.clone(), Some(vec![n.clone()]), Vec::new())); } }
+            for p in top { j.push((p, Some(vec![top_name.clone()]), Vec::new())); }
             jobs = j;
-        } else { jobs = top.into_iter().map(|p| (p, None)).collect(); }
+        } else { jobs = top.into_iter().map(|p| (p, None, Vec::new())).collect(); }
     } else { return err(emit, format!("no such file or folder: {}", a.src.display())); }
     let card_dir = a.card_dir.trim_matches('/').to_string();
     let photos = if a.card_layout { a.out.join(&card_dir) } else { a.out.clone() };
@@ -264,25 +302,28 @@ pub fn run(a: &Options, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) -> i32
             if ver == 1 && !v1 { return Err("the old index is version 1 and --index-format v0 cannot hold folders".to_string()); }
             let mut v = Vec::new();
             for e in ents {
-                let fname = Path::new(&e.path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                if !photos.join(&fname).is_file() { continue; }
+                let rel: String = e.path.strip_prefix(&format!("{card_dir}/")).map(|r| r.to_string()).unwrap_or_else(|| Path::new(&e.path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
+                if !photos.join(&rel).is_file() { continue; }
+                let odirs: Vec<String> = { let parts: Vec<&str> = rel.split('/').collect(); parts[..parts.len() - 1].iter().map(|x| x.to_string()).collect() };
+                let fpath = if !odirs.is_empty() && a.nested == "tree" { odirs } else { vec![e.folder_name.clone()] };
                 let thumb = if e.version == 1 { e.thumb } else if v1 { index::thumb72_to_square(&e.thumb) } else { e.thumb };
-                v.push((fname.to_lowercase(), Item { path: e.path, name: e.name, size: e.size, width: e.width, height: e.height, folder_name: e.folder_name, taken: e.taken, details: e.details, thumb, order: v.len() }));
+                v.push((e.path.to_lowercase(), Item { path: e.path, name: e.name, size: e.size, width: e.width, height: e.height, folder_name: e.folder_name, fpath, taken: e.taken, details: e.details, thumb, order: v.len() }));
             }
             Ok(v)
         });
         match r { Ok(v) => old = v, Err(e) => emit(json!({"event": "warning", "error": format!("the old index is not readable and is rebuilt without it: {e}")})) }
     }
     emit(json!({"event": "plan", "files": jobs.len(), "kept": old.len()}));
-    for (p, folder) in &jobs {
+    for (p, folder, dirs) in &jobs {
         if cancel.load(Ordering::Relaxed) { emit(json!({"event": "error", "error": "Stopped."})); return 2; }
         let stem0 = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         let fname = p.file_name().unwrap().to_string_lossy().into_owned();
         let base = ascii_stem(&stem0);
         let (mut stem, mut n) = (base.clone(), 1);
-        while used.contains(&stem.to_lowercase()) { n += 1; stem = format!("{base}_{n}"); }
+        let dkey = dirs.join("/");
+        while used.contains(&format!("{dkey}/{}", stem.to_lowercase())) { n += 1; stem = format!("{base}_{n}"); }
         let shown = if n == 1 { stem0.clone() } else { format!("{stem0}_{n}") };
-        let path = format!("{card_dir}/{stem}.tgy");
+        let path = if dirs.is_empty() { format!("{card_dir}/{stem}.tgy") } else { format!("{card_dir}/{}/{stem}.tgy", dkey) };
         if path.len() >= index::PATH_BYTES {
             emit(json!({"event": "skip", "file": fname, "error": format!("the card path is {} bytes, the limit is {}: shorten the file name or the card folder", path.len(), index::PATH_BYTES - 1)}));
             skipped += 1; continue;
@@ -291,30 +332,33 @@ pub fn run(a: &Options, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) -> i32
         let (canvas, rect, thumb) = render(&prep, a.upscale);
         let levels = if a.levels && !a.format_v1 { zoom_levels(&prep) } else { vec![] };
         let sq = if v1 { square_thumb(&prep) } else { vec![] };
-        used.insert(stem.to_lowercase());
+        used.insert(format!("{dkey}/{}", stem.to_lowercase()));
         let data = if a.format_v1 {
             match container_v1(&prep, &canvas, a.quality, a.fit_quality, &thumb, cancel) {
                 Ok(d) => d,
-                Err(e) => { if e == "Stopped." { emit(json!({"event": "error", "error": e})); return 2; } emit(json!({"event": "skip", "file": fname, "error": e})); skipped += 1; used.remove(&stem.to_lowercase()); continue; }
+                Err(e) => { if e == "Stopped." { emit(json!({"event": "error", "error": e})); return 2; } emit(json!({"event": "skip", "file": fname, "error": e})); skipped += 1; used.remove(&format!("{dkey}/{}", stem.to_lowercase())); continue; }
             }
         } else { pack_tgy_v0(&canvas, rect, &thumb, (prep.w, prep.h), &levels) };
-        if let Err(e) = write_atomic(&photos.join(format!("{stem}.tgy")), &data) { return err(emit, format!("cannot write {stem}.tgy: {e}")); }
-        old.retain(|(k, _)| *k != format!("{stem}.tgy").to_lowercase());
-        let folder_name = folder.clone().unwrap_or_else(|| index::ALL_PICTURES.to_string());
+        let mut dir = photos.clone(); for d in dirs { dir.push(d); }
+        if let Err(e) = std::fs::create_dir_all(&dir).and_then(|_| write_atomic(&dir.join(format!("{stem}.tgy")), &data)) { return err(emit, format!("cannot write {stem}.tgy: {e}")); }
+        old.retain(|(k, _)| *k != path.to_lowercase());
+        let fpath: Vec<String> = folder.clone().unwrap_or_else(|| vec![index::ALL_PICTURES.to_string()]);
+        let folder_name = fpath.last().cloned().unwrap_or_default();
         let order = old.len() + items.len();
         emit(json!({"event": "converted", "file": fname, "tgy": format!("{stem}.tgy"), "size": data.len(), "width": prep.w, "height": prep.h, "rect": [rect.0, rect.1, rect.2, rect.3], "folder": folder_name,
             "levels": levels.iter().map(|l| match l { ZoomLevel::Raster { w, h, .. } => json!([w, h, "raster"]), ZoomLevel::Tiles { w, h, .. } => json!([w, h, "tiles"]) }).collect::<Vec<_>>()}));
-        items.push(Item { path, name: name_of(&shown), size: data.len() as u32, width: prep.w as u32, height: prep.h as u32, folder_name, taken: taken_seconds(prep.details.taken), details: index::pack_details(&prep.details), thumb: if v1 { sq } else { thumb }, order });
+        items.push(Item { path, name: name_of(&shown), size: data.len() as u32, width: prep.w as u32, height: prep.h as u32, folder_name, fpath, taken: taken_seconds(prep.details.taken), details: index::pack_details(&prep.details), thumb: if v1 { sq } else { thumb }, order });
     }
     let mut all: Vec<Item> = old.into_iter().map(|(_, i)| i).collect();
-    all.extend(items.iter().map(|i| Item { path: i.path.clone(), name: i.name.clone(), size: i.size, width: i.width, height: i.height, folder_name: i.folder_name.clone(), taken: i.taken, details: i.details.clone(), thumb: i.thumb.clone(), order: i.order }));
+    all.extend(items.iter().map(|i| Item { path: i.path.clone(), name: i.name.clone(), size: i.size, width: i.width, height: i.height, folder_name: i.folder_name.clone(), fpath: i.fpath.clone(), taken: i.taken, details: i.details.clone(), thumb: i.thumb.clone(), order: i.order }));
     let (pictures, folders_n);
     if v1 {
-        let mut fnames: Vec<String> = all.iter().map(|i| i.folder_name.clone()).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
-        fnames.sort_by_key(|x| x.to_lowercase());
+        let fps: Vec<Vec<String>> = all.iter().map(|i| i.fpath.clone()).collect();
+        let (order_f, filed) = folder_tree(&fps);                                                           // the folder table: the tree in depth first order, siblings in name order
+        let where_: std::collections::HashMap<&Vec<String>, usize> = order_f.iter().enumerate().map(|(i, (f, _))| (f, i)).collect();
         let mut ordered: Vec<&Item> = Vec::new();
-        for f in &fnames {
-            let mut v: Vec<&Item> = all.iter().filter(|i| &i.folder_name == f).collect();
+        for (fp, _) in &order_f {
+            let mut v: Vec<&Item> = all.iter().filter(|i| filed.get(&i.fpath) == Some(fp)).collect();
             match a.sort.as_str() {
                 "taken" => v.sort_by_key(|i| (i.taken == 0, i.taken, i.path.to_lowercase())),
                 "converted" => v.sort_by_key(|i| i.order),
@@ -322,9 +366,9 @@ pub fn run(a: &Options, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) -> i32
             }
             ordered.extend(v);
         }
-        let folders: Vec<index::Folder> = fnames.iter().map(|f| index::Folder { name: f.chars().map(|c| if (c as u32) < 256 { c } else { '?' }).take(index::FOLDER_NAME - 1).collect() }).collect();
-        let entries: Vec<index::Entry1> = ordered.iter().map(|i| index::Entry1 { path: i.path.clone(), name: i.name.clone(), size: i.size, width: i.width, height: i.height, folder: fnames.iter().position(|f| *f == i.folder_name).unwrap() as u16, taken: i.taken, details: i.details.clone(), thumb: i.thumb.clone() }).collect();
-        let fl = if folders.is_empty() { vec![index::Folder { name: index::ALL_PICTURES.into() }] } else { folders };
+        let folders: Vec<index::Folder> = order_f.iter().map(|(f, par)| index::Folder { name: f.last().cloned().unwrap_or_default().chars().map(|c| if (c as u32) < 256 { c } else { '?' }).take(index::FOLDER_NAME - 1).collect(), parent: *par }).collect();
+        let entries: Vec<index::Entry1> = ordered.iter().map(|i| index::Entry1 { path: i.path.clone(), name: i.name.clone(), size: i.size, width: i.width, height: i.height, folder: where_[&filed[&i.fpath]] as u16, taken: i.taken, details: i.details.clone(), thumb: i.thumb.clone() }).collect();
+        let fl = if folders.is_empty() { vec![index::Folder { name: index::ALL_PICTURES.into(), parent: None }] } else { folders };
         let sort = match a.sort.as_str() { "taken" => index::SORT_TAKEN, "converted" => index::SORT_CONVERTED, _ => index::SORT_NAME };
         match index::pack_index_v1(&entries, &fl, sort) { Ok(d) => { if let Err(e) = write_atomic(&index_dir.join(&a.index_name), &d) { return err(emit, format!("cannot write the index: {e}")); } } Err(e) => return err(emit, e) }
         pictures = ordered.len(); folders_n = fl.len();
@@ -343,6 +387,16 @@ pub fn run(a: &Options, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) -> i32
 mod nested_tests {
     use super::*;
     fn touch(p: &Path) { std::fs::create_dir_all(p.parent().unwrap()).unwrap(); std::fs::write(p, b"x").unwrap(); }
+    #[test]
+    fn folder_tree_depth_first_with_this_folder() {
+        let v = |x: &[&str]| x.iter().map(|s| s.to_string()).collect::<Vec<String>>();
+        let fps = vec![v(&["Trip"]), v(&["Trip", "Day 2", "Deep"]), v(&["Trip", "Day 1"]), v(&["misc"]), v(&["Trip"])];
+        let (order, filed) = folder_tree(&fps);
+        let names: Vec<String> = order.iter().map(|(f, p)| format!("{}:{:?}", f.join("/"), p)).collect();
+        assert_eq!(names, vec!["misc:None", "Trip:None", "Trip/Day 1:Some(1)", "Trip/Day 2:Some(1)", "Trip/Day 2/Deep:Some(3)", "Trip/THIS FOLDER:Some(1)"], "depth first, siblings in name order (case blind), the pictures of Trip filed in THIS FOLDER");
+        assert_eq!(filed[&v(&["Trip"])], v(&["Trip", "THIS FOLDER"]));
+        assert_eq!(filed[&v(&["misc"])], v(&["misc"]));
+    }
     #[test]
     fn nested_folders_flatten_or_join() {
         let d = std::env::temp_dir().join(format!("tgy_nested_{}", std::process::id())); let _ = std::fs::remove_dir_all(&d);

@@ -342,8 +342,24 @@ def pack_index_v1(entries, thumbs, folders=None, sort=SORT_NAME):
     if not 1 <= len(folders) <= MAX_FOLDERS: raise ValueError("folder count")
     fi = [e.get("folder", 0) for e in entries]
     if any(not 0 <= f < len(folders) for f in fi) or fi != sorted(fi): raise ValueError("entries must be sorted by folder, each folder index in range")
-    first = [fi.index(k) if k in fi else -1 for k in range(len(folders))]; count = [fi.count(k) for k in range(len(folders))]
-    if n and min(count) == 0: raise ValueError("a folder with no picture")
+    nfo = len(folders)
+    par = [f.get("parent") for f in folders]                                                                 # the folder tree (TGIX 1.1): a folder's parent index (None: top level); the table is in depth first order, so a folder's descendants follow it
+    if any(p is not None and not 0 <= p < k for k, p in enumerate(par)): raise ValueError("a folder's parent must come before it")
+    nfold = [0] * nfo
+    for k in range(nfo):
+        a = par[k]
+        while a is not None: nfold[a] += 1; a = par[a]
+    for k in range(nfo):                                                                                      # descendants are exactly the next nfold folders (depth first order)
+        for j in range(k + 1, k + 1 + nfold[k]):
+            a = par[j] if j < nfo else None
+            while a is not None and a != k: a = par[a]
+            if a != k: raise ValueError("folders are not in depth first order")
+    own = [fi.count(k) for k in range(nfo)]
+    if any(nfold[k] and own[k] for k in range(nfo)): raise ValueError("a folder that holds folders cannot hold pictures: put them in a folder of their own")
+    if n and any(not nfold[k] and not own[k] for k in range(nfo)): raise ValueError("a folder with no picture")
+    first = [fi.index(k) if k in fi else -1 for k in range(nfo)]; count = list(own)
+    for k in range(nfo - 1, -1, -1):                                                                          # a folder that holds folders shows all their pictures: its range is theirs
+        if nfold[k]: first[k] = min(first[j] for j in range(k + 1, k + 1 + nfold[k]) if first[j] >= 0) if n else 0; count[k] = sum(own[j] for j in range(k + 1, k + 1 + nfold[k]))
     det = bytearray(); recs = []
     for i, e in enumerate(entries):
         dd = e.get("details", b""); dd = pack_details(dd) if isinstance(dd, dict) else bytes(dd)
@@ -365,7 +381,7 @@ def pack_index_v1(entries, thumbs, folders=None, sort=SORT_NAME):
         buf[atlas_off + i * THUMB1_BYTES:atlas_off + (i + 1) * THUMB1_BYTES] = t
     for k, f in enumerate(folders):
         cover = f.get("cover"); cover = (first[k] if first[k] >= 0 else 0) if cover is None else cover
-        rec = f["name"].encode("latin-1", "replace")[:FOLDER_NAME - 1].ljust(FOLDER_NAME, b"\0") + struct.pack("<III", max(first[k], 0), count[k], cover) + bytes(4)
+        rec = f["name"].encode("latin-1", "replace")[:FOLDER_NAME - 1].ljust(FOLDER_NAME, b"\0") + struct.pack("<IIIHH", max(first[k], 0), count[k], cover, 0 if par[k] is None else par[k] + 1, nfold[k])
         buf[fold_off + k * FOLDER_ENTRY:fold_off + (k + 1) * FOLDER_ENTRY] = rec
     buf[det_off:det_off + len(det)] = det
     return bytes(buf)
@@ -386,9 +402,10 @@ def parse_index_full(data):
     if eoff < IDX1_HEADER or aoff < eoff + n * esz or foff < aoff + n * THUMB1_BYTES or doff < foff + nf * fesz or doff + dlen > len(data): raise ValueError("TGIX sections")
     folders = []
     for k in range(nf):
-        r = data[foff + k * fesz:foff + (k + 1) * fesz]; first, count, cover = struct.unpack_from("<III", r, FOLDER_NAME)
+        r = data[foff + k * fesz:foff + (k + 1) * fesz]; first, count, cover, par1, nfold = struct.unpack_from("<IIIHH", r, FOLDER_NAME)
         if (count < 1 and n) or first + count > n or cover >= max(n, 1): raise ValueError("folder range")   # an empty library has one empty folder
-        folders.append(dict(name=r[:FOLDER_NAME].split(b"\0")[0].decode("latin-1"), first=first, count=count, cover=cover))
+        if par1 > k or k + nfold >= nf: par1 = nfold = 0                                                   # a tree field that cannot be right is ignored (the firmware does the same): a flat folder
+        folders.append(dict(name=r[:FOLDER_NAME].split(b"\0")[0].decode("latin-1"), first=first, count=count, cover=cover, parent1=par1, nfold=nfold))
     ents = []
     for i in range(n):
         r = data[eoff + i * esz:eoff + (i + 1) * esz]
@@ -397,5 +414,6 @@ def parse_index_full(data):
         ents.append(dict(path=r[:PATH_BYTES].split(b"\0")[0].decode("utf-8"), name=r[PATH_BYTES:PATH_BYTES + NAME_BYTES].split(b"\0")[0].decode("latin-1"), size=size, width=w, height=h, folder=fo, taken=taken,
                          thumb=data[aoff + ti * THUMB1_BYTES:aoff + (ti + 1) * THUMB1_BYTES], details=parse_details(data[doff + do:doff + do + dl]) if dl else {}))
     for k, f in enumerate(folders):
-        if any(ents[i]["folder"] != k for i in range(f["first"], f["first"] + f["count"])): raise ValueError("folder entries not contiguous")
+        if f["nfold"] == 0 and any(ents[i]["folder"] != k for i in range(f["first"], f["first"] + f["count"])): raise ValueError("folder entries not contiguous")
+        if f["nfold"] and (f["first"] != folders[k + 1]["first"] or f["count"] != sum(folders[j]["count"] for j in range(k + 1, k + 1 + f["nfold"]) if folders[j]["nfold"] == 0)): raise ValueError("folder tree ranges")
     return dict(version=1, sort=sort, folders=folders, entries=ents, thumb_w=THUMB1_W, thumb_h=THUMB1_H)

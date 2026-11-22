@@ -15,7 +15,7 @@ fn entries() -> Vec<index::Entry1> {
 
 #[test]
 fn the_version_1_index_is_the_python_one_for_each_sort_mode() {
-    let folders = [index::Folder { name: "Alpine".into() }, index::Folder { name: "S\u{e9}a".into() }];
+    let folders = [index::Folder { name: "Alpine".into(), parent: None }, index::Folder { name: "S\u{e9}a".into(), parent: None }];
     for (sort, want) in [(index::SORT_NAME, 0xad8382842feb204du64), (index::SORT_TAKEN, 0x84f7b89fa5227c49), (index::SORT_CONVERTED, 0xb3cd50f2da85845c)] {
         assert_eq!(fnv(&index::pack_index_v1(&entries(), &folders, sort).unwrap()), want, "sort {sort}");
     }
@@ -29,7 +29,7 @@ fn the_version_0_index_is_the_python_one() {
 
 #[test]
 fn an_index_written_is_read_back_whole() {
-    let folders = [index::Folder { name: "Alpine".into() }, index::Folder { name: "S\u{e9}a".into() }];
+    let folders = [index::Folder { name: "Alpine".into(), parent: None }, index::Folder { name: "S\u{e9}a".into(), parent: None }];
     let d = index::pack_index_v1(&entries(), &folders, index::SORT_TAKEN).unwrap();
     let (ver, old) = index::parse_index(&d).unwrap();
     assert_eq!((ver, old.len()), (1, 3));
@@ -54,4 +54,19 @@ fn exif_details_orientation_and_the_dates_equal_the_python_reference() {
     }
     let t = |x| convert::taken_seconds(Some(x));
     assert_eq!([t((2024, 5, 6, 7, 8, 9)), t((2000, 1, 1, 0, 0, 0)), t((2000, 1, 1, 0, 0, 1)), t((2099, 12, 31, 23, 59, 59)), t((2024, 2, 30, 1, 1, 1)), t((1999, 12, 31, 23, 59, 59)), t((2024, 2, 29, 12, 0, 0))], [768294489, 0, 1, 3155759999u32, 0, 0, 762523200]);
+}
+
+#[test]
+fn the_folder_tree_is_stored_and_a_bad_one_refused() {
+    // Alpine, Sea{Lake, Pond}: the pictures a, b, c are in Alpine, Lake, Pond; Sea is a container (its range is Lake's and Pond's)
+    let f = |n: &str, p: Option<usize>| index::Folder { name: n.into(), parent: p };
+    let folders = [f("Alpine", None), f("Sea", None), f("Lake", Some(1)), f("Pond", Some(1))];
+    let mut e = entries(); e[0].folder = 0; e[1].folder = 2; e[2].folder = 3;
+    let d = index::pack_index_v1(&e, &folders, index::SORT_NAME).unwrap();
+    let foff = u32::from_le_bytes(d[28..32].try_into().unwrap()) as usize;
+    let rec = |k: usize| { let r = &d[foff + k * 48usize..foff + (k + 1) * 48usize]; let u = |o: usize| u32::from_le_bytes(r[o..o + 4].try_into().unwrap()); (u(32), u(36), u16::from_le_bytes([r[44], r[45]]), u16::from_le_bytes([r[46], r[47]])) };
+    assert_eq!([rec(0), rec(1), rec(2), rec(3)], [(0, 1, 0, 0), (1, 2, 0, 2), (1, 1, 2, 0), (2, 1, 2, 0)], "first, count, parent + 1, descendant folders");
+    let mut holds_both = entries(); holds_both[1].folder = 1;
+    assert!(index::pack_index_v1(&holds_both, &folders, index::SORT_NAME).is_err(), "a folder that holds folders cannot hold pictures");
+    assert!(index::pack_index_v1(&e, &[f("A", Some(1)), f("B", None)], index::SORT_NAME).is_err(), "a parent after its child");
 }

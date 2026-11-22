@@ -7,7 +7,7 @@
  *   word 6 (variable 16)  bits 30..0 the last picture's index number
  *   word 8 (variable 20)  Gallery 1.0 look settings, in a persisted variable the gallery does not otherwise use (the Pocket keeps at most 16 variables of a core: a 17th is dropped silently): grid size bits 1..0
  *                         (0 4 x 3, 1 5 x 4, 2 6 x 4, 3 8 x 6), dither bits 3..2 STORED AS (dither + 2) % 3 so that the package's default 0 is the default setting (0 stored = ordered, 1 = ordered + moving, 2 = off),
- *                         colour preset bits 6..4 (0 none; presets are numbered by the pixel-effects code). Bit 31 is never touched; other bits stay
+ *                         colour preset bits 6..4 (0 none; presets are numbered by the pixel-effects code), folders bit 7 (0 flat: the folders of a library with folders inside folders are shown as one level and hold every picture under them; 1 nested: the tree is walked). Bit 31 is never touched; other bits stay
  * Bits that are not ours stay (read-modify-write); bit 31 is never touched. */
 #ifndef GALLERY_SETTINGS_H
 #define GALLERY_SETTINGS_H
@@ -24,9 +24,9 @@
 #define GS_W_INDEX  6u
 #define GS_W_FX     8u
 #define GS_M31 0x7FFFFFFFu
-typedef struct { uint32_t resume, last_idx, last_crc, theme, pol, pal, grid, dither, lut; } gs_vals_t;      /* theme, pol, pal: raw as saved (6, 1 and 5 bits); the theme module validates them against the build */
-static inline gs_vals_t gs_defaults(void) { gs_vals_t v = { 1u, 0u, 0u, 0u, 0u, 1u, 0u, 1u, 0u }; return v; }
-static inline int gs_same(const gs_vals_t *a, const gs_vals_t *b) { return a->resume == b->resume && a->last_idx == b->last_idx && a->last_crc == b->last_crc && a->theme == b->theme && a->pol == b->pol && a->grid == b->grid && a->dither == b->dither && a->lut == b->lut && a->pal == b->pal; }
+typedef struct { uint32_t resume, last_idx, last_crc, theme, pol, pal, grid, dither, lut, nested; } gs_vals_t;      /* theme, pol, pal: raw as saved (6, 1 and 5 bits); the theme module validates them against the build */
+static inline gs_vals_t gs_defaults(void) { gs_vals_t v = { 1u, 0u, 0u, 0u, 0u, 1u, 0u, 1u, 0u, 0u }; return v; }
+static inline int gs_same(const gs_vals_t *a, const gs_vals_t *b) { return a->resume == b->resume && a->last_idx == b->last_idx && a->last_crc == b->last_crc && a->theme == b->theme && a->pol == b->pol && a->grid == b->grid && a->dither == b->dither && a->lut == b->lut && a->pal == b->pal && a->nested == b->nested; }
 static inline int gs_layout_ok(const uint32_t *w) { return ((w[GS_W_LAYOUT] >> 27) & 15u) == GS_LAYOUT_VERSION; }
 /* The values held by the words w[0..15]; a word set that is not our layout, or any out-of-range field, gives the default of that field. */
 static inline gs_vals_t gs_unpack(const uint32_t *w)
@@ -41,7 +41,7 @@ static inline gs_vals_t gs_unpack(const uint32_t *w)
     v.resume = (w[GS_W_RESUME] & 1u) ^ 1u;
     v.last_crc = w[GS_W_CRC] & GS_M31;
     v.last_idx = w[GS_W_INDEX] & GS_M31;
-    v.grid = w[GS_W_FX] & 3u; v.lut = (w[GS_W_FX] >> 4) & 7u;
+    v.grid = w[GS_W_FX] & 3u; v.lut = (w[GS_W_FX] >> 4) & 7u; v.nested = (w[GS_W_FX] >> 7) & 1u;
     { const uint32_t r = (w[GS_W_FX] >> 2) & 3u; v.dither = r > 2u ? 1u : (r + 1u) % 3u; }     /* stored as (dither + 2) % 3; a value this build does not have falls back to the default */
     return v;
 }
@@ -64,9 +64,9 @@ static inline uint32_t gs_pack(uint32_t *w, const gs_vals_t *v)
     w[GS_W_CRC]    = (w[GS_W_CRC] & 0x80000000u) | (v->last_crc & GS_M31);
     w[GS_W_INDEX]  = (w[GS_W_INDEX] & 0x80000000u) | (v->last_idx & GS_M31);
 #if BUG == 8
-    w[GS_W_FX] = (w[GS_W_FX] & ~0x7Fu) | (v->grid & 3u) | ((((v->dither % 3u) + 2u) % 3u) << 2);                // the colour preset is dropped
+    w[GS_W_FX] = (w[GS_W_FX] & ~0xFFu) | (v->grid & 3u) | ((((v->dither % 3u) + 2u) % 3u) << 2) | ((v->nested & 1u) << 7);                // the colour preset is dropped
 #else
-    w[GS_W_FX] = (w[GS_W_FX] & ~0x7Fu) | (v->grid & 3u) | ((((v->dither % 3u) + 2u) % 3u) << 2) | ((v->lut & 7u) << 4);
+    w[GS_W_FX] = (w[GS_W_FX] & ~0xFFu) | (v->grid & 3u) | ((((v->dither % 3u) + 2u) % 3u) << 2) | ((v->lut & 7u) << 4) | ((v->nested & 1u) << 7);
 #endif
     for (uint32_t i = 0; i < GS_WORDS; i++) if (w[i] != o[i]) m |= 1u << i;
     return m;

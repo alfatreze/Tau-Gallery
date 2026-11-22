@@ -56,7 +56,8 @@ pub struct Entry1 {
     pub thumb: Vec<u8>,
 }
 
-pub struct Folder { pub name: String }
+/// A folder of the table. `parent` is the index of the folder it is in (None: top level); the table is in depth first order, so a folder's descendants follow it (TGIX 1.1).
+pub struct Folder { pub name: String, pub parent: Option<usize> }
 
 fn put(buf: &mut [u8], o: usize, b: &[u8]) { buf[o..o + b.len()].copy_from_slice(b); }
 
@@ -66,9 +67,19 @@ pub fn pack_index_v1(entries: &[Entry1], folders: &[Folder], sort: u16) -> Resul
     if folders.is_empty() || folders.len() > MAX_FOLDERS { return Err("folder count".into()); }
     let fi: Vec<u16> = entries.iter().map(|e| e.folder).collect();
     if fi.iter().any(|&f| f as usize >= folders.len()) || fi.windows(2).any(|w| w[0] > w[1]) { return Err("entries must be sorted by folder".into()); }
-    let first: Vec<i64> = (0..folders.len()).map(|k| fi.iter().position(|&f| f as usize == k).map(|p| p as i64).unwrap_or(-1)).collect();
-    let count: Vec<u32> = (0..folders.len()).map(|k| fi.iter().filter(|&&f| f as usize == k).count() as u32).collect();
-    if n > 0 && count.iter().any(|&c| c == 0) { return Err("a folder with no picture".into()); }
+    let nf = folders.len();
+    if folders.iter().enumerate().any(|(k, f)| f.parent.map_or(false, |p| p >= k)) { return Err("a folder's parent must come before it".into()); }
+    let mut nfold = vec![0u16; nf];
+    for k in 0..nf { let mut a = folders[k].parent; while let Some(p) = a { nfold[p] += 1; a = folders[p].parent; } }
+    for k in 0..nf { for j in k + 1..k + 1 + nfold[k] as usize {                                          // the descendants are exactly the next nfold folders (depth first order)
+        let mut a = if j < nf { folders[j].parent } else { None }; while let Some(p) = a { if p == k { break; } a = folders[p].parent; }
+        if a != Some(k) { return Err("folders are not in depth first order".into()); } } }
+    let own: Vec<u32> = (0..nf).map(|k| fi.iter().filter(|&&f| f as usize == k).count() as u32).collect();
+    if (0..nf).any(|k| nfold[k] > 0 && own[k] > 0) { return Err("a folder that holds folders cannot hold pictures: put them in a folder of their own".into()); }
+    if n > 0 && (0..nf).any(|k| nfold[k] == 0 && own[k] == 0) { return Err("a folder with no picture".into()); }
+    let mut first: Vec<i64> = (0..nf).map(|k| fi.iter().position(|&f| f as usize == k).map(|p| p as i64).unwrap_or(-1)).collect();
+    let mut count: Vec<u32> = own.clone();
+    for k in (0..nf).rev() { if nfold[k] > 0 { let r = k + 1..k + 1 + nfold[k] as usize; first[k] = if n > 0 { r.clone().filter_map(|j| if first[j] >= 0 { Some(first[j]) } else { None }).min().unwrap_or(0) } else { 0 }; count[k] = r.map(|j| own[j]).sum(); } }
     let mut det = Vec::new();
     let mut recs = Vec::new();
     for e in entries {
@@ -132,6 +143,8 @@ pub fn pack_index_v1(entries: &[Entry1], folders: &[Folder], sort: u16) -> Resul
         rec[FOLDER_NAME..FOLDER_NAME + 4].copy_from_slice(&fst.to_le_bytes());
         rec[FOLDER_NAME + 4..FOLDER_NAME + 8].copy_from_slice(&count[k].to_le_bytes());
         rec[FOLDER_NAME + 8..FOLDER_NAME + 12].copy_from_slice(&fst.to_le_bytes());
+        rec[FOLDER_NAME + 12..FOLDER_NAME + 14].copy_from_slice(&(f.parent.map_or(0, |p| p as u16 + 1)).to_le_bytes());
+        rec[FOLDER_NAME + 14..FOLDER_NAME + 16].copy_from_slice(&nfold[k].to_le_bytes());
         put(&mut buf, fold_off + k * FOLDER_ENTRY, &rec);
     }
     put(&mut buf, det_off, &det);

@@ -31,7 +31,7 @@ int main(int argc, char **argv)
             printf("head1 folders %u folders_off %u details_off %u details_len %u sort %u size_rc %d\n", h.folder_count, h.folders_off, h.details_off, h.details_len, h.sort, gx_check_size(&h, (uint32_t)fsz));
             for (uint32_t k = 0; k < h.folder_count; k++) {
                 uint8_t rec[GX1_FOLDER_BYTES]; fseek(f, (long)gx_folder_off(&h, k), SEEK_SET); if (fread(rec, 1, sizeof rec, f) != sizeof rec) { printf("short folder %u\n", k); return 0; }
-                gx_folder_t fo; r = gx_parse_folder(&h, rec, sizeof rec, &fo); printf("folder %u rc %d name %s first %u count %u cover %u\n", k, r, fo.name, fo.first, fo.count, fo.cover);
+                gx_folder_t fo; r = gx_parse_folder(&h, rec, sizeof rec, &fo); printf("folder %u rc %d name %s first %u count %u cover %u parent1 %u nfold %u\n", k, r, fo.name, fo.first, fo.count, fo.cover, fo.parent1, fo.nfold);
             }
         }
         for (uint32_t i = 0; i < h.count; i++) {

@@ -44,6 +44,35 @@ def nested_folders(src, mode):
             if fl: out.setdefault(names[0] if mode == "flatten" else " - ".join(names), []).extend(fl)
     return sorted(out.items(), key=lambda kv: kv[0])
 
+def tree_pictures(src):
+    """--nested tree: every picture under src with the folders it is in, as [(picture, dirs)], dirs the names of the folders from src down (empty for a picture directly in src). Hidden folders (a name starting with a dot) are skipped at every depth."""
+    out = []
+    def walk(d, dirs):
+        out.extend((p, dirs) for p in sorted(x for x in d.iterdir() if is_picture(x)))
+        for q in sorted((x for x in d.iterdir() if x.is_dir() and not x.name.startswith(".")), key=lambda x: x.name): walk(q, dirs + (q.name,))
+    walk(src, ())
+    return out
+
+THIS_FOLDER = "THIS FOLDER"
+def folder_tree(fpaths):
+    """The folder table of a library whose pictures are in the folders fpaths (a tuple of names each): [(fpath, parent index or None)] in depth first order, the siblings in name order (case blind). A folder that holds pictures and folders gets its pictures into a child folder called THIS FOLDER (returned as the mapping fpath -> the fpath its pictures are filed under)."""
+    prefixes = set()
+    for fp in fpaths:
+        for i in range(1, len(fp) + 1): prefixes.add(fp[:i])
+    kids = {}
+    for fp in prefixes: kids.setdefault(fp[:-1], []).append(fp)
+    filed = {}
+    for fp in set(fpaths): filed[fp] = fp + (THIS_FOLDER,) if fp in kids else fp
+    for fp in set(filed.values()): prefixes.add(fp)
+    kids = {}
+    for fp in prefixes: kids.setdefault(fp[:-1], []).append(fp)
+    order = []
+    def walk(fp, parent):
+        order.append((fp, parent)); me = len(order) - 1
+        for c in sorted(kids.get(fp, []), key=lambda x: x[-1].lower()): walk(c, me)
+    for c in sorted(kids.get((), []), key=lambda x: x[-1].lower()): walk(c, None)
+    return order, filed
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("src", type=Path, help="a folder of pictures, or one picture file"); ap.add_argument("out", type=Path)
@@ -57,7 +86,7 @@ def main(argv=None):
     ap.add_argument("--card-layout", action="store_true", help="write OUT as the card's tree: the pictures in OUT/<card-dir>, the index in the folder above it")
     ap.add_argument("--jobs", type=int, default=0, help="v1: processes that code the tiles (0: automatic, the machine's cores up to 8; 1: one). The file is the same whatever the number; a dense 100 megapixel photo takes about 18 minutes on one process")
     ap.add_argument("--merge", action="store_true", help="keep the pictures the output library already has; a picture with the same name is replaced")
-    ap.add_argument("--nested", choices=("flatten", "join"), default="flatten", help="folders inside a folder: flatten (default) puts their pictures in the first level folder they are under, join makes a folder of its own named with the whole path, such as 'Trip - Day 1'")
+    ap.add_argument("--nested", choices=("tree", "flatten", "join"), default="tree", help="folders inside a folder: tree (default) keeps them: the pictures are copied nested on the card and the index holds the whole tree, the Pocket shows it flattened or nested as its Folders setting says; flatten puts their pictures in the first level folder they are under, join makes a folder of its own named with the whole path, such as 'Trip - Day 1' (both of these copy the pictures flat)")
     ap.add_argument("--index-format", choices=("v1", "v0"), default="v1", help="v1: the library index of Tau Gallery 1.0 (folders, details, 96 x 96 square thumbnails; docs/features/TGIX_V1_SPEC.md); v0: the old flat index with 96 x 72 thumbnails, for a gallery core and firmware before 1.0")
     ap.add_argument("--sort", choices=("name", "taken", "converted"), default="name", help="v1: the order of the pictures inside a folder: by file name, by the date taken (the EXIF date; pictures without one last), or as converted (the pictures a merge kept first)")
     a = ap.parse_args(argv)
@@ -65,12 +94,14 @@ def main(argv=None):
     from PIL import Image
     if a.src.is_file():
         if a.src.suffix.lower() not in EXT: print(json.dumps({"event": "error", "error": "not a picture this tool reads: " + a.src.name})); return 2
-        jobs = [(a.src, None)]
+        jobs = [(a.src, None, ())]
     elif a.src.is_dir():
         top = sorted(p for p in a.src.iterdir() if is_picture(p))
-        subs = nested_folders(a.src, a.nested)                                                              # one level of folders in the library: a subfolder with pictures is a folder; deeper ones are flattened into it or joined to its name (--nested)
-        if a.index_format == "v1" and subs: jobs = [(p, name) for name, fl in subs for p in fl] + [(p, a.src.name or tgy.ALL_PICTURES) for p in top]
-        else: jobs = [(p, None) for p in top]                                                             # no subfolders (or the flat v0 index): one folder, ALL PICTURES
+        tp = tree_pictures(a.src) if a.nested == "tree" and a.index_format == "v1" else []
+        subs = nested_folders(a.src, a.nested) if a.nested != "tree" else []                               # the old modes: one level of folders in the library, the deeper ones flattened into it or joined to its name; the pictures are copied flat
+        if tp and any(dirs for _, dirs in tp): jobs = [(p, dirs or (a.src.name or tgy.ALL_PICTURES,), dirs) for p, dirs in tp]      # tree: the pictures are copied nested and the index holds the tree
+        elif a.index_format == "v1" and subs: jobs = [(p, name, ()) for name, fl in subs for p in fl] + [(p, a.src.name or tgy.ALL_PICTURES, ()) for p in top]
+        else: jobs = [(p, None, ()) for p in top]                                                         # no subfolders (or the flat v0 index): one folder, ALL PICTURES
     else: print(json.dumps({"event": "error", "error": "no such file or folder: " + str(a.src)})); return 2
     card_dir = a.card_dir.strip("/")
     photos = a.out / card_dir if a.card_layout else a.out                                              # where the .tgy files go
@@ -84,16 +115,20 @@ def main(argv=None):
             full = tgy.parse_index_full((index_dir / a.index_name).read_bytes())
             if full["version"] == 1 and not v1: raise ValueError("the old index is version 1 and --index-format v0 cannot hold folders")
             for e in full["entries"]:
-                if not (photos / Path(e["path"]).name).is_file(): continue                                 # a picture whose file is gone is dropped from the index
+                rel = e["path"][len(card_dir) + 1:] if e["path"].startswith(card_dir + "/") else Path(e["path"]).name        # where the file is, from the pictures' folder
+                if not (photos / rel).is_file(): continue                                                  # a picture whose file is gone is dropped from the index
                 fname = full["folders"][e["folder"]]["name"] if full["version"] == 1 else tgy.ALL_PICTURES
-                old[Path(e["path"]).name.lower()] = dict(e, folder_name=fname, thumb=e["thumb"] if full["version"] == 1 else tgy.thumb72_to_square(e["thumb"]) if v1 else e["thumb"], order=len(old))
+                odirs = tuple(Path(rel).parts[:-1])
+                if odirs and a.nested == "tree": fp = odirs[:-1] + (odirs[-1],) if not (full["version"] == 1 and full["folders"][e["folder"]]["name"] == THIS_FOLDER) else odirs
+                else: fp = (fname,)
+                old[e["path"].lower()] = dict(e, folder_name=fname, fpath=fp, thumb=e["thumb"] if full["version"] == 1 else tgy.thumb72_to_square(e["thumb"]) if v1 else e["thumb"], order=len(old))
         except ValueError as e: print(json.dumps({"event": "warning", "error": "the old index is not readable and is rebuilt without it: " + str(e)}))
     print(json.dumps({"event": "plan", "files": len(jobs), "kept": len(old)}))
-    for p, folder in jobs:
+    for p, folder, dirs in jobs:
         base = ascii_stem(p.stem); stem = base; n = 1
-        while stem.lower() in used: n += 1; stem = f"{base}_{n}"
+        while (dirs, stem.lower()) in used: n += 1; stem = f"{base}_{n}"
         shown = p.stem if n == 1 else f"{p.stem}_{n}"                  # the display name keeps the original characters (Latin-1) and the same suffix
-        path = f"{card_dir}/{stem}.tgy"
+        path = f"{card_dir}/{'/'.join(dirs) + '/' if dirs else ''}{stem}.tgy"
         if len(path.encode("utf-8")) >= tgy.PATH_BYTES:              # never cut a name (M1 decision 7): the file is skipped, said so, and the rest of the folder still converts
             print(json.dumps({"event": "skip", "file": p.name, "error": f"the card path is {len(path.encode('utf-8'))} bytes, the limit is {tgy.PATH_BYTES - 1}: shorten the file name or the card folder"})); skipped += 1; continue
         try:
@@ -103,19 +138,21 @@ def main(argv=None):
             sq = tgy.square_thumb(prep) if v1 else None
         except Exception as e:                                       # a file that is not a readable picture is skipped, and said so
             print(json.dumps({"event": "skip", "file": p.name, "error": str(e)})); skipped += 1; continue
-        used.add(stem.lower())
+        used.add((dirs, stem.lower()))
         if a.format == "v1": data, thumb, size = tgy_make.canvas_container(p, prep, a.quality, a.fit_quality, a.upscale, jobs=a.jobs)
         else: data = tgy.pack_tgy(canvas, rect, thumb, size, levels)
-        write_atomic(photos / (stem + ".tgy"), data); old.pop((stem + ".tgy").lower(), None)           # (a kept picture of the same name is replaced)
-        items.append(dict(path=path, name=name_of(shown), size=len(data), width=size[0], height=size[1], folder_name=folder or tgy.ALL_PICTURES, taken=tgy.taken_seconds(details.get("taken")), details=details, thumb=sq if v1 else thumb, order=len(old) + len(items)))
+        (photos / Path(*dirs)).mkdir(parents=True, exist_ok=True); write_atomic(photos / Path(*dirs) / (stem + ".tgy"), data); old.pop(path.lower(), None)           # (a kept picture of the same name is replaced)
+        items.append(dict(path=path, name=name_of(shown), size=len(data), width=size[0], height=size[1], folder_name=(folder[-1] if isinstance(folder, tuple) else folder) or tgy.ALL_PICTURES, fpath=folder if isinstance(folder, tuple) else ((folder or tgy.ALL_PICTURES),), taken=tgy.taken_seconds(details.get("taken")), details=details, thumb=sq if v1 else thumb, order=len(old) + len(items)))
         print(json.dumps({"event": "converted", "file": p.name, "tgy": stem + ".tgy", "size": len(data), "width": size[0], "height": size[1], "rect": rect, "folder": items[-1]["folder_name"], "levels": [[l["w"], l["h"], "raster"] if isinstance(l, dict) else [l[0], l[1], "tiles"] for l in levels]}))
     allitems = list(old.values()) + items
     if v1:
-        fnames = sorted({it["folder_name"] for it in allitems}, key=lambda x: x.lower())                  # the folders in name order; the entries of a folder in the chosen order
+        order, filed = folder_tree([it["fpath"] for it in allitems])                                        # the folder table: the tree in depth first order, the siblings in name order
+        for it in allitems: it["filed"] = filed[it["fpath"]]
+        where = {fp: i for i, (fp, _) in enumerate(order)}
         key = {"name": lambda it: (it["name"].lower(), it["path"].lower()), "taken": lambda it: (it["taken"] == 0, it["taken"], it["path"].lower()), "converted": lambda it: it["order"]}[a.sort]
-        ordered = [it for f in fnames for it in sorted((x for x in allitems if x["folder_name"] == f), key=key)]
-        folders = [dict(name=f.encode("latin-1", "replace").decode("latin-1")[:tgy.FOLDER_NAME - 1]) for f in fnames]
-        entries = [dict(path=it["path"], name=it["name"], size=it["size"], width=it["width"], height=it["height"], folder=fnames.index(it["folder_name"]), taken=it.get("taken", 0), details=it.get("details", {})) for it in ordered]
+        ordered = [it for fp, _ in order for it in sorted((x for x in allitems if x["filed"] == fp), key=key)]
+        folders = [dict(name=fp[-1].encode("latin-1", "replace").decode("latin-1")[:tgy.FOLDER_NAME - 1], parent=par) for fp, par in order]
+        entries = [dict(path=it["path"], name=it["name"], size=it["size"], width=it["width"], height=it["height"], folder=where[it["filed"]], taken=it.get("taken", 0), details=it.get("details", {})) for it in ordered]
         write_atomic(index_dir / a.index_name, tgy.pack_index_v1(entries, [it["thumb"] for it in ordered], folders or None, {"name": tgy.SORT_NAME, "taken": tgy.SORT_TAKEN, "converted": tgy.SORT_CONVERTED}[a.sort]))
         nf = len(folders) or 1
     else:

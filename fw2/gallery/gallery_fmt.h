@@ -42,7 +42,7 @@ uint32_t gx_folder_off(const gx_head_t *h, uint32_t k);                   /* byt
 typedef struct { char path[GX_PATH_MAX + 1u]; char name[GX_NAME_MAX + 1u]; uint32_t size, width, height, thumb, details_off, taken; uint16_t folder, flags, details_len; } gx_entry_t;
 int gx_parse_entry(const uint8_t *rec, uint32_t n, gx_entry_t *e);        /* a version 0 record (160 bytes); strings are cut at their NUL or their field end, never read past it */
 int gx_parse_entry_h(const gx_head_t *h, const uint8_t *rec, uint32_t n, gx_entry_t *e);   /* either version: the record of the head's entry size, with folder, details and thumbnail number checked against the head */
-typedef struct { char name[GX_FOLDER_NAME + 1u]; uint32_t first, count, cover; } gx_folder_t;
+typedef struct { char name[GX_FOLDER_NAME + 1u]; uint32_t first, count, cover; uint16_t parent1, nfold; } gx_folder_t;      /* parent1: the parent folder's index plus 1 (0: top level); nfold: the folders under it (0: a leaf). A container's range is all its descendants' pictures. Both come from the record's last four bytes, which older files hold as zeros */
 int gx_parse_folder(const gx_head_t *h, const uint8_t *rec, uint32_t n, gx_folder_t *f);   /* one 48-byte record; GF_RANGE when its entries lie outside the list or it is empty (an empty library has one empty folder) */
 uint32_t gx_details_abs(const gx_head_t *h, const gx_entry_t *e);         /* byte offset of the entry's details in the file */
 /* Details items (`tag, length, bytes`): 1 if the run is well formed (no item reaches past n); gx_details_find: 1 and the item's bytes when the tag is present (an unknown tag is skipped; a run that overruns finds nothing). */

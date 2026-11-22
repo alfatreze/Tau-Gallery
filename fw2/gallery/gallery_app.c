@@ -66,9 +66,10 @@ static void set_grid(uint32_t g) { gi = g; pp = (uint32_t)GR.cols * GR.rows; }
 static gx_head_t head; static gx_entry_t ent[MAX_PP];
 static uint32_t hist_for = 0xFFFFFFFFu, hist_counted;                                          /* the picture whose fit-level decode the histogram unit counted last (none after a failed open); open_v1 says it counted */
 static uint32_t sel, page, loaded_page = 0xFFFFFFFFu, n_on_page;                                    /* sel: the selected entry, an index into the library (or into the folders on the folder level) */
+static uint8_t fl[255]; static uint32_t fl_n, fl_parent1, cur_up, applied_nested;                      /* the folder listing on screen (level 1): the folder table indices of its tiles, how many, and the folder they are under plus 1 (0: top level); cur_up: the listing B goes back to from a folder's pictures; the FOLDERS setting the shown listing was built with */
 static uint32_t cur_first, cur_count, level, cur_folder;                                            /* the open folder is the range [cur_first, cur_first + cur_count) of the entries; level 1 shows the folders themselves */
 #define EN(i) ent[(i) - (cur_first + page * pp)]                                                    /* the loaded page's record of entry i */
-static uint8_t v1z_idx[20480u]; static uint32_t v1z_idx_ok;                                         /* the zoom's tile index; also the buffer of the index pages and the folder table while no picture is open */
+static uint8_t v1z_idx[18432u]; static uint32_t v1z_idx_ok;                                         /* the zoom's tile index; also the buffer of the index pages and the folder table while no picture is open */
 
 static void say(const char *s, uint16_t color) { gfx_rect(0, 336, GFX_W, 24, BG); gfx_text(6, 338, s, color, BG); }
 static void cell_xy(uint32_t k, uint32_t *x, uint32_t *y) { *x = GR.x0 + (k % GR.cols) * GR.dx; *y = GY0 + GR.y0 + (k / GR.cols) * GR.dy; }
@@ -109,15 +110,16 @@ static int draw_thumb(uint32_t x, uint32_t y, uint32_t off)
 }
 
 static void copy_name(char *d, const char *src, uint32_t max) { uint32_t i = 0; while (i < max && src[i]) { d[i] = src[i]; i++; } d[i] = 0; }
+static int folder_rec(uint32_t k, gx_folder_t *f);
 /* The entries (or, on the folder level, the folder records) of the page into ent[]. The index bytes go through v1z_idx (free while the grid is shown). */
 static int load_page(void)
 {
     const uint32_t first = cur_first + page * pp, left = cur_first + cur_count - first; n_on_page = left < pp ? left : pp;
     uint8_t *buf = v1z_idx; v1z_idx_ok = 0u;
     if (level == 1u) {
-        if (!read_bytes(SLOT_IDX, gx_folder_off(&head, first), n_on_page * GX1_FOLDER_BYTES, buf)) return 0;
+        (void)buf;
         for (uint32_t k = 0; k < n_on_page; k++) {
-            gx_folder_t f; if (gx_parse_folder(&head, buf + k * GX1_FOLDER_BYTES, GX1_FOLDER_BYTES, &f)) return 0;
+            gx_folder_t f; if (!folder_rec(fl[first + k], &f)) return 0;                                  /* the listing's tiles are folders of the table that need not be next to one another */
             copy_name(ent[k].name, f.name, GX_NAME_MAX); ent[k].path[0] = 0; ent[k].thumb = f.cover; ent[k].size = f.count; ent[k].width = ent[k].height = 0u; ent[k].details_len = 0u; ent[k].taken = 0u;
         }
     } else {
@@ -515,7 +517,7 @@ _Static_assert(GAL_ROT_BASE == GAL_WIN0 && GAL_ROTZERO == GAL_STAGE + 0x7000u, "
 #define GAL_STREAM (GAL_STAGE + 0x10000u)        /* one landed tile stream, 128 KB (halfword address): past the staging tile (0x6000) and the bar save area (GAL_STAGE + 0x8000, 0x3000 used) */
 #define SDRAM_HZ 100000000u                      /* the decoder's cycle counter runs on the SDRAM clock */
 #define V1Z_STREAM_MAX 122880u                   /* a stream longer than this (a tile of noise at the highest quality is about 60 KB) is not decoded */
-#define V1Z_IDX_MAX 20480u                       /* the full level's tile index kept in RAM: 12 bytes a tile, 2,048 tiles (a 33 megapixel picture); a bigger level's index stays on the card and is read an entry at a time (it was 32 KB, 2,730 tiles, before the 2x and 4x zoom needed the RAM) */
+#define V1Z_IDX_MAX 18432u                       /* the full level's tile index kept in RAM: 12 bytes a tile, 2,048 tiles (a 33 megapixel picture); a bigger level's index stays on the card and is read an entry at a time (it was 32 KB, 2,730 tiles, before the 2x and 4x zoom needed the RAM) */
 static tgy_file_t v1fz; static tgy_level_t v1z; static uint32_t v1z_cap = V1Z_IDX_MAX, v1z_smax = V1Z_STREAM_MAX;      /* v1z_cap: the index size accepted (a variable so the host test can lower it) */
 /* An index that does not fit the buffer (more than 2,730 tiles) stays on the card: its checksum is checked once in pieces, and each tile's 12 byte entry is read through a small block cache over the same buffer (v1c_n blocks of v1c_bs bytes,
  * least recently used out; variables so the host test can make them tiny). The index is row by row, so the entries a window needs are a few blocks. Above V1Z_VERIFY_MAX the checksum is not checked (reading it would take seconds):
@@ -1381,12 +1383,12 @@ static void draw_info(void)
 static void draw_settings(const gsp_t *sp)
 {
     page_clear("SETTINGS");
-    const char *val[GSP_ROWS] = { gset.resume ? "ON" : "OFF", gsp_grid_names[gset.grid % GSP_GRIDS], gsp_dither_names[gset.dither % GSP_DITHERS], gl_names[gset.lut % GL_PRESETS] };
+    const char *val[GSP_ROWS] = { gset.resume ? "ON" : "OFF", gsp_grid_names[gset.grid % GSP_GRIDS], gsp_dither_names[gset.dither % GSP_DITHERS], gl_names[gset.lut % GL_PRESETS], gsp_folder_names[gset.nested & 1u] };
     for (uint32_t i = 0; i < GSP_ROWS; i++) {
         const uint32_t y = PAGE_Y0 + i * 2u * LINE_H;
         gfx_text(6, y, gsp_labels[i], i == sp->row ? FG : DIM, BG); gfx_text(250, y, val[i], ACC, BG); if (i == sp->row) gfx_text(GFX_W - 32u, y, "<", ACC, BG);
     }
-    gfx_text(6, PAGE_Y0 + 2u * GSP_ROWS * LINE_H + 4u, sp->row == GSP_RESUME ? "ON: the grid opens on the last picture." : sp->row == GSP_GRID ? "Pictures on a page: 12, 20, 24 or 48." : sp->row == GSP_DITHER ? "Spreads the 5 and 6 bit panel steps." : "A colour curve for the whole viewer.", DIM, BG);
+    gfx_text(6, PAGE_Y0 + 2u * GSP_ROWS * LINE_H + 4u, sp->row == GSP_RESUME ? "ON: the grid opens on the last picture." : sp->row == GSP_GRID ? "Pictures on a page: 12, 20, 24 or 48." : sp->row == GSP_DITHER ? "Spreads the 5 and 6 bit panel steps." : sp->row == GSP_COLOUR ? "A colour curve for the whole viewer." : gset.nested ? "NESTED: open a folder to see its folders." : "FLAT: a folder holds every picture under it.", DIM, BG);
     page_foot("UP DOWN ROW   LEFT RIGHT CHANGE   B BACK", 0, 0);
 }
 static void frame_box(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t col)           /* a 1 px outline */
@@ -1549,7 +1551,7 @@ static void run_pages(void)
                 draw_theme(&g, &l);
             }
         }
-        else if (r == GP_OPEN_SETTINGS) { gsp_t sp = { 0 }; draw_settings(&sp); while (!gsp_input(&sp, &gset.resume, &gset.grid, &gset.dither, &gset.lut, next_edge(&prev))) { fx_apply(); draw_settings(&sp); } }
+        else if (r == GP_OPEN_SETTINGS) { gsp_t sp = { 0 }; draw_settings(&sp); while (!gsp_input(&sp, &gset.resume, &gset.grid, &gset.dither, &gset.lut, &gset.nested, next_edge(&prev))) { fx_apply(); draw_settings(&sp); } }
         else if (r == GP_OPEN_CONTROLS) { gc_t c; gc_open(&c); draw_controls(&c); while (!gc_input(&c, next_edge(&prev))) draw_controls(&c); }
         else if (r == GP_OPEN_HELP) { gh_t h; gh_open(&h); draw_help(&h); while (!gh_input(&h, next_edge(&prev))) draw_help(&h); }
         else { draw_info(); for (;;) { const int k = gi_input(next_edge(&prev)); if (k == 1) break; if (k == 2) v1_pipe_off ^= 1u; draw_info(); } }
@@ -1561,7 +1563,9 @@ static void run_pages(void)
 static int folder_rec(uint32_t k, gx_folder_t *f)
 {
     uint8_t b[GX1_FOLDER_BYTES];
-    return read_bytes(SLOT_IDX, gx_folder_off(&head, k), GX1_FOLDER_BYTES, b) && !gx_parse_folder(&head, b, sizeof b, f);
+    if (!read_bytes(SLOT_IDX, gx_folder_off(&head, k), GX1_FOLDER_BYTES, b) || gx_parse_folder(&head, b, sizeof b, f)) return 0;
+    if (f->parent1 > k || k + f->nfold >= head.folder_count) f->parent1 = f->nfold = 0u;              /* tree fields that cannot be right are ignored: a flat folder */
+    return 1;
 }
 static uint32_t grid_setting(void) { return gset.grid & 3u; }                                       /* the Settings choice of the grid size (0..3) */
 static void apply_grid(void)                                                                      /* after the Settings page: the grid size may have changed; the same entry stays selected */
@@ -1569,23 +1573,52 @@ static void apply_grid(void)                                                    
     if (level != 0u || head.version == 0u || gi == grid_setting()) return;
     set_grid(grid_setting()); page = (sel - cur_first) / pp; loaded_page = 0xFFFFFFFFu;
 }
-static void enter_folder(const gx_folder_t *f, uint32_t k)                                         /* the pictures of folder k: its range, the chosen grid */
+static void enter_folder(const gx_folder_t *f, uint32_t k)                                         /* the pictures of folder k: its range (a folder with folders under it holds all their pictures), the chosen grid */
 {
-    level = 0u; cur_first = f->first; cur_count = f->count; cur_folder = k; set_grid(head.version == 0u ? 4u : grid_setting());
+    level = 0u; cur_first = f->first; cur_count = f->count; cur_folder = k; cur_up = gset.nested ? f->parent1 : 0u; set_grid(head.version == 0u ? 4u : grid_setting());
     sel = cur_first; page = 0u; loaded_page = 0xFFFFFFFFu;
 }
-static void enter_folders(void)                                                                    /* the folder level: 4 x 3 tiles, the folder we came from selected */
+static int list_build(uint32_t parent1)                                                            /* the folders under parent1 - 1 (the top level for 0), skipping what is under each: a flat library is every folder */
 {
-    level = 1u; cur_first = 0u; cur_count = head.folder_count; set_grid(0u);
-    sel = cur_folder; page = sel / pp; loaded_page = 0xFFFFFFFFu;
+    gx_folder_t f; uint32_t i = parent1, end = head.folder_count; fl_n = 0u; fl_parent1 = parent1;
+    if (parent1) { if (!folder_rec(parent1 - 1u, &f)) return 0; end = parent1 + f.nfold; }
+    while (i < end && fl_n < 255u) { if (!folder_rec(i, &f)) return 0; fl[fl_n++] = (uint8_t)i; i += 1u + f.nfold; }
+    return fl_n != 0u;
 }
-static int find_folder(uint32_t i, gx_folder_t *f, uint32_t *k)                                    /* the folder holding entry i: a binary search of the folder table (at most 8 small reads) */
+static void enter_list(uint32_t parent1, uint32_t came_from)                                       /* the folder level: 4 x 3 tiles, the folder we came from selected */
 {
-    uint32_t lo = 0u, hi = head.folder_count;
-    while (lo < hi) {
-        const uint32_t mid = (lo + hi) / 2u;
-        if (!folder_rec(mid, f)) return 0;
-        if (i < f->first) hi = mid; else if (i >= f->first + f->count) lo = mid + 1u; else { *k = mid; return 1; }
+    if (!list_build(parent1)) return;
+    level = 1u; cur_first = 0u; cur_count = fl_n; set_grid(0u); sel = 0u;
+    for (uint32_t i = 0; i < fl_n; i++) if (fl[i] == came_from) sel = i;
+    cur_folder = came_from; page = sel / pp; loaded_page = 0xFFFFFFFFu;
+}
+static int list_up(uint32_t from_p1, uint32_t came_from)                                           /* back to the nearest folder level above that has more than one tile (one tile is no choice); 0 when there is none */
+{
+    gx_folder_t f;
+    for (;;) {
+        if (!list_build(from_p1)) return 0;
+        if (fl_n > 1u) { enter_list(from_p1, came_from); return 1; }
+        if (from_p1 == 0u || !folder_rec(from_p1 - 1u, &f)) return 0;
+        came_from = from_p1 - 1u; from_p1 = f.parent1;
+    }
+}
+static void open_root(void)                                                                        /* the first screen: the top folder level, or what a library with one folder (or one folder in one folder) opens on */
+{
+    uint32_t p1 = 0u; gx_folder_t f;
+    for (;;) {
+        if (!list_build(p1)) { say("FOLDER TABLE READ FAILED", BAD); for (;;) { } }
+        if (!folder_rec(fl[0], &f)) { say("FOLDER TABLE READ FAILED", BAD); for (;;) { } }
+        if (fl_n > 1u) { enter_list(p1, fl[0]); break; }
+        if (gset.nested && f.nfold) { p1 = (uint32_t)fl[0] + 1u; continue; }
+        enter_folder(&f, fl[0]); break;
+    }
+    applied_nested = gset.nested;
+}
+static int find_folder(uint32_t i, gx_folder_t *f, uint32_t *k)                                    /* the folder holding entry i: the top folder of its tree when the folders are flat, the folder that holds the picture itself when nested */
+{
+    for (uint32_t m = 0; m < head.folder_count; m++) {
+        if (!folder_rec(m, f)) return 0;
+        if (i >= f->first && i < f->first + f->count && (gset.nested ? f->nfold == 0u : f->parent1 == 0u)) { *k = m; return 1; }
     }
     return 0;
 }
@@ -1609,8 +1642,7 @@ int main(void)
     gs_hw_load(&gset); last_act = cycles(); fx_apply(); splash(55u);
     cur_first = 0u; cur_count = head.count; cur_folder = 0u; level = 0u; set_grid(head.version == 0u ? 4u : grid_setting());
     if (head.version == 1u) {                                                                      /* the first folder, or the folder level when there are several */
-        gx_folder_t f; if (!folder_rec(0u, &f)) { say("FOLDER TABLE READ FAILED", BAD); for (;;) { } }
-        if (head.folder_count > 1u) enter_folders(); else enter_folder(&f, 0u);
+        open_root();
     }
     splash(70u);
     theme_set(gset.theme, gset.pol, gset.pal); gset.theme = th_theme; gset.pol = th_pol; gset.pal = th_pal;      /* the saved look (a value this build does not have falls back to the default) */
@@ -1647,12 +1679,16 @@ int main(void)
         else if (edge & KEY_L1) { const uint32_t rel = sel - cur_first; select_to(cur_first + (rel >= pp ? rel - pp : 0u)); }
         else if (edge & KEY_R1) { const uint32_t rel = sel - cur_first; select_to(cur_first + (rel + pp < cur_count ? rel + pp : cur_count - 1u)); }
         else if (edge & KEY_A) {
-            if (level == 1u) { gx_folder_t f; if (folder_rec(sel, &f)) { enter_folder(&f, sel); draw_page(); } else say("FOLDER READ FAILED", BAD); }
+            if (level == 1u) { gx_folder_t f; if (folder_rec(fl[sel], &f)) { if (gset.nested && f.nfold) enter_list((uint32_t)fl[sel] + 1u, fl[sel]); else enter_folder(&f, fl[sel]); draw_page(); } else say("FOLDER READ FAILED", BAD); }
             else open_from_grid();
             rep_key = 0u;
         }
-        else if (edge & KEY_B) { if (level == 0u && head.folder_count > 1u) { enter_folders(); draw_page(); } rep_key = 0u; }
-        else if (edge & KEY_START) { run_pages(); apply_grid(); draw_page(); prev = REG_RD(R_INPUT) & 0xFFFFu; rep_key = 0u; }
+        else if (edge & KEY_B) {                                                                  /* B: up one folder level (from a folder's pictures to the listing it came from, from a nested listing to the one above it) */
+            gx_folder_t f; int moved = 0;
+            if (head.version == 1u) { if (level == 0u) moved = list_up(cur_up, cur_folder); else if (fl_parent1) { const uint32_t p1 = fl_parent1; if (folder_rec(p1 - 1u, &f)) moved = list_up(f.parent1, p1 - 1u); if (!moved) (void)list_build(p1); } }
+            if (moved) draw_page(); rep_key = 0u;
+        }
+        else if (edge & KEY_START) { run_pages(); if (head.version == 1u && gset.nested != applied_nested) open_root(); apply_grid(); draw_page(); prev = REG_RD(R_INPUT) & 0xFFFFu; rep_key = 0u; }
         else if ((edge & KEY_SELECT) && level == 0u) { run_details(1); draw_page(); prev = REG_RD(R_INPUT) & 0xFFFFu; rep_key = 0u; }
     }
 }

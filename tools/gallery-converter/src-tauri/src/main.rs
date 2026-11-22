@@ -138,7 +138,7 @@ fn stop_job(job: &Mutex<Option<Arc<AtomicBool>>>) -> bool {
 /// The converter's options for one run. `format` is "v0" (the picture as raw tiles, every Tau Gallery core; `levels` adds the half and 1:1 zoom stops) or "v1" (the compressed container the hardware TGY decoder draws;
 /// its zoom level is written by the converter itself for a picture larger than the screen, so `levels` means nothing there; `quality` is the quality of that level for a picture that is not a JPEG, `fit_quality` the fit level's).
 fn convert_options(input: &str, output: &str, levels: bool, upscale: bool, merge: bool, format: &str, quality: u32, fit_quality: u32, sort: &str, nested: &str, old_index: bool) -> Result<Options, String> {
-    if nested != "flatten" && nested != "join" { return Err(format!("Unknown nested folders choice {nested}.")); }
+    if nested != "tree" && nested != "flatten" && nested != "join" { return Err(format!("Unknown nested folders choice {nested}.")); }
     if format != "v0" && format != "v1" { return Err(format!("Unknown format {format}.")); }
     if sort != "name" && sort != "taken" && sort != "converted" { return Err(format!("Unknown sort order {sort}.")); }
     if !(1..=100).contains(&quality) || !(1..=100).contains(&fit_quality) { return Err("The quality is a number from 1 to 100.".into()); }
@@ -265,7 +265,7 @@ mod tests {
 
     #[test]
     fn the_options_follow_the_format() {
-        let o = |levels, upscale, merge, f: &str, q, fq, sort: &str, old| convert_options("/in", "/Volumes/TauV/Assets/tau_gallery/common", levels, upscale, merge, f, q, fq, sort, "flatten", old);
+        let o = |levels, upscale, merge, f: &str, q, fq, sort: &str, old| convert_options("/in", "/Volumes/TauV/Assets/tau_gallery/common", levels, upscale, merge, f, q, fq, sort, "tree", old);
         let a = o(true, false, true, "v0", 92, 90, "name", false).unwrap();
         assert_eq!((a.out.to_str().unwrap(), a.card_layout, a.format_v1, a.levels, a.merge, a.upscale), ("/Volumes/TauV", true, false, true, true, false));
         let b = o(true, true, false, "v1", 85, 70, "taken", false).unwrap();
@@ -273,7 +273,7 @@ mod tests {
         let c = o(false, false, false, "v0", 50, 50, "name", false).unwrap(); assert_eq!((c.quality, c.fit_quality), (92, 90), "the qualities are not used for version 0");
         assert!(o(false, false, false, "v2", 92, 90, "name", false).unwrap_err().contains("Unknown format"));
         assert!(o(false, false, false, "v1", 92, 90, "size", false).unwrap_err().contains("Unknown sort"));
-        assert_eq!(o(false, false, false, "v1", 92, 90, "name", false).unwrap().nested, "flatten", "nested folders flatten by default");
+        assert_eq!(o(false, false, false, "v1", 92, 90, "name", false).unwrap().nested, "tree", "nested folders are kept by default (the Pocket flattens or nests them)");
         assert_eq!(convert_options("/in", "/o", false, false, false, "v1", 92, 90, "name", "join", false).unwrap().nested, "join");
         assert!(convert_options("/in", "/o", false, false, false, "v1", 92, 90, "name", "deep", false).unwrap_err().contains("Unknown nested"));
         let e = o(false, false, false, "v1", 92, 90, "taken", true).unwrap(); assert!(!e.index_v1, "the old index has no folders");

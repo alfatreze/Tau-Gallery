@@ -74,7 +74,7 @@ int gx_parse_entry_h(const gx_head_t *h, const uint8_t *r, uint32_t n, gx_entry_
 int gx_parse_folder(const gx_head_t *h, const uint8_t *r, uint32_t n, gx_folder_t *f)
 {
     if (n < GX1_FOLDER_BYTES) return GF_SHORT;
-    copy_str(f->name, r, GX_FOLDER_NAME); f->first = rd32(r + 32); f->count = rd32(r + 36); f->cover = rd32(r + 40);
+    copy_str(f->name, r, GX_FOLDER_NAME); f->first = rd32(r + 32); f->count = rd32(r + 36); f->cover = rd32(r + 40); f->parent1 = (uint16_t)(r[44] | r[45] << 8); f->nfold = (uint16_t)(r[46] | r[47] << 8);
     if (((f->count < 1u) && h->count != 0u) || (uint64_t)f->first + f->count > h->count || (h->count != 0u && f->cover >= h->count)) return GF_RANGE;
     return GF_OK;
 }

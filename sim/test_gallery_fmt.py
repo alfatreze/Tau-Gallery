@@ -92,7 +92,7 @@ class T(unittest.TestCase):
         self.assertEqual(out[1], f"count 7 entries_off 64 atlas_off {aoff}")
         m = re.fullmatch(r"head1 folders 3 folders_off (\d+) details_off (\d+) details_len (\d+) sort 1 size_rc 0", out[2]); self.assertIsNotNone(m, out[2])
         for k, f in enumerate(py["folders"]):
-            self.assertEqual(out[3 + k], f"folder {k} rc 0 name {f['name']} first {f['first']} count {f['count']} cover {f['cover']}")
+            self.assertEqual(out[3 + k], f"folder {k} rc 0 name {f['name']} first {f['first']} count {f['count']} cover {f['cover']} parent1 {f['parent1']} nfold {f['nfold']}")
         for i, e in enumerate(py["entries"]):
             line = out[6 + i]
             mm = re.fullmatch(r"entry (\d+) rc 0 path (\S+) name (.*) size (\d+) w (\d+) h (\d+) thumb (\d+) thumb_off (\d+) folder (\d+) flags (\d+) dlen (\d+) taken (\d+)(?: dok (\d) dabs (\d+) d ([0-9a-f]+) iso (\d) camera (\d) tag99 (\d))?", line); self.assertIsNotNone(mm, line)

@@ -100,25 +100,26 @@ int main(void)
         chk("info: B and Left close, the other keys do not (A is the pipeline switch now)", gi_input(GP_KEY_B) == 1 && gi_input(GP_KEY_LEFT) == 1 && gi_input(GP_KEY_UP) == 0 && gi_input(GP_KEY_START) == 0 && gi_input(GP_KEY_DOWN) == 0);
     }
     {
-        uint32_t rs = 1u, gr = 0u, dt = 1u, lt = 0u; gsp_t sp = { 0 };
-        chk("settings: A turns resume off", gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_A) == 0 && rs == 0u && gr == 0u && dt == 1u);
-        chk("settings: Left turns it on", gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_LEFT) == 0 && rs == 1u);
-        chk("settings: Right turns it off", gsp_input(&sp, &rs, &gr, &dt, &lt, 1u << 3) == 0 && rs == 0u);
-        rs = 5u; gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_A); chk("settings: the flag stays 0 or 1 whatever it held", rs == 0u);
-        chk("settings: B closes and changes nothing", gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_B) == 1 && rs == 0u && gr == 0u && dt == 1u);
-        chk("settings: Start neither changes nor closes", gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_START) == 0 && rs == 0u);
-        chk("settings: Down moves to GRID SIZE (no value changes), DITHER, COLOUR, Down wraps to RESUME, Up wraps to COLOUR", gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_DOWN) == 0 && sp.row == GSP_GRID && rs == 0u && gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_DOWN) == 0 && sp.row == GSP_DITHER
-            && gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_DOWN) == 0 && sp.row == GSP_COLOUR && gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_DOWN) == 0 && sp.row == GSP_RESUME && gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_UP) == 0 && sp.row == GSP_COLOUR && gr == 0u && dt == 1u && lt == 0u);
-        chk("settings: on COLOUR Right goes 1..7 and wraps to 0, Left wraps to 7; nothing else changes", gsp_input(&sp, &rs, &gr, &dt, &lt, 1u << 3) == 0 && lt == 1u && gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_A) == 0 && lt == 2u && gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_LEFT) == 0 && lt == 1u
-            && gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_LEFT) == 0 && lt == 0u && gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_LEFT) == 0 && lt == 7u && gsp_input(&sp, &rs, &gr, &dt, &lt, 1u << 3) == 0 && lt == 0u && gr == 0u && dt == 1u && rs == 0u);
-        lt = 12u; gsp_input(&sp, &rs, &gr, &dt, &lt, 1u << 3); chk("settings: a colour value out of range comes back into 0..7 (Right)", lt < 8u); lt = 12u; gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_LEFT); chk("settings: a colour value out of range comes back into 0..7 (Left)", lt < 8u); lt = 0u;
+        uint32_t rs = 1u, gr = 0u, dt = 1u, lt = 0u, nf = 0u; gsp_t sp = { 0 };
+        chk("settings: A turns resume off", gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, GP_KEY_A) == 0 && rs == 0u && gr == 0u && dt == 1u);
+        chk("settings: Left turns it on", gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, GP_KEY_LEFT) == 0 && rs == 1u);
+        chk("settings: Right turns it off", gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, 1u << 3) == 0 && rs == 0u);
+        rs = 5u; gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, GP_KEY_A); chk("settings: the flag stays 0 or 1 whatever it held", rs == 0u);
+        chk("settings: B closes and changes nothing", gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, GP_KEY_B) == 1 && rs == 0u && gr == 0u && dt == 1u);
+        chk("settings: Start neither changes nor closes", gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, GP_KEY_START) == 0 && rs == 0u);
+        chk("settings: Down moves to GRID SIZE (no value changes), DITHER, COLOUR, Down wraps to RESUME, Up wraps to COLOUR", gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, GP_KEY_DOWN) == 0 && sp.row == GSP_GRID && rs == 0u && gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, GP_KEY_DOWN) == 0 && sp.row == GSP_DITHER
+            && gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, GP_KEY_DOWN) == 0 && sp.row == GSP_COLOUR && gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, GP_KEY_DOWN) == 0 && sp.row == GSP_FOLDERS && gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, GP_KEY_DOWN) == 0 && sp.row == GSP_RESUME && gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, GP_KEY_UP) == 0 && sp.row == GSP_FOLDERS && gr == 0u && dt == 1u && lt == 0u && nf == 0u);
+        chk("settings: on FOLDERS A, Left and Right toggle flat and nested (any other value comes back to 0 or 1); nothing else changes", gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, GP_KEY_A) == 0 && nf == 1u && gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, GP_KEY_LEFT) == 0 && nf == 0u && gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, 1u << 3) == 0 && nf == 1u && gr == 0u && dt == 1u && lt == 0u && rs == 0u && (nf = 6u, gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, GP_KEY_A) == 0) && nf == 1u && (nf = 0u, gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, GP_KEY_UP) == 0) && sp.row == GSP_COLOUR);
+        chk("settings: on COLOUR Right goes 1..7 and wraps to 0, Left wraps to 7; nothing else changes", gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, 1u << 3) == 0 && lt == 1u && gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, GP_KEY_A) == 0 && lt == 2u && gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, GP_KEY_LEFT) == 0 && lt == 1u
+            && gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, GP_KEY_LEFT) == 0 && lt == 0u && gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, GP_KEY_LEFT) == 0 && lt == 7u && gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, 1u << 3) == 0 && lt == 0u && gr == 0u && dt == 1u && rs == 0u);
+        lt = 12u; gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, 1u << 3); chk("settings: a colour value out of range comes back into 0..7 (Right)", lt < 8u); lt = 12u; gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, GP_KEY_LEFT); chk("settings: a colour value out of range comes back into 0..7 (Left)", lt < 8u); lt = 0u;
         sp.row = GSP_GRID;
-        chk("settings: on GRID SIZE Right goes 0, 1, 2, 3 and wraps to 0; Left wraps to 3", gsp_input(&sp, &rs, &gr, &dt, &lt, 1u << 3) == 0 && gr == 1u && gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_A) == 0 && gr == 2u && gsp_input(&sp, &rs, &gr, &dt, &lt, 1u << 3) == 0 && gr == 3u
-            && gsp_input(&sp, &rs, &gr, &dt, &lt, 1u << 3) == 0 && gr == 0u && gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_LEFT) == 0 && gr == 3u && rs == 0u && dt == 1u);
-        gr = 9u; gsp_input(&sp, &rs, &gr, &dt, &lt, 1u << 3); chk("settings: a grid value out of range comes back into 0..3", gr < 4u);
+        chk("settings: on GRID SIZE Right goes 0, 1, 2, 3 and wraps to 0; Left wraps to 3", gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, 1u << 3) == 0 && gr == 1u && gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, GP_KEY_A) == 0 && gr == 2u && gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, 1u << 3) == 0 && gr == 3u
+            && gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, 1u << 3) == 0 && gr == 0u && gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, GP_KEY_LEFT) == 0 && gr == 3u && rs == 0u && dt == 1u);
+        gr = 9u; gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, 1u << 3); chk("settings: a grid value out of range comes back into 0..3", gr < 4u);
         sp.row = GSP_DITHER; gr = 2u;
-        chk("settings: on DITHER Right goes 1, 2, 0 (off), Left goes back; the grid stays", gsp_input(&sp, &rs, &gr, &dt, &lt, 1u << 3) == 0 && dt == 2u && gsp_input(&sp, &rs, &gr, &dt, &lt, 1u << 3) == 0 && dt == 0u && gsp_input(&sp, &rs, &gr, &dt, &lt, GP_KEY_LEFT) == 0 && dt == 2u && gr == 2u);
-        dt = 7u; gsp_input(&sp, &rs, &gr, &dt, &lt, 1u << 3); chk("settings: a dither value out of range comes back into 0..2", dt < 3u);
+        chk("settings: on DITHER Right goes 1, 2, 0 (off), Left goes back; the grid stays", gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, 1u << 3) == 0 && dt == 2u && gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, 1u << 3) == 0 && dt == 0u && gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, GP_KEY_LEFT) == 0 && dt == 2u && gr == 2u);
+        dt = 7u; gsp_input(&sp, &rs, &gr, &dt, &lt, &nf, 1u << 3); chk("settings: a dither value out of range comes back into 0..2", dt < 3u);
         chk("settings: the names of the choices", !strcmp(gsp_grid_names[0], "4 X 3") && !strcmp(gsp_grid_names[3], "8 X 6") && !strcmp(gsp_dither_names[0], "OFF") && !strcmp(gsp_dither_names[2], "MOVING"));
     }
     {

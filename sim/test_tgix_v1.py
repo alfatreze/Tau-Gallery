@@ -40,7 +40,7 @@ def main():
     check("a field a picture does not have is not stored (a PNG has only its format: 1 item of 2 + 3 bytes)", len(tgy.pack_details({"format": "PNG"})) == 5 and tgy.pack_details({}) == b"" and tgy.pack_details({"camera": None, "iso": 0}) == b"")
     check("taken seconds count from 2000-01-01; unknown is 0", tgy.taken_seconds((2000, 1, 1, 0, 0, 1)) == 1 and tgy.taken_seconds(None) == 0 and tgy.taken_seconds((1999, 5, 1, 0, 0, 0)) == 0)
     one = tgy.parse_index_full(tgy.pack_index_v1(ents[:2], thumbs[:2]))
-    check("no folders given: one folder, ALL PICTURES, holding every entry", len(one["folders"]) == 1 and one["folders"][0] == dict(name="ALL PICTURES", first=0, count=2, cover=0))
+    check("no folders given: one folder, ALL PICTURES, holding every entry", len(one["folders"]) == 1 and one["folders"][0] == dict(name="ALL PICTURES", first=0, count=2, cover=0, parent1=0, nfold=0))
     check("an unknown details tag is skipped", tgy.parse_details(bytes((99, 3, 1, 2, 3)) + tgy.pack_details({"iso": 100})) == {"iso": 100})
     e0 = tgy.parse_index_full(tgy.pack_index_v1([], [], None))
     check("an empty library is a valid file with one folder", e0["entries"] == [] and len(e0["folders"]) == 1)
@@ -87,6 +87,17 @@ def main():
     if d.get("lens") is None: print("  EXIF details read:", d)
     check("EXIF details: camera (make not repeated), lens, taken, shutter 1/250, f/2.8, ISO 400, 35 mm", d == dict(format="JPEG", camera="Canon EOS R5", lens="RF24-70mm F2.8", taken=(2024, 5, 17, 13, 4, 59), shutter=(1, 250), aperture=28, iso=400, focal=350))
     check("a picture with no EXIF has only its format", tgy.exif_details(I.new("RGB", (4, 4)), "PNG") == {"format": "PNG"})
+    # the folder tree (TGIX 1.1): Travel{Day 1, Day 2}, Misc; a container shows all its pictures, a leaf its own
+    th = bytes(tgy.THUMB1_BYTES)
+    te = [dict(path=f"p/{i}.tgy", name=f"n{i}", size=1, width=2, height=2, folder=f, taken=0) for i, f in enumerate([1, 1, 2, 3])]
+    tf = [dict(name="Travel"), dict(name="Day 1", parent=0), dict(name="Day 2", parent=0), dict(name="Misc")]
+    tr = tgy.parse_index_full(tgy.pack_index_v1(te, [th] * 4, tf, tgy.SORT_NAME))["folders"]
+    check("folder tree: parents and descendant counts are stored (parent1 is the parent's index plus 1)", [(f["parent1"], f["nfold"]) for f in tr] == [(0, 2), (1, 0), (1, 0), (0, 0)])
+    check("folder tree: a container's range is its descendants' pictures, a leaf's its own", [(f["first"], f["count"]) for f in tr] == [(0, 3), (0, 2), (2, 1), (3, 1)])
+    for label, fo, en in (("a folder that holds folders and pictures", tf, [dict(e, folder=0) if i == 0 else e for i, e in enumerate(te)]), ("folders not in depth first order", [dict(name="A", parent=1), dict(name="B")], te[:1]), ("a parent after its child", [dict(name="A", parent=0)], te[:1])):
+        try: tgy.pack_index_v1(en, [th] * len(en), fo, tgy.SORT_NAME); ok = False
+        except ValueError: ok = True
+        check("folder tree: refused: " + label, ok)
     print("tgix-v1: %d failure(s)" % fails); return 1 if fails else 0
 
 if __name__ == "__main__":
