@@ -2,11 +2,6 @@
 
 <p align="center"><img src="docs/images/tau-gallery-1.0-banner.png" alt="Tau Gallery 1.0: a photo gallery for the Analogue Pocket" width="100%"></p>
 
-<img width="400" height="360" alt="The grid, 8 x 6" src="docs/images/grid.png" />
-<img width="400" height="360" alt="The viewer" src="docs/images/viewer.png" />
-<img width="400" height="360" alt="The 2x zoom" src="docs/images/zoom-2x.png" />
-<img width="400" height="360" alt="The histograms" src="docs/images/histograms.png" />
-
 **A photo gallery for the Analogue Pocket with a hardware image decoder.** Browse a grid of thumbnails, open a picture full screen, zoom in to its full resolution and pan across it, even when the picture is tens or hundreds of megapixels. The pictures are decoded by a decoder built into the Pocket's FPGA, not by its small CPU, so opening and panning feel immediate.
 
 Tau Gallery is an openFPGA core (`alfatreze.Tau Gallery`). Version 1.0: see [Status](#status).
