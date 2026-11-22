@@ -70,6 +70,7 @@ fn convert_cli(args: &[String]) -> i32 {
             "--merge" => o.merge = true,
             "--index-format" => o.index_v1 = val() != "v0",
             "--sort" => o.sort = val(),
+            "--nested" => o.nested = val(),
             "--jobs" => { let n: usize = val().parse().unwrap_or(0); if n > 0 { rayon::ThreadPoolBuilder::new().num_threads(n).build_global().ok(); } }
             _ => pos.push(&args[i]),
         }

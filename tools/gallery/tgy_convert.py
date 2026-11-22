@@ -32,6 +32,18 @@ def name_of(stem):
     s = "".join(ch if ord(ch) < 256 else "?" for ch in stem)
     return s[:tgy.NAME_BYTES - 1]
 
+def nested_folders(src, mode):
+    """The library's folders under src: [(name, [pictures])] in name order. A folder with pictures is a folder of the library; one inside another is flattened into the first level folder it is under (mode 'flatten') or gets its own, named with the whole path joined by ' - ' (mode 'join'). Hidden folders (a name starting with a dot) are skipped at every depth."""
+    def pics(d): return sorted(p for p in d.iterdir() if is_picture(p))
+    def walk(d, names):
+        yield names, pics(d)
+        for q in sorted(x for x in d.iterdir() if x.is_dir() and not x.name.startswith(".")): yield from walk(q, names + [q.name])
+    out = {}
+    for q in sorted(x for x in src.iterdir() if x.is_dir() and not x.name.startswith(".")):
+        for names, fl in walk(q, [q.name]):
+            if fl: out.setdefault(names[0] if mode == "flatten" else " - ".join(names), []).extend(fl)
+    return sorted(out.items(), key=lambda kv: kv[0])
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("src", type=Path, help="a folder of pictures, or one picture file"); ap.add_argument("out", type=Path)
@@ -45,6 +57,7 @@ def main(argv=None):
     ap.add_argument("--card-layout", action="store_true", help="write OUT as the card's tree: the pictures in OUT/<card-dir>, the index in the folder above it")
     ap.add_argument("--jobs", type=int, default=0, help="v1: processes that code the tiles (0: automatic, the machine's cores up to 8; 1: one). The file is the same whatever the number; a dense 100 megapixel photo takes about 18 minutes on one process")
     ap.add_argument("--merge", action="store_true", help="keep the pictures the output library already has; a picture with the same name is replaced")
+    ap.add_argument("--nested", choices=("flatten", "join"), default="flatten", help="folders inside a folder: flatten (default) puts their pictures in the first level folder they are under, join makes a folder of its own named with the whole path, such as 'Trip - Day 1'")
     ap.add_argument("--index-format", choices=("v1", "v0"), default="v1", help="v1: the library index of Tau Gallery 1.0 (folders, details, 96 x 96 square thumbnails; docs/features/TGIX_V1_SPEC.md); v0: the old flat index with 96 x 72 thumbnails, for a gallery core and firmware before 1.0")
     ap.add_argument("--sort", choices=("name", "taken", "converted"), default="name", help="v1: the order of the pictures inside a folder: by file name, by the date taken (the EXIF date; pictures without one last), or as converted (the pictures a merge kept first)")
     a = ap.parse_args(argv)
@@ -55,9 +68,8 @@ def main(argv=None):
         jobs = [(a.src, None)]
     elif a.src.is_dir():
         top = sorted(p for p in a.src.iterdir() if is_picture(p))
-        subs = [(d, sorted(p for p in d.iterdir() if is_picture(p))) for d in sorted(q for q in a.src.iterdir() if q.is_dir() and not q.name.startswith("."))]
-        subs = [(d, fl) for d, fl in subs if fl]                                                          # one level of folders: a subfolder with pictures is a folder of the library
-        if a.index_format == "v1" and subs: jobs = [(p, d.name) for d, fl in subs for p in fl] + [(p, a.src.name or tgy.ALL_PICTURES) for p in top]
+        subs = nested_folders(a.src, a.nested)                                                              # one level of folders in the library: a subfolder with pictures is a folder; deeper ones are flattened into it or joined to its name (--nested)
+        if a.index_format == "v1" and subs: jobs = [(p, name) for name, fl in subs for p in fl] + [(p, a.src.name or tgy.ALL_PICTURES) for p in top]
         else: jobs = [(p, None) for p in top]                                                             # no subfolders (or the flat v0 index): one folder, ALL PICTURES
     else: print(json.dumps({"event": "error", "error": "no such file or folder: " + str(a.src)})); return 2
     card_dir = a.card_dir.strip("/")

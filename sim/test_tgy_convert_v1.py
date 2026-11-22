@@ -68,6 +68,13 @@ def suite(mod):
     # an empty subfolder alone is not a folder: the top pictures stay in ALL PICTURES
     src7 = d / "flat7"; (src7 / "empty").mkdir(parents=True); pic(src7 / "t.jpg", (1, 2, 3)); out7 = d / "o7"; rc, ev = run(mod or tgy_convert, src7, out7)
     check("a source whose only subfolder is empty gives one folder, ALL PICTURES", [f["name"] for f in load(out7)["folders"]] == ["ALL PICTURES"])
+    # folders inside folders: flattened into the first level folder (the default) or joined into a folder of their own named with the path
+    srcn = d / "Trips"; (srcn / "Trip" / "Day 1").mkdir(parents=True); (srcn / "Trip" / "Day 2" / "Deep").mkdir(parents=True); (srcn / "Trip" / ".hid").mkdir()
+    pic(srcn / "Trip" / "t.jpg", (5, 5, 5)); pic(srcn / "Trip" / "Day 1" / "a.jpg", (6, 6, 6)); pic(srcn / "Trip" / "Day 2" / "Deep" / "b.jpg", (7, 7, 7)); pic(srcn / "Trip" / ".hid" / "h.jpg", (8, 8, 8))
+    outf = d / "of"; rc, ev = run(mod or tgy_convert, srcn, outf); lf = load(outf)
+    check("nested folders flatten by default: one folder Trip with the pictures of its subfolders at every depth (a hidden folder is skipped)", rc == 0 and [f["name"] for f in lf["folders"]] == ["Trip"] and sorted(e["name"] for e in lf["entries"]) == ["a", "b", "t"])
+    outj = d / "oj"; rc, ev = run(mod or tgy_convert, srcn, outj, "--nested", "join"); lj = load(outj)
+    check("--nested join: a folder of its own for each, named with the whole path: Trip, Trip - Day 1, Trip - Day 2 - Deep", rc == 0 and [f["name"] for f in lj["folders"]] == ["Trip", "Trip - Day 1", "Trip - Day 2 - Deep"] and sorted(e["name"] for e in lj["entries"]) == ["a", "b", "t"])
     # a path that does not fit is skipped, the rest converts
     out6 = d / "o6"; shutil.copy(src / "Alps" / "a1.jpg", src / "Alps" / ("x" * 90 + ".jpg")); rc, ev = run(mod or tgy_convert, src / "Alps", out6)
     check("a picture whose card path does not fit is skipped and said so; the rest still converts", rc == 0 and any(e["event"] == "skip" for e in ev) and len(load(out6)["entries"]) == 1)
@@ -77,7 +84,10 @@ MUTANTS = [
     ("a ._ metadata file counts as a picture", ' and not p.name.startswith(".") and p.is_file()', ' and p.is_file()'),
     ("a hidden file counts as a picture (only ._ is excluded)", 'not p.name.startswith(".")', 'not p.name.startswith("._")'),
     ("the subfolders are not folders", "if a.index_format == \"v1\" and subs: jobs =", "if False: jobs ="),
-    ("an empty subfolder counts", "subs = [(d, fl) for d, fl in subs if fl]", "subs = [(d, fl) for d, fl in subs]"),
+    ("an empty subfolder counts", "            if fl: out.setdefault(", "            if True: out.setdefault("),
+    ("join does not join", 'names[0] if mode == "flatten" else " - ".join(names)', 'names[0]'),
+    ("flatten joins", 'names[0] if mode == "flatten" else " - ".join(names)', '" - ".join(names)'),
+    ("a hidden folder is walked", 'for q in sorted(x for x in d.iterdir() if x.is_dir() and not x.name.startswith(".")): yield from walk', 'for q in sorted(x for x in d.iterdir() if x.is_dir()): yield from walk'),
     ("the top pictures go to ALL PICTURES", "[(p, a.src.name or tgy.ALL_PICTURES) for p in top]", "[(p, None) for p in top]"),
     ("the thumbnail is the old 96 x 72 one", "thumb=sq if v1 else thumb", "thumb=thumb"),
     ("the EXIF is read after the orientation", "details = tgy.exif_details(im, fmt) if v1 else {}", "details = {}"),

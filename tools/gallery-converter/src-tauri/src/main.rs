@@ -137,7 +137,8 @@ fn stop_job(job: &Mutex<Option<Arc<AtomicBool>>>) -> bool {
 
 /// The converter's options for one run. `format` is "v0" (the picture as raw tiles, every Tau Gallery core; `levels` adds the half and 1:1 zoom stops) or "v1" (the compressed container the hardware TGY decoder draws;
 /// its zoom level is written by the converter itself for a picture larger than the screen, so `levels` means nothing there; `quality` is the quality of that level for a picture that is not a JPEG, `fit_quality` the fit level's).
-fn convert_options(input: &str, output: &str, levels: bool, upscale: bool, merge: bool, format: &str, quality: u32, fit_quality: u32, sort: &str, old_index: bool) -> Result<Options, String> {
+fn convert_options(input: &str, output: &str, levels: bool, upscale: bool, merge: bool, format: &str, quality: u32, fit_quality: u32, sort: &str, nested: &str, old_index: bool) -> Result<Options, String> {
+    if nested != "flatten" && nested != "join" { return Err(format!("Unknown nested folders choice {nested}.")); }
     if format != "v0" && format != "v1" { return Err(format!("Unknown format {format}.")); }
     if sort != "name" && sort != "taken" && sort != "converted" { return Err(format!("Unknown sort order {sort}.")); }
     if !(1..=100).contains(&quality) || !(1..=100).contains(&fit_quality) { return Err("The quality is a number from 1 to 100.".into()); }
@@ -147,13 +148,14 @@ fn convert_options(input: &str, output: &str, levels: bool, upscale: bool, merge
     if o.format_v1 { o.quality = quality; o.fit_quality = fit_quality; } else { o.levels = levels; }
     o.upscale = upscale;
     o.merge = merge;
+    o.nested = nested.to_string();
     if old_index { o.index_v1 = false; } else { o.sort = sort.to_string(); }          // the flat index of a gallery before 1.0 (no folders, no details, no sort mode)
     Ok(o)
 }
 
 #[tauri::command]
-async fn convert(app: AppHandle, input: String, output: String, levels: bool, upscale: bool, merge: bool, format: String, quality: u32, fit_quality: u32, sort: String, old_index: bool) -> Result<Summary, String> {
-    let opts = convert_options(&input, &output, levels, upscale, merge, &format, quality, fit_quality, &sort, old_index)?;
+async fn convert(app: AppHandle, input: String, output: String, levels: bool, upscale: bool, merge: bool, format: String, quality: u32, fit_quality: u32, sort: String, nested: String, old_index: bool) -> Result<Summary, String> {
+    let opts = convert_options(&input, &output, levels, upscale, merge, &format, quality, fit_quality, &sort, &nested, old_index)?;
     let handle = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let job = handle.state::<Job>();
@@ -194,7 +196,7 @@ mod tests {
         for (x, y, p) in im.enumerate_pixels_mut() { *p = image::Rgb([(x * 255 / w.max(1)) as u8, (y * 255 / h.max(1)) as u8, 90]); }
         im.save(path).unwrap();
     }
-    fn opts(input: &Path, out: &Path, merge: bool) -> Options { convert_options(input.to_str().unwrap(), out.to_str().unwrap(), false, false, merge, "v0", 92, 90, "name", false).unwrap() }
+    fn opts(input: &Path, out: &Path, merge: bool) -> Options { convert_options(input.to_str().unwrap(), out.to_str().unwrap(), false, false, merge, "v0", 92, 90, "name", "flatten", false).unwrap() }
 
     #[test]
     fn pictures_are_recognised_by_extension() {
@@ -263,7 +265,7 @@ mod tests {
 
     #[test]
     fn the_options_follow_the_format() {
-        let o = |levels, upscale, merge, f: &str, q, fq, sort: &str, old| convert_options("/in", "/Volumes/TauV/Assets/tau_gallery/common", levels, upscale, merge, f, q, fq, sort, old);
+        let o = |levels, upscale, merge, f: &str, q, fq, sort: &str, old| convert_options("/in", "/Volumes/TauV/Assets/tau_gallery/common", levels, upscale, merge, f, q, fq, sort, "flatten", old);
         let a = o(true, false, true, "v0", 92, 90, "name", false).unwrap();
         assert_eq!((a.out.to_str().unwrap(), a.card_layout, a.format_v1, a.levels, a.merge, a.upscale), ("/Volumes/TauV", true, false, true, true, false));
         let b = o(true, true, false, "v1", 85, 70, "taken", false).unwrap();
@@ -271,6 +273,9 @@ mod tests {
         let c = o(false, false, false, "v0", 50, 50, "name", false).unwrap(); assert_eq!((c.quality, c.fit_quality), (92, 90), "the qualities are not used for version 0");
         assert!(o(false, false, false, "v2", 92, 90, "name", false).unwrap_err().contains("Unknown format"));
         assert!(o(false, false, false, "v1", 92, 90, "size", false).unwrap_err().contains("Unknown sort"));
+        assert_eq!(o(false, false, false, "v1", 92, 90, "name", false).unwrap().nested, "flatten", "nested folders flatten by default");
+        assert_eq!(convert_options("/in", "/o", false, false, false, "v1", 92, 90, "name", "join", false).unwrap().nested, "join");
+        assert!(convert_options("/in", "/o", false, false, false, "v1", 92, 90, "name", "deep", false).unwrap_err().contains("Unknown nested"));
         let e = o(false, false, false, "v1", 92, 90, "taken", true).unwrap(); assert!(!e.index_v1, "the old index has no folders");
         for (q, fq) in [(0, 90), (101, 90), (92, 0), (92, 101)] { assert!(o(false, false, false, "v1", q, fq, "name", false).unwrap_err().contains("1 to 100"), "{q} {fq}"); }
     }
@@ -280,7 +285,7 @@ mod tests {
         let d = tmp("v1"); let src = d.join("in"); std::fs::create_dir(&src).unwrap(); let out = d.join("out");
         make_png(&src.join("big.png"), 1000, 900);
         let job = Mutex::new(None);
-        let o = convert_options(src.to_str().unwrap(), out.to_str().unwrap(), false, false, false, "v1", 92, 90, "name", false).unwrap();
+        let o = convert_options(src.to_str().unwrap(), out.to_str().unwrap(), false, false, false, "v1", 92, 90, "name", "flatten", false).unwrap();
         let s = run_conversion(&job, &o, |_| {}).unwrap();
         assert_eq!((s.pictures, s.converted, s.skipped), (1, 1, 0));
         let f = std::fs::read(out.join("Assets/tau_gallery/common/photos/big.tgy")).unwrap();

@@ -14,6 +14,7 @@
   let quality = $state<number>(Number(saved.quality) >= 1 && Number(saved.quality) <= 100 ? Number(saved.quality) : 92);
   let fitQuality = $state<number>(Number(saved.fitQuality) >= 1 && Number(saved.fitQuality) <= 100 ? Number(saved.fitQuality) : 90);
   let upscale = $state<boolean>(saved.upscale ?? false);
+  let nested = $state<'flatten' | 'join'>(saved.nested === 'join' ? 'join' : 'flatten');
   let sort = $state<'name' | 'taken' | 'converted'>(saved.sort === 'taken' || saved.sort === 'converted' ? saved.sort : 'name');
   let oldIndex = $state<boolean>(saved.oldIndex ?? false);
   let over = $state(false);
@@ -29,7 +30,7 @@
   let error = $state('');
   let stopping = $state(false);
 
-  $effect(() => { try { localStorage.setItem(KEY, JSON.stringify({ output, merge, upscale, quality, fitQuality, sort, oldIndex })); } catch { /* no storage: fine */ } });
+  $effect(() => { try { localStorage.setItem(KEY, JSON.stringify({ output, merge, upscale, quality, fitQuality, sort, nested, oldIndex })); } catch { /* no storage: fine */ } });
 
   const canConvert = $derived(!busy && !!output && !!scanInfo && (scanInfo.kind === 'file' || scanInfo.kind === 'folder') && scanInfo.pictures > 0);
 
@@ -73,7 +74,7 @@
 
   async function convert() {
     busy = true; stopping = false; error = ''; summary = null; log = []; done = 0; total = scanInfo?.pictures ?? 0; kept = 0;
-    try { summary = await invoke<Summary>('convert', { input: source, output, levels, upscale, merge, format, quality, fitQuality, sort, oldIndex }); }
+    try { summary = await invoke<Summary>('convert', { input: source, output, levels, upscale, merge, format, quality, fitQuality, sort, nested, oldIndex }); }
     catch (e) { error = String(e); }
     finally { busy = false; stopping = false; }
   }
@@ -126,6 +127,8 @@
     <details class="adv"><summary>Library ({oldIndex ? 'index for a gallery before 1.0' : sort === 'name' ? 'folders, by name' : sort === 'taken' ? 'folders, by date taken' : 'folders, as converted'})</summary>
       <label class="opt"><span>Order inside a folder<small>The date taken is the camera's EXIF date; pictures without one come last. "As converted" keeps the pictures added earlier first.</small>
         <select bind:value={sort} disabled={busy || oldIndex} aria-label="Order of the pictures inside a folder"><option value="name">By name</option><option value="taken">By date taken</option><option value="converted">As converted</option></select></span></label>
+      <label class="opt"><span>Folders inside folders<small>A folder of the library is a folder of the source with pictures. Flatten puts the pictures of the folders inside it into it; join makes a folder of its own named with the whole path, such as "Trip - Day 1".</small>
+        <select bind:value={nested} disabled={busy || oldIndex} aria-label="Folders inside folders"><option value="flatten">Flatten</option><option value="join">Join the names</option></select></span></label>
       <label class="opt"><input type="checkbox" bind:checked={oldIndex} disabled={busy} /><span>Index for a gallery before 1.0<small>A flat list with small thumbnails, no folders and no picture details. Leave this off for Tau Gallery 1.0.</small></span></label>
     </details>
     <p class="note">The pictures are written in the hardware-decoder format, for the Tau Gallery core with the hardware decoder (DEV 013 and later): they open quickly and the files are small. Zoom comes with the picture: a picture larger than the screen also gets its full-size level for panning and zooming, no setting needed. A very large photograph takes a few seconds (about 1 second for 100 megapixels on an 8-core machine); the converter uses the machine's cores.</p>

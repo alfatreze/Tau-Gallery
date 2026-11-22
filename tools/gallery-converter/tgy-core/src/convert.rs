@@ -29,11 +29,12 @@ pub struct Options {
     pub merge: bool,
     pub index_v1: bool,
     pub sort: String,
+    pub nested: String,          // folders inside a folder: "flatten" (default: into the first level folder they are under) or "join" (a folder of their own named with the whole path, "Trip - Day 1")
 }
 
 impl Options {
     pub fn new(src: PathBuf, out: PathBuf) -> Options {
-        Options { src, out, card_dir: "Assets/tau_gallery/common/photos".into(), index_name: "tau-library.tdb".into(), upscale: false, levels: false, format_v1: false, quality: 92, fit_quality: 90, card_layout: false, merge: false, index_v1: true, sort: "name".into() }
+        Options { src, out, card_dir: "Assets/tau_gallery/common/photos".into(), index_name: "tau-library.tdb".into(), upscale: false, levels: false, format_v1: false, quality: 92, fit_quality: 90, card_layout: false, merge: false, index_v1: true, sort: "name".into(), nested: "flatten".into() }
     }
 }
 
@@ -208,6 +209,26 @@ pub fn taken_seconds(t: Option<(u16, u8, u8, u8, u8, u8)>) -> u32 {
     if secs > 0 { secs as u32 } else { 0 }
 }
 
+/// The library's folders under `src`: (name, pictures) in name order. A folder with pictures is a folder of the library; one inside another is flattened into the first level folder it is under (`mode` "flatten") or gets its own, named with the whole
+/// path joined by " - " (`mode` "join"). Hidden folders (a name starting with a dot) are skipped at every depth. `list` gives the pictures directly in a folder, sorted (the same rule as `tools/gallery/tgy_convert.py nested_folders`).
+fn nested_folders(src: &Path, mode: &str, list: &dyn Fn(&Path) -> Vec<PathBuf>) -> Vec<(String, Vec<PathBuf>)> {
+    fn subdirs(d: &Path) -> Vec<PathBuf> {
+        let mut v: Vec<PathBuf> = std::fs::read_dir(d).map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.is_dir() && !p.file_name().unwrap().to_string_lossy().starts_with('.')).collect()).unwrap_or_default();
+        v.sort_by(|x, y| x.file_name().cmp(&y.file_name())); v
+    }
+    fn walk(d: &Path, names: &mut Vec<String>, list: &dyn Fn(&Path) -> Vec<PathBuf>, mode: &str, out: &mut Vec<(String, Vec<PathBuf>)>) {
+        let fl = list(d);
+        if !fl.is_empty() {
+            let name = if mode == "flatten" { names[0].clone() } else { names.join(" - ") };
+            match out.iter_mut().find(|(n, _)| *n == name) { Some((_, v)) => v.extend(fl), None => out.push((name, fl)) }
+        }
+        for q in subdirs(d) { names.push(q.file_name().unwrap().to_string_lossy().into_owned()); walk(&q, names, list, mode, out); names.pop(); }
+    }
+    let mut out: Vec<(String, Vec<PathBuf>)> = Vec::new();
+    for q in subdirs(src) { let mut names = vec![q.file_name().unwrap().to_string_lossy().into_owned()]; walk(&q, &mut names, list, mode, &mut out); }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
 struct Item { path: String, name: String, size: u32, width: u32, height: u32, folder_name: String, taken: u32, details: Vec<u8>, thumb: Vec<u8>, order: usize }
 
 /// Runs a conversion. `emit` receives each event; the result is the exit code (0 done, 2 a usage error). `cancel` stops it between pictures and between tiles.
@@ -221,13 +242,11 @@ pub fn run(a: &Options, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) -> i32
     } else if a.src.is_dir() {
         let list = |d: &Path| -> Vec<PathBuf> { let mut v: Vec<PathBuf> = std::fs::read_dir(d).map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| is_picture(p)).collect()).unwrap_or_default(); v.sort_by(|x, y| x.file_name().cmp(&y.file_name())); v };
         let top = list(&a.src);
-        let mut dirs: Vec<PathBuf> = std::fs::read_dir(&a.src).map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.is_dir() && !p.file_name().unwrap().to_string_lossy().starts_with('.')).collect()).unwrap_or_default();
-        dirs.sort_by(|x, y| x.file_name().cmp(&y.file_name()));
-        let subs: Vec<(PathBuf, Vec<PathBuf>)> = dirs.into_iter().map(|d| { let l = list(&d); (d, l) }).filter(|(_, l)| !l.is_empty()).collect();
+        let subs = nested_folders(&a.src, &a.nested, &list);
         if a.index_v1 && !subs.is_empty() {
             let top_name = a.src.file_name().map(|n| n.to_string_lossy().into_owned()).filter(|s| !s.is_empty()).unwrap_or_else(|| index::ALL_PICTURES.to_string());
             let mut j: Vec<(PathBuf, Option<String>)> = Vec::new();
-            for (d, fl) in &subs { let n = d.file_name().unwrap().to_string_lossy().into_owned(); for p in fl { j.push((p.clone(), Some(n.clone()))); } }
+            for (n, fl) in &subs { for p in fl { j.push((p.clone(), Some(n.clone()))); } }
             for p in top { j.push((p, Some(top_name.clone()))); }
             jobs = j;
         } else { jobs = top.into_iter().map(|p| (p, None)).collect(); }
@@ -318,4 +337,20 @@ pub fn run(a: &Options, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) -> i32
     }
     emit(json!({"event": "done", "pictures": pictures, "skipped": skipped, "converted": items.len(), "folders": folders_n, "out": a.out.to_string_lossy()}));
     0
+}
+
+#[cfg(test)]
+mod nested_tests {
+    use super::*;
+    fn touch(p: &Path) { std::fs::create_dir_all(p.parent().unwrap()).unwrap(); std::fs::write(p, b"x").unwrap(); }
+    #[test]
+    fn nested_folders_flatten_or_join() {
+        let d = std::env::temp_dir().join(format!("tgy_nested_{}", std::process::id())); let _ = std::fs::remove_dir_all(&d);
+        touch(&d.join("Trip/t.jpg")); touch(&d.join("Trip/Day 1/a.jpg")); touch(&d.join("Trip/Day 2/Deep/b.jpg")); touch(&d.join("Trip/.hid/h.jpg")); touch(&d.join("Empty/readme.txt")); touch(&d.join("top.jpg"));
+        let list = |p: &Path| -> Vec<PathBuf> { let mut v: Vec<PathBuf> = std::fs::read_dir(p).map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.path()).filter(|q| q.is_file() && q.extension().map(|e| e == "jpg").unwrap_or(false)).collect()).unwrap_or_default(); v.sort(); v };
+        let names = |v: &Vec<(String, Vec<PathBuf>)>| v.iter().map(|(n, f)| format!("{}:{}", n, f.len())).collect::<Vec<_>>();
+        let f = nested_folders(&d, "flatten", &list); assert_eq!(names(&f), vec!["Trip:3"], "flatten: one folder, every depth, the hidden folder and the folder without pictures skipped");
+        let j = nested_folders(&d, "join", &list); assert_eq!(names(&j), vec!["Trip:1", "Trip - Day 1:1", "Trip - Day 2 - Deep:1"], "join: a folder of its own for each, named with the path");
+        let _ = std::fs::remove_dir_all(&d);
+    }
 }
