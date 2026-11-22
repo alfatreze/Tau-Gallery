@@ -1302,6 +1302,7 @@ static void draw_preview(uint32_t x, uint32_t y, uint32_t off)                  
     if (!thumb_blit(x, y, off)) { gfx_text(x, y, "NO PREVIEW", DIM, BG); return; }
     if (head.version == 1u) gfx_corners(x, y, 96u, 96u, 8u, BG);
 }
+static uint32_t hm_mode, hv_overlay;                                                                  /* the histogram page: the height scale (hm_names) and 0 = four plots, 1 = the three colours and the luma over one another (kept while the picture is open: X and A on the page) */
 static void draw_dpage(const gdp_t *p, const gd_t *d, const gd_meta_t *m, const hs_t *hist, int from_dec, uint32_t thumb_off)
 {
     const uint32_t id = p->id[p->cur];
@@ -1318,6 +1319,28 @@ static void draw_dpage(const gdp_t *p, const gd_t *d, const gd_meta_t *m, const 
             char b[16]; *put_u(b, hist->is_fine ? HS_FINE : HS_BINS) = 0;
             gfx_text(DET_VX, DET_VY_HIST + 104u, "LEVELS", DIM, BG); gfx_text(DET_VX, DET_VY_HIST + 120u, b, FG, BG);
             gfx_text(DET_VX, DET_VY_HIST + 144u, "PIXELS", DIM, BG); *put_u(b, hist->n) = 0; gfx_text(DET_VX, DET_VY_HIST + 160u, b, FG, BG);
+            gfx_text(DET_VX, DET_VY_HIST + 184u, "SCALE", DIM, BG); gfx_text(DET_VX, DET_VY_HIST + 200u, hm_names[hm_mode % HM_N], FG, BG);
+            { hs_stats_t st; hs_stats(hist, &st); char q[20], *w = put_s(q, "MEAN "); w = put_u(w, st.mean); *w = 0; gfx_text(DET_VX, DET_VY_HIST + 224u, q, FG, BG);
+              if (st.exact) { w = put_s(q, "BLK "); w = put_u(w, st.black_pm / 10u); *w++ = '.'; w = put_u(w, st.black_pm % 10u); *w++ = '%'; *w = 0; gfx_text(DET_VX, DET_VY_HIST + 244u, q, FG, BG);
+                              w = put_s(q, "WHT "); w = put_u(w, st.white_pm / 10u); *w++ = '.'; w = put_u(w, st.white_pm % 10u); *w++ = '%'; *w = 0; gfx_text(DET_VX, DET_VY_HIST + 264u, q, FG, BG); } }
+        }
+        if (hv_overlay && hist) {                                                                         /* the colours over one another in one big plot: the luma as grey bars, red, green and blue as lines */
+            const uint32_t ox = 6u, oy = 28u, ow = 262u, oh = 288u, base = oy + oh - 4u, ph = oh - 12u;
+            gfx_rect(DET_PX - 118u, 26u, 380u - (DET_PX - 118u) + 6u, 292u, BG);
+            frame_box(ox, oy, ow, oh, DIM); uint32_t mx = 0u; for (uint32_t k = 0; k < GD_HIST_N; k++) { const uint32_t m2 = hs_plot_max(hist, k); if (m2 > mx) mx = m2; }
+            static const uint16_t line_col[GD_HIST_N] = { 0x4208u, 0xF800u, 0x07E0u, 0x001Fu };
+            for (uint32_t k = 0; k < GD_HIST_N; k++) {
+                uint32_t prev = 0u;
+                for (uint32_t i = 0; i < HS_FINE; i++) {
+                    const uint32_t h2 = hs_height_m(hs_bar(hist, k, i), mx, ph, hm_mode % HM_N);
+                    if (k == 0u) { if (h2) gfx_rect(ox + 3u + i, base - h2, 1, h2, line_col[0]); }
+                    else { const uint32_t lo = h2 < prev ? h2 : prev, hi = h2 < prev ? prev : h2; gfx_rect(ox + 3u + i, base - hi, 1, hi - lo + 1u, line_col[k]); prev = h2; }
+                }
+            }
+            for (uint32_t k = 0; k < GD_HIST_N; k++) gfx_text(274u, 40u + k * 20u, gd_hist_labels[k], k == 0u ? 0xFFFFu : line_col[k], BG);
+            gfx_text(274u, 140u, "SCALE", DIM, BG); gfx_text(274u, 156u, hm_names[hm_mode % HM_N], FG, BG);
+            gfx_text(6, 324, hist ? (from_dec ? GD_HIST_SRC_DEC : head.version == 1u ? GD_HIST_SRC_CROP : GD_HIST_SRC) : GD_HIST_NOTE, DIM, BG);
+            draw_indicator(p); page_foot("A SCALE  X PLOTS  B BACK", 0, 0); return;
         }
         for (uint32_t h = 0; h < GD_HIST_N; h++) {
             const uint32_t x = DET_PX, y = DET_PY0 + h * DET_PSTEP;
@@ -1325,14 +1348,14 @@ static void draw_dpage(const gdp_t *p, const gd_t *d, const gd_meta_t *m, const 
             if (!hist) { gfx_text(x + 6u, y + 34u, GD_HIST_NOTE, DIM, BG); continue; }
             const uint32_t mx = hs_plot_max(hist, h), step = hist->is_fine ? 1u : 8u;
             for (uint32_t i = 0; i < HS_FINE; i += step) {
-                const uint32_t bh = hs_height(hs_bar(hist, h, i), mx, DET_BH);
+                const uint32_t bh = hs_height_m(hs_bar(hist, h, i), mx, DET_BH, hm_mode % HM_N);
                 if (bh) gfx_rect(x + DET_BX + i, y + DET_PH - DET_BB - bh, step == 1u ? 1u : step - 1u, bh, bar_col[h]);
             }
         }
         gfx_text(6, 324, hist ? (from_dec ? GD_HIST_SRC_DEC : head.version == 1u ? GD_HIST_SRC_CROP : GD_HIST_SRC) : GD_HIST_NOTE, DIM, BG);
     }
     draw_indicator(p);
-    page_foot("LEFT RIGHT PAGE   B OR SELECT BACK", 0, 0);
+    page_foot(id == GDP_HIST ? "A SCALE  X OVERLAY  B BACK" : "LEFT RIGHT PAGE   B OR SELECT BACK", 0, 0);
 }
 /* Waits for the next key press (an edge) and returns it. */
 static uint32_t next_edge(uint32_t *prev)
@@ -1365,7 +1388,9 @@ static void run_details(int from_grid)
             else hist_ok = thumb_hist(gx_thumb_off(&head, e->thumb), &det_hist, e->width, e->height);
         }
         draw_dpage(&pg, &d, &m, hist_ok > 0 ? &det_hist : 0, from_dec, gx_thumb_off(&head, e->thumb));
-        if (gdp_input(&pg, next_edge(&prev))) break;
+        const uint32_t de = next_edge(&prev);
+        if (pg.id[pg.cur] == GDP_HIST && (de & (GP_KEY_A | KEY_X))) { if (de & GP_KEY_A) hm_mode = (hm_mode + 1u) % HM_N; if (de & KEY_X) hv_overlay ^= 1u; continue; }       /* A: the next height scale; X: the plots or the overlay (the page is drawn again) */
+        if (gdp_input(&pg, de)) break;
     }
 }
 static void run_pages(void)

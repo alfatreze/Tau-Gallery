@@ -844,6 +844,9 @@ static void checkpoint(int n)
     case 584: chk(584, z2_vis_hits == 0u && z2_s == 4u && z2_view_ok("v00_full.rgb", 1000u, 900u, 4u) && abs((z2_vx + 400) / 4 - z2_c0x) <= 4 && abs((z2_vy + 360) / 4 - z2_c0y) <= 4); break;      /* A again: the 4x view (every pixel 4 x 4), at the 2x view's centre */
     case 585: chk(585, z2_vis_hits == 0u && z2_s == 4u && z2_view_ok("v00_full.rgb", 1000u, 900u, 4u) && (z2_vx + 400) / 4 < z2_c0x); break;                                                                  /* panned left and up at 4x: still exact, further along */
     case 600: fail_pic_reads = 2; pass_pic_reads = 0; break;                                                                                                                                           /* the card does not answer for two reads while the 2x level loads (a screenshot): the loader tries again, the view still comes up */
+    case 601: dump_fb("hist_linear"); chk(601, hm_mode == 1u && said("LINEAR") && said("MEAN")); clear_texts(); break;                                                                                                          /* A on the histogram page: the next height scale (LINEAR), the page drawn again with the mean */
+    case 603: chk(603, hm_mode == 2u && said("LOG")); clear_texts(); break;
+    case 602: dump_fb("hist_overlay"); chk(602, hv_overlay == 1u && hm_mode == 0u && said("A SCALE  X PLOTS  B BACK")); clear_texts(); break;                                                                                           /* A back to SQRT and X: the overlay (its own footer) */
     case 595: chk(595, said("DETAILS  INFO") && vid_bus == 0u); clear_texts(); break;
     case 596: chk(596, said("DETAILS  HISTOGRAMS")); clear_texts(); break;
     case 597: chk(597, vid_bus == 1u && z2_shown && z2_view_ok("v00_full.rgb", 1000u, 900u, 2u)); break;
@@ -1080,7 +1083,7 @@ int main(int argc, char **argv)
     }
     if (argc > 2 && !strcmp(argv[2], "v1hist")) {                                                            /* the histograms of a version 1 picture counted by the decoder's unit while the viewer decoded it (v00), and the thumbnail's for one that was not (v01) */
         caps_val = 0x80000007u;
-        const uint32_t SH[] = { KEY_A, 0, KEY_B, 0, KEY_A, 0, CP(530), KEY_SELECT, 0, KEY_RIGHT, 0, CP(531), KEY_B, 0, KEY_B, 0, KEY_RIGHT, 0, KEY_A, 0, KEY_SELECT, 0, KEY_RIGHT, 0, CP(533), KEY_B, 0, KEY_B, 0, KEY_RIGHT, 0, KEY_SELECT, 0, KEY_RIGHT, 0, CP(532), KEY_B, 0, KEY_LEFT, 0, KEY_LEFT, 0, KEY_LEFT, 0, KEY_A, 0, KEY_B, 0, KEY_RIGHT, 0, KEY_RIGHT, 0, KEY_SELECT, 0, KEY_RIGHT, 0, CP(534), END };
+        const uint32_t SH[] = { KEY_A, 0, KEY_B, 0, KEY_A, 0, CP(530), KEY_SELECT, 0, KEY_RIGHT, 0, CP(531), KEY_A, 0, CP(601), KEY_A, 0, CP(603), KEY_A, 0, KEY_X, 0, CP(602), KEY_X, 0, KEY_B, 0, KEY_B, 0, KEY_RIGHT, 0, KEY_A, 0, KEY_SELECT, 0, KEY_RIGHT, 0, CP(533), KEY_B, 0, KEY_B, 0, KEY_RIGHT, 0, KEY_SELECT, 0, KEY_RIGHT, 0, CP(532), KEY_B, 0, KEY_LEFT, 0, KEY_LEFT, 0, KEY_LEFT, 0, KEY_A, 0, KEY_B, 0, KEY_RIGHT, 0, KEY_RIGHT, 0, KEY_SELECT, 0, KEY_RIGHT, 0, CP(534), END };
         nscript = (int)(sizeof SH / sizeof SH[0]); memcpy(script, SH, sizeof SH);
         if (!setjmp(done)) gallery_app_main();
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;

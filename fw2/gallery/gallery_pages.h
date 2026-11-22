@@ -513,6 +513,29 @@ static inline uint32_t hs_height(uint32_t count, uint32_t max, uint32_t hmax)
     return v < 1u ? 1u : v;
 #endif
 }
+/* Scales of a bar's height (owner, 2026-11-22: the histogram improvements): SQRT (the default, the page's first), LINEAR (what Photoshop draws) and LOG (every bin that has pixels is visible even beside a bin that holds half the picture). */
+enum { HM_SQRT = 0, HM_LINEAR, HM_LOG, HM_N };
+static const char *const hm_names[HM_N] = { "SQRT", "LINEAR", "LOG" };
+static inline uint32_t hs_log2q(uint32_t v)                                                          /* 256 x log2(v) for v >= 1, linear between powers of two (error under 0.09) */
+{
+    uint32_t l = 0u; while ((v >> (l + 1u)) != 0u) l++;
+    return (l << 8) | (l >= 8u ? (v >> (l - 8u)) & 255u : (v << (8u - l)) & 255u);
+}
+static inline uint32_t hs_height_m(uint32_t count, uint32_t max, uint32_t hmax, uint32_t mode)
+{
+    if (count == 0u || max == 0u) return 0u;
+    if (mode == HM_LINEAR) { const uint32_t v = (uint32_t)(((uint64_t)count * hmax) / max); return v < 1u ? 1u : v; }
+    if (mode == HM_LOG) { const uint32_t a = hs_log2q(count + 1u), b = hs_log2q(max + 1u), v = b ? (uint32_t)((uint64_t)a * hmax / b) : 0u; return v < 1u ? 1u : v; }
+    return hs_height(count, max, hmax);
+}
+/* What the luma histogram says in numbers: the mean level (0..255) and the shares of black (level 0) and white (level 255) in thousandths; the shares only when the decoder counted every level. */
+typedef struct { uint32_t mean, black_pm, white_pm; int exact; } hs_stats_t;
+static inline void hs_stats(const hs_t *h, hs_stats_t *o)
+{
+    uint64_t tot = 0u, sum = 0u; for (uint32_t i = 0; i < 256u; i++) { const uint32_t c = hs_bar(h, 0u, i); tot += c; sum += (uint64_t)c * i; }
+    o->mean = tot ? (uint32_t)(sum / tot) : 0u; o->exact = h->is_fine != 0u;
+    o->black_pm = (tot && o->exact) ? (uint32_t)((uint64_t)h->fine[0][0] * 1000u / tot) : 0u; o->white_pm = (tot && o->exact) ? (uint32_t)((uint64_t)h->fine[0][255] * 1000u / tot) : 0u;
+}
 /* One key edge: returns 1 when the page should close. */
 #if BUG == 13
 static inline int gd_input(uint32_t edge) { return (edge & GP_KEY_B) != 0; }                                                         /* Select does not close */
