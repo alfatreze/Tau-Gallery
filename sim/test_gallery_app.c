@@ -670,6 +670,11 @@ static void lib1_cp(int n)
     case 524: chk(524, pix_ctrl == 5u && pix_stores == 3840u && pix_bad == 0u && pix_tables_are(5u)); break;                                                             /* WARM: the tint presets differ per channel, so a wrong channel shows */
     case 525: chk(525, pix_ctrl == 5u && pix_stores == 768u && pix_bad == 0u); break;                                                                                   /* a key that changes nothing (the row moves) does not reload the tables */
     case 523: chk(523, pix_ctrl == 5u && pix_stores == 7680u && pix_bad == 0u && pix_tables_are(7u)); break;                                                            /* Left from NORMAL wraps to INVERT */
+    case 800: chk(800, vid_bus == 1u); break;                                                                                                                                                                                  /* the picture is open */
+    case 801: chk(801, v1c_n * v1c_bs <= sizeof v1z_idx && zk == 0 && z_shown && map_runs == 0u); break;                                                                                                                                                           /* the 1:1 view is up */
+    case 802: chk(802, z_shown && map_runs == 0u && z_sx > 0); break;                                                                                                                                                          /* after a long pan right: still shown, moved, no navigator */
+    case 803: chk(803, z_shown && map_runs == 0u && z_sy > 0); break;                                                                                                                                                          /* after the diagonal: moved down too, still no navigator */
+    case 804: chk(804, z_shown && map_runs == 0u && !z2_active && vid_bus == 1u); break;
     case 700: chk(700, level == 1u && fl_n == 2u && fl[0] == 0u && fl[1] == 1u && fl_parent1 == 0u && applied_nested == 0u && ent[0].size == 2u && ent[1].size == 7u && said("Misc 2") && said("Travel 7")); break;                      /* flat (the default): the top folders only, Travel holds all seven pictures under it */
     case 701: chk(701, level == 1u && sel == 1u); break;
     case 702: chk(702, level == 0u && cur_first == 2u && cur_count == 7u && cur_up == 0u && cur_folder == 1u); break;                                                                                                          /* A on Travel (flat): its pictures, those of Day 1 and Day 2 together */
@@ -786,14 +791,14 @@ static void checkpoint(int n)
     case 293: chk(293, m_ry >= 226 && m_ry + m_rh <= 226 + 267 && m_ry + m_rh >= 226 + 267 - 3); break;                                                                                /* pushed down it stops at the bottom edge of the PICTURE (y 493), not the canvas's (720) */
     case 294: chk(294, zk == 0 && z_shown && z_sy >= 470 && z_sy <= 480 && z_sy + 720 <= 1200); break;                                                                               /* the jump lands at the bottom of the level (corner y about 480) */
     case 295: chk(295, sel == 9u && pic.rx == 280u && pic.ry == 0u && pic.rw == 240u && pic.rh == 720u); break;                                                                        /* the 1100 x 3300 portrait: 240 x 720 at x 280 */
-    case 244: chk(244, zk == 0 && z_shown && v1z_idx_ok && v1z.idx == 0 && v1z.fetch && v1c_reads > 6u && v1c_reads < 60u && v1_view_matches("v00_full.rgb", 1000u, 900u)); { /* the cache's replacement rule, driven directly: blocks A, B, A, C, A with two slots read 3 times from the card (least recently used out; a hit renews a block) */
+    case 244: chk(244, v1c_n * v1c_bs <= sizeof v1z_idx && zk == 0 && z_shown && v1z_idx_ok && v1z.idx == 0 && v1z.fetch && v1c_reads > 6u && v1c_reads < 60u && v1_view_matches("v00_full.rgb", 1000u, 900u)); { /* the cache's replacement rule, driven directly: blocks A, B, A, C, A with two slots read 3 times from the card (least recently used out; a hit renews a block) */
         const uint32_t b0 = v1z.idx_off / 256u, A = (b0 + 1u) * 256u + 40u, B = (b0 + 2u) * 256u + 40u, C = v1z.idx_off; uint8_t e[12]; int okk = (v1z.idx_off % 256u) <= 240u;
         v1c_clock = 0u; for (uint32_t q = 0; q < 16u; q++) { v1c_pos[q] = 0xFFFFFFFFu; v1c_age[q] = 0u; } v1c_reads = 0u;
         const uint32_t seq[5] = { A, B, A, C, A }, want[5] = { 1u, 2u, 2u, 3u, 3u };
         for (int q = 0; q < 5; q++) { okk &= v1_idx_entry(0, seq[q], e) == 1; for (int k = 0; k < 12; k++) okk &= e[k] == pic_data[seq[q] + k]; okk &= v1c_reads == want[q]; }
         chk(247, okk); }
         break;      /* the zoom opened and shows the exact reference pixels with every tile's entry read through two 256 byte blocks (entries straddle blocks) */
-    case 245: v1z_cap = V1Z_IDX_MAX; v1c_bs = 4096u; v1c_n = 8u; break;                                                                                  /* so that picture has no zoom stop */
+    case 245: v1z_cap = V1Z_IDX_MAX; v1c_bs = 4096u; v1c_n = V1C_BLOCKS; break;                                                                                  /* so that picture has no zoom stop */
     case 221: chk(221, zn == 1u && !v1z_idx_ok && zk < 0); fail_pic_reads = 3; pass_pic_reads = 0; clear_texts(); break;                                                      /* opened again with the normal buffer; the next card reads fail: the zoom's index cannot be read */
     case 222: chk(222, said("ZOOM INDEX READ FAILED") && zk < 0 && !v1z_idx_ok && vid_bus == 1u); fail_pic_reads = 0; clear_texts(); break;                                  /* the fit view stays, with the message */
     case 223: chk(223, zk == 0 && z_shown && v1z_idx_ok && v1_view_matches("v00_full.rgb", 1000u, 900u)); break;                                                            /* the card reads work again: the zoom opens */
@@ -1140,6 +1145,16 @@ int main(int argc, char **argv)
         lib1_on = 1;
         const uint32_t SC[] = { CP(519), KEY_START, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_A, 0, CP(526), KEY_DOWN, 0, KEY_DOWN, 0, KEY_DOWN, 0, KEY_RIGHT, 0, CP(520), KEY_UP, 0, CP(525), KEY_DOWN, 0, KEY_RIGHT, 0, CP(521), KEY_RIGHT, 0, KEY_RIGHT, 0, KEY_RIGHT, 0, CP(524), KEY_LEFT, 0, KEY_LEFT, 0, KEY_LEFT, 0, KEY_LEFT, 0, KEY_LEFT, 0, CP(522), KEY_LEFT, 0, CP(523), KEY_B, 0, KEY_B, 0, END };
         nscript = (int)(sizeof SC / sizeof SC[0]); memcpy(script, SC, sizeof SC);
+        if (!setjmp(done)) gallery_app_main();
+        printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
+    }
+    if (argc > 2 && !strncmp(argv[2], "bigpic", 6)) {                                                           /* a very large picture (bigpic0: the world map; bigpic1, the X2D photo, needs the decoder model to handle that file: it does not yet) at 1:1: a long pan right, then diagonal, then the other way: the screen must keep following, never hang, never open the navigator by itself */
+        lib1_on = 1; uint32_t SB[8192]; int k = 0;
+#define HB(key, n) do { for (int _i = 0; _i < (n); _i++) SB[k++] = (key); } while (0)
+        if (!strcmp(argv[2], "bigpic1")) { SB[k++] = KEY_RIGHT; SB[k++] = 0; }
+        SB[k++] = KEY_A; SB[k++] = 0; SB[k++] = CP(800); SB[k++] = KEY_A; SB[k++] = 0; HB(0, 300); SB[k++] = CP(801);
+        HB(KEY_RIGHT, 150); SB[k++] = CP(802); HB(KEY_RIGHT | KEY_DOWN, 150); SB[k++] = CP(803); HB(KEY_DOWN, 100); HB(KEY_LEFT | KEY_UP, 150); HB(0, 300); SB[k++] = CP(804);
+        SB[k++] = END; nscript = k; memcpy(script, SB, (size_t)k * sizeof SB[0]);
         if (!setjmp(done)) gallery_app_main();
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
     }

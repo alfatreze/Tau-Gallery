@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Driver of sim/test_gallery_app.c: writes 18 small pictures and their index with the real converter library, builds the firmware (gallery_app.c, gallery_fmt.c, gallery_hw.c) against the hardware model and runs it.
 `--mutants` edits copies of the firmware sources; every edit must make the run fail."""
-import os, subprocess, sys, tempfile
+import shutil, os, subprocess, sys, tempfile
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools/gallery"))
@@ -86,6 +86,18 @@ def make_v1idx_set(d):
     old = tgy.parse_index_full((d / "tau-library.tdb").read_bytes())
     ents = [dict(path=e["path"], name=e["name"], size=e["size"], width=e["width"], height=e["height"], folder=0, details={"format": "JPEG"}) for e in old["entries"]]
     (d / "tau-library.tdb").write_bytes(tgy.pack_index_v1(ents, [lib1_thumb(i) for i in range(len(ents))], [dict(name="All")]))
+
+def make_bigpic_set(d):
+    """Two very large pictures of the owner's library (converted by the app: the 21,600 x 10,800 world map and a 102 megapixel X2D photo (qianli-zhang, 11,656 x 8,742)), copied from work/lib-final if it is there: their tile index is far past the RAM cache, so a pan reads it from the card. Pictures bg00 and bg01 under a one folder version 1 index."""
+    src = Path(__file__).resolve().parent.parent / "work" / "lib-final" / "Assets" / "tau_gallery" / "common"
+    names = ["world.200401.3x21600x10800.tgy", "qianli-zhang-x2d-xcd-25v-1.tgy"]
+    if not all((src / "photos" / n).is_file() for n in names): raise SystemExit("SKIP: work/lib-final has no big pictures")
+    idx = tgy.parse_index_full((src / "tau-library.tdb").read_bytes()); by = {Path(e["path"]).name: e for e in idx["entries"]}
+    ents = []
+    for i, n in enumerate(names):
+        shutil.copyfile(src / "photos" / n, d / f"bg{i:02d}.tgy"); e = by[n]
+        ents.append(dict(path=f"Assets/tau_gallery/common/photos/bg{i:02d}.tgy", name=e["name"], size=e["size"], width=e["width"], height=e["height"], folder=0, details=e["details"], thumb=e["thumb"]))
+    (d / "tau-library.tdb").write_bytes(tgy.pack_index_v1(ents, [e["thumb"] for e in ents], [dict(name="All")]))
 
 def make_libtree_set(d):
     """A version 1 library with folders inside folders: Misc (2 pictures), Travel {Day 1 (4), Day 2 (3)}: the folder table in depth first order, Travel a container (its range is its two folders')."""
@@ -628,11 +640,11 @@ def quick(names):
     sets = {}
     def get(kind):
         if kind not in sets:
-            d = Path(tempfile.mkdtemp()); {"base": make_set, "v1": make_v1_set, "v1i": make_v1idx_set, "lib1": make_lib1_set, "libtree": make_libtree_set, "libbig": make_libbig_set, "big": make_big_set, "zoom": make_zoom_set}[kind](d); sets[kind] = d
+            d = Path(tempfile.mkdtemp()); {"base": make_set, "v1": make_v1_set, "v1i": make_v1idx_set, "lib1": make_lib1_set, "libtree": make_libtree_set, "bigpic": make_bigpic_set, "libbig": make_libbig_set, "big": make_big_set, "zoom": make_zoom_set}[kind](d); sets[kind] = d
         return sets[kind]
     rc = 0
     for sc in names:
-        kind = "libtree" if sc == "libtree" else "v1i" if sc == "v1gridhist" else "v1" if sc.startswith("v1") else "lib1" if sc.startswith("lib1") else "libbig" if sc.startswith("libbig") or sc == "colour" else "big" if sc.startswith("big") else "zoom" if sc == "zoom" else "base"
+        kind = "bigpic" if sc.startswith("bigpic") else "libtree" if sc == "libtree" else "v1i" if sc == "v1gridhist" else "v1" if sc.startswith("v1") else "lib1" if sc.startswith("lib1") else "libbig" if sc.startswith("libbig") or sc == "colour" else "big" if sc.startswith("big") else "zoom" if sc == "zoom" else "base"
         r = subprocess.run([str(w / "t"), str(get(kind)), sc], capture_output=True, text=True, timeout=900)
         bad = [l for l in r.stdout.splitlines() if "FAIL" in l]
         print(("FAIL " if r.returncode else "ok   ") + sc + ("  " + " | ".join(bad[:4]) + " " + r.stderr[-300:] if r.returncode else ""))

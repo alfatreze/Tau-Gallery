@@ -523,7 +523,8 @@ static tgy_file_t v1fz; static tgy_level_t v1z; static uint32_t v1z_cap = V1Z_ID
  * least recently used out; variables so the host test can make them tiny). The index is row by row, so the entries a window needs are a few blocks. Above V1Z_VERIFY_MAX the checksum is not checked (reading it would take seconds):
  * an entry that is out of range is refused when it is used, as a damaged stream is stopped by the decoder. */
 #define V1Z_VERIFY_MAX 262144u
-static uint32_t v1c_bs = 4096u, v1c_n = 8u, v1c_pos[16], v1c_age[16], v1c_clock, v1c_reads;
+#define V1C_BLOCKS ((uint32_t)(sizeof v1z_idx / 4096u))                                          /* the blocks of the cache are whole 4 KB pieces OF THE BUFFER (4 of the 18 KB one): a cache bigger than its buffer wrote over the variables behind it and hung or opened the navigator by itself on a large picture */
+static uint32_t v1c_bs = 4096u, v1c_n = V1C_BLOCKS, v1c_pos[16], v1c_age[16], v1c_clock, v1c_reads;
 static uint8_t *v1c_get(uint32_t pos)                                                        /* the block that starts at file offset pos (a multiple of v1c_bs), read from the card on a miss; 0 when the read failed */
 {
     uint32_t victim = 0u;
