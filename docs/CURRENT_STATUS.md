@@ -4,6 +4,12 @@ Updated 2026-11-07. **What is true right now:** the newest section below (2026-1
 
 **Start here for the Gallery: `docs/handoffs/SESSION_HANDOFF_2026-11-17_GALLERY_RELEASE_AND_REPO.md` (where things are, what is verified, the ordered next steps, a resume prompt).**
 
+## Update 2026-11-22: Tau Gallery 1.0.0 and Converter 0.3.0 released
+
+**Released:** `v1.0.0` (the core, not a pre-release: bitstream m1g seed 1, CORE_VERSION 4D50331F, firmware 1.0.0) and `converter-v0.3.0` (pre-release; macOS dmg, Windows setup, Linux AppImage and deb; no Windows portable zip this time). Both downloaded back and equal to their SHA256SUMS.txt. Installed on the owner's card: DEV 038 (same source as the 1.0.0 firmware) and a library of 52 pictures in a folder tree.
+**New since 0.9.0:** pixel-doubled 2x and 4x zoom, one loader bar, the navigator in the zoom, the folder tree (converter copies nested; Settings, FOLDERS: flat or nested), histogram scales and the overlay page, splash screen, thumbnail fade, long file names shortened, a fix for large pictures (the tile index cache overran its buffer).
+**Open:** the app's mutation tests (57 of 382 stale, B-1145); the Dock is on but untried; the PSRAM cold UI image (the 128 KB link has about 340 bytes spare); notarising the macOS converter; skipping unchanged pictures when converting again (today every picture is converted and replaced); the social preview image is in `docs/images/` and has to be set by hand in the repository settings.
+
 ## Update 2026-11-19: DEV 026 on TauV (not yet run on a Pocket); the `gate` workflow is green (B-1132)
 DEV 025 was seen on a Pocket: rounded corners and frame, cover thumbnails and the Settings page are right. `Tau Gallery DEV 026` (installed on TauV) adds: X = next colour filter in the viewer, Y = turn clockwise (Start + X / Y mirror), a preview and the viewer's keys on the details pages, 256 level histograms from the decoder (32 from a thumbnail). Host-tested only. **CI:** `.github/workflows/gate.yml` runs `make gate-ci` (the gallery's tests, the driver's plain test and the tile, entropy and decoder RTL tests, about 11 minutes) and is green; `make gate` keeps the rest (DMA, unit, FIFO, mux and SoC RTL, the driver's mutants) for a Mac. Open: Pocket check of DEV 026 and new README screenshots; `test_make_gallery_release` and `test_install_dev_core` fail on a clean tree (not in `gate-ci`).
 
