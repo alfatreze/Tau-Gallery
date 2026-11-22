@@ -37,13 +37,14 @@ static inline const uint8_t *glb_cols(char c)                          /* the fi
     return blank;
 }
 static inline uint32_t glb_len(const char *s) { uint32_t n = 0; while (s[n]) n++; return n; }
-/* Is the pixel (x, y) of the text (x from the text's left edge, y from its top, 21 rows) white? */
-static inline int glb_on(const char *s, uint32_t x, uint32_t y)
+/* Is the pixel (x, y) of the text (x from the text's left edge, y from its top) white, the text drawn sc times the font's size (3 in the full-size plane, 1 on a plane that scan-out doubles)? */
+static inline int glb_on_g(const char *s, uint32_t x, uint32_t y, uint32_t sc)
 {
-    const uint32_t ci = x / GLB_ADV, within = (x % GLB_ADV) / GLB_SCALE, row = y / GLB_SCALE;
+    const uint32_t ci = x / (6u * sc), within = (x % (6u * sc)) / sc, row = y / sc;
     if (ci >= glb_len(s) || ci >= GLB_MAXCH || within >= 5u || row >= 7u) return 0;
     return (glb_cols(s[ci])[within] >> row) & 1u;
 }
+static inline int glb_on(const char *s, uint32_t x, uint32_t y) { return glb_on_g(s, x, y, GLB_SCALE); }
 /* One row of the text (ty 0..20) as the RGB888 bytes of the bar row's first GLB_PX pixels: white where the text is, black elsewhere. rb holds GLB_PX x 3 bytes. */
 static inline void glb_row(const char *s, uint32_t ty, uint8_t *rb)
 {
@@ -52,13 +53,14 @@ static inline void glb_row(const char *s, uint32_t ty, uint8_t *rb)
         rb[3u * x] = v; rb[3u * x + 1u] = v; rb[3u * x + 2u] = v;
     }
 }
-/* Word w (bytes 4 w .. 4 w + 3 of the row's RGB888 stream, the first byte lowest) of text row ty: the same bytes glb_row writes, without a buffer. */
-static inline uint32_t glb_word(const char *s, uint32_t ty, uint32_t w)
+/* Word w (bytes 4 w .. 4 w + 3 of the row's RGB888 stream, the first byte lowest) of text row ty, the text at scale sc and starting tx pixels in: the same bytes glb_row writes, without a buffer. */
+static inline uint32_t glb_word_g(const char *s, uint32_t ty, uint32_t w, uint32_t sc, uint32_t tx)
 {
     uint32_t v = 0;
-    for (uint32_t i = 0; i < 4u; i++) { const uint32_t x = (4u * w + i) / 3u; if (x >= GLB_TX && glb_on(s, x - GLB_TX, ty)) v |= 255u << (8u * i); }
+    for (uint32_t i = 0; i < 4u; i++) { const uint32_t x = (4u * w + i) / 3u; if (x >= tx && glb_on_g(s, x - tx, ty, sc)) v |= 255u << (8u * i); }
     return v;
 }
+static inline uint32_t glb_word(const char *s, uint32_t ty, uint32_t w) { return glb_word_g(s, ty, w, GLB_SCALE, GLB_TX); }
 static inline char *glb_cat(char *d, const char *s) { while (*s) *d++ = *s++; *d = 0; return d; }
 /* The names of the eight orientations (gallery_rot.h numbering). */
 static const char *const glb_orient[8] = { "UPRIGHT", "MIRRORED", "FLIPPED", "TURNED 180", "TRANSPOSED", "TURNED LEFT", "TURNED RIGHT", "ANTI-TRANSPOSED" };

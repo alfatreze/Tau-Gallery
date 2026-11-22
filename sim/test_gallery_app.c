@@ -26,6 +26,7 @@ static uint32_t rc_lead_n, rc_lead_bad; static struct { uint32_t src, len, dst, 
 static uint32_t reads_while_decoding;
 static uint32_t rc_prev, rc_starts, rc_retarget; static int32_t rc_bx, rc_by;
 static void ldr_lead_probe(void);
+static void ldr_lead_probe(void);
 static void ldr_probe(uint32_t dst);
 static void tile_read_probe(uint32_t off);
 static void zb_probe(void);
@@ -114,7 +115,7 @@ int slot_open_path(uint32_t slot, const char *path)
 }
 uint32_t _tag_start[1024];
 static uint32_t rc_prev, rc_starts, rc_retarget; static int32_t rc_bx, rc_by;
-static uint32_t ldr_chunks, ldr_max, ldr_prev, ldr_first_ok = 1u, ldr_mono = 1u, ldr_skip, ldr_opens;
+static uint32_t ldr_pct, ldr_chunks, ldr_max, ldr_prev, ldr_first_ok = 1u, ldr_mono = 1u, ldr_skip, ldr_opens;
 int slot_read_blocking(uint32_t slot, uint32_t off, uint32_t dst, uint32_t len, uint32_t to)
 {
     (void)to; reads++;
@@ -361,9 +362,9 @@ static int label_ok(const char *text)                                           
 static int label_view_ok(const char *text)                                                                         /* the bar on a zoom plane: it lies on the last 32 rows of what the screen reads (from the view registers), black with the text in white, pixel for pixel */
 {
     if (!lab_on || lab_stride != vstride || lab_base != vbase + lab_y0 * vstride) return 0;
-    for (uint32_t y = 0; y < GLB_H; y++) for (uint32_t x = 0; x < 800u / (uint32_t)z2_dbl; x++) for (uint32_t k = 0; k < 3u; k++) {
+    for (uint32_t y = 0; y < lab_h; y++) for (uint32_t x = 0; x < lab_w; x++) for (uint32_t k = 0; k < 3u; k++) {
         const uint32_t b = 3u * x + k, got = (mem[lab_base + y * lab_stride + b / 2u] >> (8u * (b & 1u))) & 255u;
-        const int on = y >= GLB_TY && y < GLB_TY + 21u && x >= GLB_TX && x < GLB_PX && glb_on(text, x - GLB_TX, y - GLB_TY);
+        const int on = y >= lab_ty && y < lab_ty + 7u * lab_sc && x >= lab_tx && x < GLB_PX && glb_on_g(text, x - lab_tx, y - lab_ty, lab_sc);
         if (got != (on ? 255u : 0u)) return 0;
     }
     return !strcmp(lab_last, text);
@@ -453,15 +454,15 @@ static int z2_view_ok(const char *fname, uint32_t W, uint32_t H, uint32_t L)    
 static uint32_t ph_stall, ph_stall_max, ph_jump_max, ph_axx, ph_axy; static int32_t ph_px = -1, ph_py = -1;
 static void ldr_probe(uint32_t dst)      /* a chunk of a picture landing: what the loader bar shows before it (a track at the start, a fill that only grows). An open that shows no progress (a picture change in the viewer) leaves the last bar full under the viewer: its chunks are not judged */
 {
-    uint32_t fill = 0u; for (uint32_t i = 0; i < 160u; i++) if (fb[178u * 512u + 120u + i] == th_role[TR_ACCENT]) fill++;
+    const uint32_t W = ldr_w, X = ldr_x, Y = ldr_y, H = ldr_h; uint32_t fill = 0u; for (uint32_t i = 0; i < W; i++) if (fb[Y * 512u + X + i] == th_role[TR_ACCENT]) fill++;
     if (dst == 0x40000000u) {
-        ldr_skip = fill == 160u; ldr_prev = 0u;
-        if (!ldr_skip) { const int track = fb[178u * 512u + 279u] == (uint16_t)((th_role[TR_TEXT_SECONDARY] >> 1) & 0x7BEFu); ldr_opens++; if (!(track && fill == 0u && fb[179u * 512u + 279u] == fb[178u * 512u + 279u] && fb[177u * 512u + 120u] != th_role[TR_ACCENT] && fb[180u * 512u + 120u] != th_role[TR_ACCENT])) ldr_first_ok = 0u; }
+        ldr_skip = !ldr_live || fill == W; ldr_prev = 0u;
+        if (!ldr_skip) { const int track = fb[Y * 512u + X + W - 1u] == (uint16_t)((th_role[TR_TEXT_SECONDARY] >> 1) & 0x7BEFu); ldr_opens++; if (!(track && fill == 0u && fb[(Y + H - 1u) * 512u + X + W - 1u] == fb[Y * 512u + X + W - 1u] && fb[(Y - 1u) * 512u + X] != th_role[TR_ACCENT] && fb[(Y + H) * 512u + X] != th_role[TR_ACCENT])) ldr_first_ok = 0u; }
     }
     if (ldr_skip) return;
     if (fill < ldr_prev) ldr_mono = 0u;
-    if (fill > 0u && (fb[180u * 512u + 120u] == th_role[TR_ACCENT] || fb[177u * 512u + 120u] == th_role[TR_ACCENT] || fb[179u * 512u + 120u] != th_role[TR_ACCENT])) ldr_mono = 0u;      /* the bar is two rows: 178 and 179, no more */
-    ldr_prev = fill; if (fill > ldr_max) ldr_max = fill; ldr_chunks++;
+    if (fill > 0u && (fb[(Y + H) * 512u + X] == th_role[TR_ACCENT] || fb[(Y - 1u) * 512u + X] == th_role[TR_ACCENT] || fb[(Y + H - 1u) * 512u + X] != th_role[TR_ACCENT])) ldr_mono = 0u;      /* the bar is two rows: 178 and 179, no more */
+    ldr_prev = fill; if (fill > ldr_max) ldr_max = fill; if (fill * 100u / W > ldr_pct) ldr_pct = fill * 100u / W; ldr_chunks++;
 }
 static void ldr_lead_probe(void)      /* a window has just been placed (a re-centre started, or the one being composed was aimed again): on an axis where the wanted corner is more than the follow slack (96) from the shown view, the window is placed for a pan one way or the other (the keys' way, else toward the wanted corner): GV_BEHIND to GV_BEHIND + 127 behind the view the firmware aimed at on one side, plus a little for the pixels the shown view has moved since. Not judged at an edge of the level */
 {
@@ -478,18 +479,19 @@ static void zb_probe(void)      /* the zoom's loader bar in the fit plane (rows 
     { static uint32_t last_t0; if (z_t0 != last_t0) { last_t0 = z_t0; zbp_prev = 0u; } }                      /* a zoom opened again (B goes back a level at a time now, so a level can open on the way to the fit view): its bar starts from 0 */
     const uint16_t ac = th_role[TR_ACCENT], tr = (uint16_t)((th_role[TR_TEXT_SECONDARY] >> 1) & 0x7BEFu);
     const uint8_t ar = (uint8_t)(((ac >> 11) & 31u) << 3), ag = (uint8_t)(((ac >> 5) & 63u) << 2), ab = (uint8_t)((ac & 31u) << 3), tR = (uint8_t)(((tr >> 11) & 31u) << 3), tG = (uint8_t)(((tr >> 5) & 63u) << 2), tB = (uint8_t)((tr & 31u) << 3);
-    uint32_t fill[2];
-    for (uint32_t r = 0; r < 2u; r++) {
+    uint32_t fill[8];
+    for (uint32_t r = 0; r < zb_rows; r++) {
         uint32_t f = 0u, inprefix = 1u;
-        for (uint32_t px = 0; px < 160u; px++) {
-            const uint32_t byte0 = ((358u + r) * 1200u + 480u) * 2u + px * 3u; uint8_t v[3];
-            for (uint32_t c = 0; c < 3u; c++) { const uint32_t bi = byte0 + c; v[c] = (uint8_t)(mem[0x200000u + bi / 2u] >> (8u * (bi & 1u))); }
+        for (uint32_t px = 0; px < zb_w; px++) {
+            const uint32_t byte0 = px * 3u; uint8_t v[3];
+            for (uint32_t c = 0; c < 3u; c++) { const uint32_t bi = byte0 + c; v[c] = (uint8_t)(mem[zb_view + r * zb_stride + bi / 2u] >> (8u * (bi & 1u))); }
             const int isf = v[0] == ar && v[1] == ag && v[2] == ab, ist = v[0] == tR && v[1] == tG && v[2] == tB;
             if (isf && inprefix) f++; else { inprefix = 0u; if (!ist) zbp_bad++; }
         }
         fill[r] = f;
     }
-    if (fill[0] != fill[1] || fill[0] < zbp_prev) zbp_bad++;
+    for (uint32_t r = 1; r < zb_rows; r++) if (fill[r] != fill[0]) zbp_bad++;
+    if (fill[0] < zbp_prev) zbp_bad++;
     zbp_prev = fill[0]; if (fill[0] > zbp_max) zbp_max = fill[0]; if (zl.layout == 0u && fill[0] > zbp_rmax) zbp_rmax = fill[0]; zbp_n++;
 }
 static uint32_t to_n, to_bad;
@@ -653,15 +655,15 @@ static void lib1_cp(int n)
     case 523: chk(523, pix_ctrl == 5u && pix_stores == 7680u && pix_bad == 0u && pix_tables_are(7u)); break;                                                            /* Left from NORMAL wraps to INVERT */
     case 451: { const uint32_t per = LG[1].cols * LG[1].rows; chk(451, level == 0u && gi == 1u && pp == per && sel == 48u && page == 2u && n_on_page == 20u && lib1_page_ok(1, 40, 20) && lib1_ring_ok(1, 20, 8) && !strcmp(last_text(), "49/60")); break; }   /* the grid size changed in Settings (4 x 3 to 5 x 4): the same picture stays selected, on its page of the new grid */
     case 490: chk(490, level == 0u && sel == 0u && lib1_page_ok(0, 0, 12)); clear_texts(); break;
-    case 491: dump_fb("info"); chk(491, said("DETAILS  INFO") && said("Canon EOS R5") && said("RF24-70mm F2.8") && said("2024-05-17 13:04") && said("JPEG") && said("1/3") && said("Img 00") && fb[9u * 512u + 332u] == th_role[TR_ACCENT] && fb[9u * 512u + 340u] == th_role[TR_TEXT_SECONDARY] && fb[9u * 512u + 348u] == th_role[TR_TEXT_SECONDARY] && said("IN THE PICTURE") && said("X  NEXT COLOUR FILTER") && said("Y  TURN RIGHT") && said("L1  CROP MASK") && preview_ok(thumb1_of(sel), 168u)); clear_texts(); break;      /* Select on a picture with every detail (the three dots: the first, current page, in the accent colour): INFO has FORMAT, CAMERA, LENS, TAKEN; three pages */
-    case 492: chk(492, said("DETAILS  SHOT") && said("1/250 S") && said("F/2.8") && said("400") && said("35 MM") && said("2/3") && !said("Canon")); clear_texts(); break;      /* Right: the SHOT page */
-    case 493: dump_fb("hist_thumb"); chk(493, said("DETAILS  HISTOGRAMS") && said("3/3") && det_hist.n == 96u * 96u && det_hist.is_fine == 0u && said("LEVELS") && said("32") && said("PIXELS") && said("9216") && preview_ok(thumb1_of(sel), 26u)); clear_texts(); break;                                      /* Right: the histograms count every pixel of the square thumbnail */
-    case 494: chk(494, said("DETAILS  INFO") && said("1/3")); clear_texts(); break;                                                                       /* Right wraps to the first page */
-    case 495: chk(495, said("DETAILS  HISTOGRAMS") && said("3/3")); clear_texts(); break;                                                                  /* Left from the first wraps to the last */
+    case 491: dump_fb("info"); chk(491, said("DETAILS  INFO") && said("Canon EOS R5") && said("RF24-70mm F2.8") && said("2024-05-17 13:04") && said("JPEG") && said("1/4") && said("Img 00") && fb[9u * 512u + 324u] == th_role[TR_ACCENT] && fb[9u * 512u + 332u] == th_role[TR_TEXT_SECONDARY] && fb[9u * 512u + 348u] == th_role[TR_TEXT_SECONDARY] && said("IN THE PICTURE") && said("X  NEXT COLOUR FILTER") && said("Y  TURN RIGHT") && said("L1  CROP MASK") && preview_ok(thumb1_of(sel), 168u)); clear_texts(); break;      /* Select on a picture with every detail (the three dots: the first, current page, in the accent colour): INFO has FORMAT, CAMERA, LENS, TAKEN; three pages */
+    case 492: chk(492, said("DETAILS  SHOT") && said("1/250 S") && said("F/2.8") && said("400") && said("35 MM") && said("2/4") && !said("Canon")); clear_texts(); break;      /* Right: the SHOT page */
+    case 493: dump_fb("hist_thumb"); chk(493, said("DETAILS  HISTOGRAMS") && said("3/4") && det_hist.n == 96u * 96u && det_hist.is_fine == 0u && said("LEVELS") && said("32") && said("PIXELS") && said("9216") && preview_ok(thumb1_of(sel), 26u)); clear_texts(); break;                                      /* Right: the histograms count every pixel of the square thumbnail */
+    case 494: chk(494, said("DETAILS  INFO") && said("1/4")); clear_texts(); break;                                                                       /* Right twice (the overlay page, then) wraps to the first page */
+    case 495: chk(495, said("DETAILS  HISTOGRAMS") && said("3/4")); clear_texts(); break;                                                                  /* Left from the first wraps to the last */
     case 496: chk(496, level == 0u && sel == 0u && lib1_page_ok(0, 0, 12) && !said("DETAILS")); clear_texts(); break;                                         /* B: the grid again */
-    case 497: chk(497, said("DETAILS  INFO") && said("PNG") && !said("CAMERA") && !said("LENS") && !said("TAKEN") && said("1/2") && said("Img 01")); clear_texts(); break;      /* a picture that has only its format: FORMAT and nothing else, two pages (no SHOT) */
-    case 498: chk(498, said("DETAILS  HISTOGRAMS") && said("2/2")); clear_texts(); break;
-    case 499: chk(499, said("DETAILS  INFO") && !said("FORMAT") && !said("CAMERA") && !said("TAKEN") && said("1/2") && said("Img 02")); clear_texts(); break;      /* a picture with no details: the four rows only */
+    case 497: chk(497, said("DETAILS  INFO") && said("PNG") && !said("CAMERA") && !said("LENS") && !said("TAKEN") && said("1/3") && said("Img 01")); clear_texts(); break;      /* a picture that has only its format: FORMAT and nothing else, two pages (no SHOT) */
+    case 498: chk(498, said("DETAILS  HISTOGRAMS") && said("2/3")); clear_texts(); break;
+    case 499: chk(499, said("DETAILS  INFO") && !said("FORMAT") && !said("CAMERA") && !said("TAKEN") && said("1/3") && said("Img 02")); clear_texts(); break;      /* a picture with no details: the four rows only */
     case 421: chk(421, level == 0u && cur_first == 0u && cur_count == 20u && sel == 5u && !strcmp(last_text(), "6/20") && lib1_page_ok(0, 0, 12)); break;                  /* resume on a picture of the FIRST folder */
     case 422: chk(422, level == 0u && cur_first == 23u && cur_count == 13u && sel == 30u && page == 0u && !strcmp(last_text(), "8/13") && lib1_page_ok(0, 23, 12)); break;      /* resume on a picture of the LAST folder */
     case 420: chk(420, level == 0u && cur_first == 20u && cur_count == 3u && sel == 21u && !strcmp(last_text(), "2/3") && lib1_page_ok(0, 20, 3)); break;      /* the resume scenario: boots inside the folder of the saved picture, on it */
@@ -819,8 +821,8 @@ static void checkpoint(int n)
     case 510: chk(510, !lab_on && mask_i == 1u && mask_p == 0u && plane_mask_ok("v00.rgb", 0u, 40u, 0u, 760u, 720u)); break;                                                         /* Start on the square changes nothing */
     case 511: chk(511, mask_i == 0u && zk >= 0 && rot_o == 0u); break;                                                                 /* A (zoom) with a mask on the upright picture: the mask is dropped and the 1:1 level is shown */
     case 530: chk(530, vbase == GAL_PLANE_BASE && pic.rw > 100u && pic.rw < 800u + 1u && hs_starts >= 1u && !(hs_en & 1u)); clear_texts(); break;                       /* the viewer decoded picture 0 and counted it: the unit's origin was written per tile, counting is off again after the decode */
-    case 531: dump_fb("hist_decoder"); chk(531, said("DETAILS  HISTOGRAMS") && said("2/2") && said("COUNTED FROM THE DECODED PICTURE") && !said("FROM THE THUMBNAIL") && hist_dec_ok() && hist_fine_screen_ok() && said("256") && said("LEVELS") && det_hist.n == (uint32_t)pic.rw * pic.rh); clear_texts(); break;
-    case 532: chk(532, said("DETAILS  HISTOGRAMS") && said("2/2") && said("FROM THE THUMBNAIL") && !said("COUNTED FROM") && det_hist.n <= 96u * 72u); clear_texts(); break;     /* a picture that was not decoded in the viewer: the thumbnail's count, said so */
+    case 531: dump_fb("hist_decoder"); chk(531, said("DETAILS  HISTOGRAMS") && said("2/3") && said("COUNTED FROM THE DECODED PICTURE") && !said("FROM THE THUMBNAIL") && hist_dec_ok() && hist_fine_screen_ok() && said("256") && said("LEVELS") && det_hist.n == (uint32_t)pic.rw * pic.rh); clear_texts(); break;
+    case 532: chk(532, said("DETAILS  HISTOGRAMS") && said("2/3") && said("FROM THE THUMBNAIL") && !said("COUNTED FROM") && det_hist.n <= 96u * 72u); clear_texts(); break;     /* a picture that was not decoded in the viewer: the thumbnail's count, said so */
     case 533: chk(533, said("DETAILS  HISTOGRAMS") && said("COUNTED FROM THE DECODED PICTURE") && hist_dec_ok() && det_hist.n == (uint32_t)pic.rw * pic.rh && det_hist.n < 800u * 720u); clear_texts(); break;      /* v01 (500 x 300, black bars on the fit canvas): only the picture's rectangle was counted */
     case 534: chk(534, said("DETAILS  HISTOGRAMS") && said("FROM THE THUMBNAIL") && !said("COUNTED FROM") && sel == 1u); clear_texts(); break;      /* v01 was counted, then v11's decode counted 20 tiles and failed: the counters are not v01's any more, so its details fall back to the thumbnail */
     case 540: chk(540, hid_pairs() && rot_o == 1u && mask_i == 0u && rot_plane_ok("v00.rgb", 1u, 800u, 720u) && vbase == GAL_ROT_BASE); break;                                       /* Start + X: mirrored left-right (the view is the rotated plane, no pan needed) */
@@ -850,7 +852,7 @@ static void checkpoint(int n)
     case 600: fail_pic_reads = 2; pass_pic_reads = 0; break;                                                                                                                                           /* the card does not answer for two reads while the 2x level loads (a screenshot): the loader tries again, the view still comes up */
     case 601: dump_fb("hist_linear"); chk(601, hm_mode == 1u && said("LINEAR") && said("MEAN")); clear_texts(); break;                                                                                                          /* A on the histogram page: the next height scale (LINEAR), the page drawn again with the mean */
     case 603: chk(603, hm_mode == 2u && said("LOG")); clear_texts(); break;
-    case 602: dump_fb("hist_overlay"); chk(602, hv_overlay == 1u && hm_mode == 0u && said("A SCALE  X PLOTS  B BACK")); clear_texts(); break;                                                                                           /* A back to SQRT and X: the overlay (its own footer) */
+    case 602: dump_fb("hist_overlay"); chk(602, hm_mode == 0u && said("DETAILS  HISTOGRAM OVERLAY") && said("A SCALE   LEFT RIGHT PAGE   B BACK") && said("GREEN") && said("SQRT")); clear_texts(); break;                                                                                           /* A back to SQRT and Right: the overlay page (its own title, the names under the plot) */
     case 595: chk(595, said("DETAILS  INFO") && vid_bus == 0u); clear_texts(); break;
     case 596: chk(596, said("DETAILS  HISTOGRAMS")); clear_texts(); break;
     case 597: chk(597, vid_bus == 1u && z2_shown && z2_view_ok("v00_full.rgb", 1000u, 900u, 2u)); break;
@@ -874,11 +876,11 @@ static void checkpoint(int n)
     case 481: chk(481, rot_o == 0u && vbase == GAL_PLANE_BASE); break;                                                                 /* a version 0 picture cannot be turned: X and Y do nothing */
     case 300: chk(300, thumbs_on_screen(0, 16u) && !strcmp(last_text(), "1/18")); break;                                                                               /* the details scenario: the grid, picture 1 selected */
     case 310: fail_idx = 1u; clear_texts(); break;
-    case 311: chk(311, said("DETAILS  HISTOGRAMS") && count_text("NOT COMPUTED YET") == 5 && !said("FROM THE THUMBNAIL") && said("2/2")); fail_idx = 0u; clear_texts(); break;      /* the thumbnail cannot be read: the histograms page still opens, the frames say so */
+    case 311: chk(311, said("DETAILS  HISTOGRAMS") && count_text("NOT COMPUTED YET") == 5 && !said("FROM THE THUMBNAIL") && said("2/3")); fail_idx = 0u; clear_texts(); break;      /* the thumbnail cannot be read: the histograms page still opens, the frames say so */
     case 312: chk(312, thumbs_on_screen(0, 16u) && sel == 1u); break;
     case 309: chk(309, vid_bus == 1u && plane_is(3) && sel == 3u && !said("DETAILS")); break;                                                                  /* Select + Right together is the next picture, not the page */
-    case 301: chk(301, said("DETAILS  INFO") && said("NAME") && said("Picture 00") && said("1 OF 18") && said("SIZE") && said("FILE") && !said("CAMERA") && !said("NOT READ YET") && said("1/2") && said("B OR SELECT BACK") && !thumbs_on_screen(0, 16u)); clear_texts(); break;      /* Select on the grid: the INFO page of the selected picture (a version 0 index has no details: four rows), two pages */
-    case 313: chk(313, said("DETAILS  HISTOGRAMS") && said("2/2") && !said("NOT COMPUTED YET") && said("FROM THE THUMBNAIL") && hist_screen_ok(0u) && det_hist.n < 6912u && said("LUMA") && said("RED") && said("GREEN") && said("BLUE")); clear_texts(); break;      /* Right: the histograms page, counted from the thumbnail */
+    case 301: chk(301, said("DETAILS  INFO") && said("NAME") && said("Picture 00") && said("1 OF 18") && said("SIZE") && said("FILE") && !said("CAMERA") && !said("NOT READ YET") && said("1/3") && said("B OR SELECT BACK") && !thumbs_on_screen(0, 16u)); clear_texts(); break;      /* Select on the grid: the INFO page of the selected picture (a version 0 index has no details: four rows), two pages */
+    case 313: chk(313, said("DETAILS  HISTOGRAMS") && said("2/3") && !said("NOT COMPUTED YET") && said("FROM THE THUMBNAIL") && hist_screen_ok(0u) && det_hist.n < 6912u && said("LUMA") && said("RED") && said("GREEN") && said("BLUE")); clear_texts(); break;      /* Right: the histograms page, counted from the thumbnail */
     case 302: chk(302, thumbs_on_screen(0, 16u) && !strcmp(last_text(), "1/18") && !said("DETAILS")); clear_texts(); break;                                                                  /* B: the grid again, nothing changed */
     case 303: chk(303, said("DETAILS  INFO") && said("Picture 01") && said("2 OF 18") && !said("Picture 00")); clear_texts(); break;                                               /* Right, Select: the next picture's INFO page */
     case 314: chk(314, said("DETAILS  HISTOGRAMS") && hist_screen_ok(1u)); clear_texts(); break;
@@ -908,7 +910,7 @@ static void checkpoint(int n)
     case 19: chk(27, said("ADD PHOTOS") && said("1/3") && !said("MENU")); clear_texts(); break;                                                                  /* Down, A: Help page 1 of 3 */
     case 20: chk(28, said("WHERE THINGS ARE") && said("2/3") && !said("ADD PHOTOS")); clear_texts(); break;                                                      /* Down turns the page */
     case 22: chk(30, said("INFO") && said("4D50331B") && said("800 X 720") && said("NONE YET") && said("LAST ERROR") && said("L1 LOADED 1 SAVED 0")); snprintf(want, sizeof want, "%u", count); chk(31, said(want)); clear_texts(); break;    /* Info before any picture was opened */
-    case 23: chk(32, said("4D50331B") && count_text("NONE YET") == 11 && said(" MS") && said("432128 WORDS, 0 LOST")); chk(33, said("NONE") && !said("FAILED")); chk(44, said("L1 LOADED 1 SAVED 1")); chk(125, ldr_opens > 0u && ldr_chunks > 0u && ldr_first_ok && ldr_mono && ldr_max >= 100u && ldr_max < 160u); clear_texts(); break;   /* Info after viewing pictures: the last landing */
+    case 23: chk(32, said("4D50331B") && count_text("NONE YET") == 11 && said(" MS") && said("432128 WORDS, 0 LOST")); chk(33, said("NONE") && !said("FAILED")); chk(44, said("L1 LOADED 1 SAVED 1")); chk(125, ldr_opens > 0u && ldr_chunks > 0u && ldr_first_ok && ldr_mono && ldr_pct >= 62u && ldr_pct < 100u); clear_texts(); break;   /* Info after viewing pictures: the last landing */
     case 24: chk(34, said("OPEN FAILED") && said("0 WORDS, 0 LOST")); clear_texts(); break;                                                                          /* Info after a failed open: the error, and no landing counts carried over */
     case 25: chk(35, said("RESUME LAST PICTURE") && said("ON") && !said("OFF") && said("GRID SIZE") && said("4 X 3") && said("DITHER") && said("ORDERED")); clear_texts(); break;                                                                    /* Settings page, resume on (the default) */
     case 26: chk(36, said("OFF") && (setw[2] & 1u) == 0u && set_writes == 0); clear_texts(); break;                                                                   /* toggled off: shown, but not yet written */
@@ -971,7 +973,7 @@ static void checkpoint(int n)
     case 110: { int32_t x = -1, y = -1; chk(104, view_matches("z00.tgy", &x, &y) && x == 0 && y == 0); } break;                                                              /* 20 polls with Right held and no frame elapsed: the view has not moved (a step is a frame, not a pass) */
     case 111: clk_step = 50u; poll_adv = 1111111u; blit_cost = 20000u; break;
     case 112: chk(105, fit_or_exact("z04.tgy")); break;                                                                                                                      /* Down held from the first instant, loading under way: fit plane or an exact zoom view, never unloaded rows */
-    case 103: { int32_t x = -1, y = -1; chk(102, sel == 5u && tile_view_matches("z05.tgy", &x, &y) && x == 748 && y == 390); chk(106, blit_visible == 0u && blit_bad == 0u && tile_reads >= 40u && zoom_max_len <= 49152u && zoom_max_rs <= 1u && blit_max_pass > 0u && blit_max_pass <= 68u);      /* and at most 64 Talos commands between two key polls */
+    case 103: { int32_t x = -1, y = -1; chk(102, sel == 5u && tile_view_matches("z05.tgy", &x, &y) && x == 748 && y == 390); chk(106, blit_visible == 0u && blit_bad == 0u && tile_reads >= 40u && zoom_max_len <= 49152u && zoom_max_rs <= 1u && blit_max_pass > 0u && blit_max_pass <= 130u);      /* and at most 64 Talos commands between two key polls, plus the 60 that save or restore the loader bar's six rows (ten a row: a command is 127 halfwords at most, a few microseconds) */
      } break;      /* a picture whose only zoom level is tiles: A enters it; 48 tiles landed, copied by Talos into the window, never into the displayed area, no command over 48 KB */
     case 122: { int32_t x = -1, y = -1; chk(115, tile_view_matches("z04.tgy", &x, &y) && x == 1200 && y == 840); } break;                                                          /* A from the fit view takes the last stop: the tile 1:1 level, the centre kept (400, 300 of fit is 1,600, 1,200) */
     case 123: fail_pic_reads = 1; pass_pic_reads = 0; break;                                                                                                                 /* one tile read fails once */
@@ -1087,14 +1089,14 @@ int main(int argc, char **argv)
     }
     if (argc > 2 && !strcmp(argv[2], "v1hist")) {                                                            /* the histograms of a version 1 picture counted by the decoder's unit while the viewer decoded it (v00), and the thumbnail's for one that was not (v01) */
         caps_val = 0x80000007u;
-        const uint32_t SH[] = { KEY_A, 0, KEY_B, 0, KEY_A, 0, CP(530), KEY_SELECT, 0, KEY_RIGHT, 0, CP(531), KEY_A, 0, CP(601), KEY_A, 0, CP(603), KEY_A, 0, KEY_X, 0, CP(602), KEY_X, 0, KEY_B, 0, KEY_B, 0, KEY_RIGHT, 0, KEY_A, 0, KEY_SELECT, 0, KEY_RIGHT, 0, CP(533), KEY_B, 0, KEY_B, 0, KEY_RIGHT, 0, KEY_SELECT, 0, KEY_RIGHT, 0, CP(532), KEY_B, 0, KEY_LEFT, 0, KEY_LEFT, 0, KEY_LEFT, 0, KEY_A, 0, KEY_B, 0, KEY_RIGHT, 0, KEY_RIGHT, 0, KEY_SELECT, 0, KEY_RIGHT, 0, CP(534), END };
+        const uint32_t SH[] = { KEY_A, 0, KEY_B, 0, KEY_A, 0, CP(530), KEY_SELECT, 0, KEY_RIGHT, 0, CP(531), KEY_A, 0, CP(601), KEY_A, 0, CP(603), KEY_A, 0, KEY_RIGHT, 0, CP(602), KEY_LEFT, 0, KEY_B, 0, KEY_B, 0, KEY_RIGHT, 0, KEY_A, 0, KEY_SELECT, 0, KEY_RIGHT, 0, CP(533), KEY_B, 0, KEY_B, 0, KEY_RIGHT, 0, KEY_SELECT, 0, KEY_RIGHT, 0, CP(532), KEY_B, 0, KEY_LEFT, 0, KEY_LEFT, 0, KEY_LEFT, 0, KEY_A, 0, KEY_B, 0, KEY_RIGHT, 0, KEY_RIGHT, 0, KEY_SELECT, 0, KEY_RIGHT, 0, CP(534), END };
         nscript = (int)(sizeof SH / sizeof SH[0]); memcpy(script, SH, sizeof SH);
         if (!setjmp(done)) gallery_app_main();
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
     }
     if (argc > 2 && !strcmp(argv[2], "lib1details")) {                                                       /* the details pages of a version 1 library: every detail, only the format, none */
         lib1_on = 1;
-        const uint32_t SX[] = { KEY_A, 0, CP(490), KEY_SELECT, 0, CP(491), KEY_RIGHT, 0, CP(492), KEY_RIGHT, 0, CP(493), KEY_RIGHT, 0, CP(494), KEY_LEFT, 0, CP(495), KEY_B, 0, CP(496), KEY_RIGHT, 0, KEY_SELECT, 0, CP(497), KEY_RIGHT, 0, CP(498), KEY_B, 0, KEY_RIGHT, 0, KEY_SELECT, 0, CP(499), END };
+        const uint32_t SX[] = { KEY_A, 0, CP(490), KEY_SELECT, 0, CP(491), KEY_RIGHT, 0, CP(492), KEY_RIGHT, 0, CP(493), KEY_RIGHT, 0, KEY_RIGHT, 0, CP(494), KEY_LEFT, 0, KEY_LEFT, 0, CP(495), KEY_B, 0, CP(496), KEY_RIGHT, 0, KEY_SELECT, 0, CP(497), KEY_RIGHT, 0, CP(498), KEY_B, 0, KEY_RIGHT, 0, KEY_SELECT, 0, CP(499), END };
         nscript = (int)(sizeof SX / sizeof SX[0]); memcpy(script, SX, sizeof SX);
         if (!setjmp(done)) gallery_app_main();
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;

@@ -172,11 +172,13 @@ static uint32_t zb_on, zb_px;                       /* the zoom's loader bar is 
 #define LDR_W 160u
 #define LDR_H 2u
 #define LDR_TRACK ((uint16_t)((DIM >> 1) & 0x7BEFu))     /* the track: the secondary text colour at half brightness */
+static uint32_t ldr_live;                                                                                  /* 1 while the picture being opened shows its progress */
+static uint32_t ldr_x = LDR_X, ldr_y = LDR_Y, ldr_w = LDR_W, ldr_h = LDR_H;                              /* where the bar is: the middle of the screen, or (a picture opened from the grid) centred on its thumbnail, smaller */
 static void loader_bar(uint32_t done, uint32_t total)
 {
-    const uint32_t w = total ? (uint32_t)((uint64_t)done * LDR_W / total) : 0u;
-    gfx_rect(LDR_X, LDR_Y, LDR_W, LDR_H, LDR_TRACK);
-    if (w) gfx_rect(LDR_X, LDR_Y, w > LDR_W ? LDR_W : w, LDR_H, ACC);
+    const uint32_t w = total ? (uint32_t)((uint64_t)done * ldr_w / total) : 0u;
+    gfx_rect(ldr_x, ldr_y, ldr_w, ldr_h, LDR_TRACK);
+    if (w) gfx_rect(ldr_x, ldr_y, w > ldr_w ? ldr_w : w, ldr_h, ACC);
 }
 /* One landing of the canvas into the plane (restarts the landing counters). Returns 0, or 5 when a card read failed. */
 static int land_canvas(const gt_info_t *t, uint32_t total, int show_progress)
@@ -296,23 +298,23 @@ static void show_view(void)                                                     
  * landing window) and back when the bar goes: at the next key press or after two seconds. ---- */
 #define GAL_LABSAVE 0x3D3000u                    /* halfword address of the 32 saved rows (38,400 halfwords): after the black plane (which ends at 0x3D2F00), before the landing window at 0x400000 */
 static char lab_last[32];                                                                             /* the text last written (for the host test) */
-static uint32_t lab_on, lab_t0, lab_base, lab_view, lab_stride = GAL_LINE_WORDS16, lab_draws, lab_y0 = GLB_Y0;       /* 1 while the bar is on the plane; when it went up; the plane address of its first row; of the first row on the screen; a row of the plane in halfwords; the times the text was written */
+static uint32_t lab_on, lab_t0, lab_base, lab_view, lab_stride = GAL_LINE_WORDS16, lab_draws, lab_y0 = GLB_Y0, lab_h = GLB_H, lab_sc = GLB_SCALE, lab_tx = GLB_TX, lab_ty = GLB_TY;       /* 1 while the bar is on the plane; when it went up; the plane address of its first row; of the first row on the screen; a row of the plane in halfwords; the times the text was written */
 static uint32_t lab_w = GT_CANVAS_W;                                                                   /* the pixels of a bar row that the screen reads (400 when the plane is doubled): only these are saved and written, so a tile decoded beside the view later is never overwritten by the restore */
 static void lab_copy(int back)
 {
     const uint32_t rowhw = lab_w * 3u / 2u;
-    for (uint32_t r = 0; r < GLB_H; r++) for (uint32_t off = 0; off < rowhw; off += 127u) { const uint32_t n = rowhw - off < 127u ? rowhw - off : 127u; if (back) gfx_blit_raw(GAL_LABSAVE + r * rowhw, lab_base + r * lab_stride, off, off, n); else gfx_blit_raw(lab_base + r * lab_stride, GAL_LABSAVE + r * rowhw, off, off, n); }
+    for (uint32_t r = 0; r < lab_h; r++) for (uint32_t off = 0; off < rowhw; off += 127u) { const uint32_t n = rowhw - off < 127u ? rowhw - off : 127u; if (back) gfx_blit_raw(GAL_LABSAVE + r * rowhw, lab_base + r * lab_stride, off, off, n); else gfx_blit_raw(lab_base + r * lab_stride, GAL_LABSAVE + r * rowhw, off, off, n); }
     gfx_fence();
 }
 static void lab_clear(void) { if (!lab_on) return; lab_copy(1); lab_on = 0u; }
 static void lab_draw(const char *text)                                                               /* the bar black and the text in it, on the plane the bar was put on (no copy: the rows under it are already saved) */
 {
     for (uint32_t i = 0; i < 64u; i++) gfx_mb_write(GAL_ROTZERO + 2u * i, 0u);
-    mask_black_s(lab_view, lab_stride, 0u, lab_w, lab_y0, lab_y0 + GLB_H); gfx_fence();           /* the whole bar black */
-    for (uint32_t sr = 0; sr < 7u; sr++) {                                                               /* each row of the font is three rows of the plane */
-        for (uint32_t k = 0; k < GLB_SCALE; k++) {
-            const uint32_t row = lab_base + (GLB_TY + sr * GLB_SCALE + k) * lab_stride;
-            for (uint32_t w = 0; w < (lab_w < GLB_PX ? lab_w : GLB_PX) * 3u / 4u; w++) gfx_mb_write(row + 2u * w, glb_word(text, sr * GLB_SCALE, w));      /* four bytes of the row at a time, no row buffer */
+    mask_black_s(lab_view, lab_stride, 0u, lab_w, lab_y0, lab_y0 + lab_h); gfx_fence();           /* the whole bar black */
+    for (uint32_t sr = 0; sr < 7u; sr++) {                                                               /* each row of the font is lab_sc rows of the plane */
+        for (uint32_t k = 0; k < lab_sc; k++) {
+            const uint32_t row = lab_base + (lab_ty + sr * lab_sc + k) * lab_stride;
+            for (uint32_t w = 0; w < (lab_w < GLB_PX ? lab_w : GLB_PX) * 3u / 4u; w++) gfx_mb_write(row + 2u * w, glb_word_g(text, sr * lab_sc, w, lab_sc, lab_tx));      /* four bytes of the row at a time, no row buffer */
         }
     }
     gfx_fence(); lab_t0 = cycles(); lab_draws++;
@@ -321,7 +323,8 @@ static void lab_draw(const char *text)                                          
 static void lab_show_at(const char *text, uint32_t view, uint32_t stride, uint32_t rows)             /* the bar over the last 32 rows of the screen's picture: view = the plane address of its first row on the screen, stride = a plane row, rows = the rows the screen shows of the plane (720, or 360 when the core doubles pixels) */
 {
     lab_clear();
-    lab_view = view; lab_stride = stride; lab_y0 = rows - GLB_H; lab_w = GT_CANVAS_W * rows / GT_CANVAS_H; lab_base = view + lab_y0 * stride;
+    lab_view = view; lab_stride = stride; lab_w = GT_CANVAS_W * rows / GT_CANVAS_H; { const uint32_t full = rows >= GT_CANVAS_H; lab_sc = full ? GLB_SCALE : 1u; lab_h = full ? GLB_H : GLB_H / 2u; lab_tx = full ? GLB_TX : GLB_TX / 2u; lab_ty = full ? GLB_TY : 4u; }       /* a plane that scan-out doubles shows the bar at the same size as the full one, so its text is the font's own size (3 times the pixels would be twice too big) */
+    lab_y0 = rows - lab_h; lab_base = view + lab_y0 * stride;
     lab_copy(0); lab_draw(text); lab_on = 1u;
 }
 static void lab_show(const char *text)
@@ -374,6 +377,7 @@ static int open_picture(uint32_t i, int show_progress)
 {
     char path[GX_PATH_MAX + 2u]; path[0] = '/';
     { const char *s = EN(i).path; uint32_t n = 0; while (s[n] && n < GX_PATH_MAX) { path[1u + n] = s[n]; n++; } path[1u + n] = 0; }
+    ldr_live = show_progress ? 1u : 0u;
     if (show_progress) { say("OPENING", ACC); loader_bar(0u, 1u); }
     if (!slot_open_path(SLOT_PIC, path)) return 1;
     if (!read_bytes(SLOT_PIC, 0u, 4096u, h4) && !read_bytes(SLOT_PIC, 0u, 4096u, h4)) return 2;      /* one retry of a failed read: a transient card error should not cost the picture */
@@ -504,12 +508,11 @@ static void zoom_off(int k, int32_t *ox, int32_t *oy)                           
 }
 static uint32_t zoom_scale(int k) { return k < 0 ? (uint32_t)(((uint64_t)pic.rw * 65536u + pic.width / 2u) / pic.width) : zs[k].scale_q16; }
 /* The loader bar of a zoom: the viewer plane has no overlay, so while the fit view stays up and the zoom's first view loads, a bar of the same look (160 x 2, a dark track and an ACC fill) is written into the middle of the fit plane (rows 358 and 359) and the picture's own pixels there are saved first and copied back as soon as the first view is on screen or the zoom is left. */
-#define ZB_Y 358u
-#define ZB_HW0 480u                              /* pixel 320 of a plane row: 320 x 3 / 2 halfwords */
-#define ZB_HW 240u                               /* 160 pixels */
-#define GAL_BARSAVE (GAL_STAGE + 0x8000u)        /* the saved pixels of the two rows, past the staging tile */
-static uint32_t zb_view = GAL_PLANE_BASE, zb_stride = GAL_LINE_WORDS16;                                  /* the plane the bar is on (the fit plane; a 2x or 4x level's loader puts it on the plane on the screen) */
-static uint32_t zb_row(uint32_t r) { return zb_view + (ZB_Y + r) * zb_stride + ZB_HW0; }
+#define GAL_BARSAVE (GAL_STAGE + 0x8000u)        /* the saved pixels of the bar's rows (the map's own save area is the first 0x4000 halfwords of it) */
+#define ZB_SAVE (GAL_BARSAVE + 0x4000u)
+#define ZB_ROWS 6u                               /* the bar is 6 rows of the screen, the whole width, at the top: the same everywhere in the viewer (a plane that scan-out doubles: 3 rows of 400) */
+static uint32_t zb_view = GAL_PLANE_BASE, zb_stride = GAL_LINE_WORDS16, zb_w = GT_CANVAS_W, zb_rows = ZB_ROWS;                          /* the plane the bar is on (the fit plane; a 2x or 4x level's loader puts it on the plane on the screen), its width in pixels and its rows */
+static uint32_t zb_row(uint32_t r) { return zb_view + r * zb_stride; }
 static uint16_t zb_half(uint32_t h, uint32_t fillpx)       /* halfword h of the bar's row: two bytes of the R, G, B stream */
 {
     const uint16_t tr = LDR_TRACK, ac = ACC; uint32_t v = 0;
@@ -522,22 +525,23 @@ static uint16_t zb_half(uint32_t h, uint32_t fillpx)       /* halfword h of the 
 }
 static void zb_write(uint32_t from_px, uint32_t to_px, uint32_t fillpx)     /* the halfword pairs that cover pixels from_px to to_px, written with the fill up to fillpx */
 {
-    uint32_t h0 = (from_px * 3u / 2u) & ~1u, h1 = ((to_px * 3u + 1u) / 2u + 1u) & ~1u; if (h1 > ZB_HW) h1 = ZB_HW;
-    for (uint32_t r = 0; r < 2u; r++) for (uint32_t h = h0; h < h1; h += 2u) gfx_mb_write(zb_row(r) + h, (uint32_t)zb_half(h, fillpx) | ((uint32_t)zb_half(h + 1u, fillpx) << 16));
+    const uint32_t hw = zb_w * 3u / 2u; uint32_t h0 = (from_px * 3u / 2u) & ~1u, h1 = ((to_px * 3u + 1u) / 2u + 1u) & ~1u; if (h1 > hw) h1 = hw;
+    for (uint32_t r = 0; r < zb_rows; r++) for (uint32_t h = h0; h < h1; h += 2u) gfx_mb_write(zb_row(r) + h, (uint32_t)zb_half(h, fillpx) | ((uint32_t)zb_half(h + 1u, fillpx) << 16));
 }
-static void zb_copy(int back)                              /* the two rows to the save area (back = 0) or from it */
+static void zb_copy(int back)                              /* the bar's rows to the save area (back = 0) or from it */
 {
-    for (uint32_t r = 0; r < 2u; r++) for (uint32_t k = 0; k < 2u; k++) {
-        const uint32_t o = k * (ZB_HW / 2u), save = GAL_BARSAVE + r * ZB_HW;
-        if (back) gfx_blit_raw(save, zb_row(r), o, o, ZB_HW / 2u); else gfx_blit_raw(zb_row(r), save, o, o, ZB_HW / 2u);
+    const uint32_t hw = zb_w * 3u / 2u;
+    for (uint32_t r = 0; r < zb_rows; r++) for (uint32_t o = 0; o < hw; o += 120u) {
+        const uint32_t n = hw - o < 120u ? hw - o : 120u, save = ZB_SAVE + r * hw;
+        if (back) gfx_blit_raw(save, zb_row(r), o, o, n); else gfx_blit_raw(zb_row(r), save, o, o, n);
     }
     gfx_fence();
 }
-static void zb_begin(void) { if (zb_on) return; zb_copy(0); zb_on = 1u; zb_px = 0u; zb_write(0u, 160u, 0u); }
+static void zb_begin(void) { if (zb_on) return; zb_w = view_dbl_on ? GT_CANVAS_W / 2u : GT_CANVAS_W; zb_rows = view_dbl_on ? ZB_ROWS / 2u : ZB_ROWS; zb_copy(0); zb_on = 1u; zb_px = 0u; zb_write(0u, zb_w, 0u); }
 static void zb_set(uint32_t done, uint32_t total)
 {
     if (!zb_on) return;
-    const uint32_t px = total ? (done > total ? 160u : (uint32_t)((uint64_t)done * 160u / total)) : 0u;
+    const uint32_t px = total ? (done > total ? zb_w : (uint32_t)((uint64_t)done * zb_w / total)) : 0u;
     if (px > zb_px) { zb_write(zb_px, px, px); zb_px = px; }
 }
 static void zb_end(void) { if (!zb_on) return; zb_on = 0u; zb_copy(1); zb_view = GAL_PLANE_BASE; zb_stride = GAL_LINE_WORDS16; }
@@ -1072,7 +1076,7 @@ static void z2_enter(void)                                                      
     z2_disp_view = gv_win_base(win_base(t_shown_win), z_sx, z_sy, t_wx[t_shown_win], t_wy[t_shown_win]); z2_disp_stride = GV_WIN_STRIDE_WORDS; z2_disp_ok = 1u;                 /* the 1:1 view is on the screen while the 2x one loads: the loader's bar goes on it */
     const int r = z2_run(&cx, &cy, 2u);
     zoom_leave(); z2_hold = 1u;                                                                  /* the Info page keeps the 2x or 4x run's numbers until the next zoom from the fit view */                                                                                /* the zoom's windows were written over: the 1:1 view is opened again at the same centre */
-    if (r == 0 || r == 3) zoom_open(k, cx - GV_SCREEN_W / 2, cy - GV_SCREEN_H / 2);
+    if (r == 0 || r == 3) { hide_view(); view_hidden = 0u; zb_view = GAL_BLACK_BASE; zb_stride = GAL_LINE_WORDS16; zoom_open(k, cx - GV_SCREEN_W / 2, cy - GV_SCREEN_H / 2); }      /* the 1:1 view loads on a black screen with the loader's bar (not on the whole picture, which was a flash of something else) */
     if (r == 3) zoom_want_map = 1u;                                                              /* the 1:1 view's map, as soon as that view is up */
     else if (r < 0) say("ZOOM READ FAILED", BAD);
     else if (r == 2) zoom_to_grid = 1u;                                                          /* the caller leaves for the grid */
@@ -1180,8 +1184,10 @@ static void viewer(void)
 static void open_from_grid(void)
 {
     rot_o = 0u; mask_i = 0u; mask_painted = 0u;
+    { uint32_t x, y; cell_xy(sel - (cur_first + page * pp), &x, &y); ldr_w = (GR.cw * 3u / 4u) & ~1u; ldr_h = 4u; ldr_x = x + (GR.cw - ldr_w) / 2u; ldr_y = y + GR.ch / 2u - ldr_h / 2u; }      /* the loader is a smaller bar in the middle of the thumbnail being opened */
     const int r = open_timed(sel, 1);
-    if (r) { say(open_msg[r], BAD); return; }
+    ldr_x = LDR_X; ldr_y = LDR_Y; ldr_w = LDR_W; ldr_h = LDR_H;
+    if (r) { loaded_page = 0xFFFFFFFFu; draw_page(); say(open_msg[r], BAD); return; }
     if (!gal_view_on()) { say("VIEWER DID NOT START", BAD); return; }
     remember(sel);
     viewer();
@@ -1296,7 +1302,7 @@ static int thumb_hist(uint32_t off, hs_t *h, uint32_t pw, uint32_t ph)       /* 
 /* The picture details page (gallery_pages.h gd_*): the index's facts, placeholders for what is not read yet, and four histograms of the thumbnail. */
 /* The details pages (gallery_pages.h gdp_*): INFO (the index's facts and the EXIF items the picture has), SHOT (shutter, aperture, ISO, focal length: only when it has one of them) and HISTOGRAMS (counted from the thumbnail). The
  * indicator at the top right is the page number over the page count with a dot for each page. */
-static const char *const gdp_titles[3] = { "DETAILS  INFO", "DETAILS  SHOT", "DETAILS  HISTOGRAMS" };
+static const char *const gdp_titles[4] = { "DETAILS  INFO", "DETAILS  SHOT", "DETAILS  HISTOGRAMS", "DETAILS  HISTOGRAM OVERLAY" };
 static void draw_indicator(const gdp_t *p)
 {
     char b[12]; gdp_indicator(b, p);
@@ -1309,16 +1315,35 @@ static void draw_preview(uint32_t x, uint32_t y, uint32_t off)                  
     if (!thumb_blit(x, y, off)) { gfx_text(x, y, "NO PREVIEW", DIM, BG); return; }
     if (head.version == 1u) gfx_corners(x, y, 96u, 96u, 8u, BG);
 }
-static uint32_t hm_mode, hv_overlay;                                                                  /* the histogram page: the height scale (hm_names) and 0 = four plots, 1 = the three colours and the luma over one another (kept while the picture is open: X and A on the page) */
+static uint32_t hm_mode;                                                                  /* the histogram page: the height scale (hm_names) and 0 = four plots, 1 = the three colours and the luma over one another (kept while the picture is open: X and A on the page) */
 static void draw_dpage(const gdp_t *p, const gd_t *d, const gd_meta_t *m, const hs_t *hist, int from_dec, uint32_t thumb_off)
 {
     const uint32_t id = p->id[p->cur];
     page_clear(gdp_titles[id]);
-    if (id != GDP_HIST) {
+    if (id != GDP_HIST && id != GDP_OVER) {
         gd_row_t r[GD_ROWS]; const uint32_t n = id == GDP_INFO ? gdi_rows(d, m, r) : gds_rows(m, r);
         for (uint32_t i = 0; i < n; i++) { const uint32_t y = PAGE_Y0 + i * DET_LINE; gfx_text(6, y, r[i].label, DIM, BG); gfx_text(110, y, r[i].value, FG, BG); }
         draw_preview(DET_VX, DET_VY_INFO, thumb_off);
         for (uint32_t i = 0; i < GD_KEYS_N; i++) gfx_text(DET_KX, DET_VY_INFO + i * DET_LINE, gd_keys[i], i == 0u ? ACC : DIM, BG);
+    } else if (id == GDP_OVER) {                                                                          /* the colours over one another in one plot the width of the screen: the luma as grey bars, red, green and blue as lines; the names under it */
+        const uint32_t ox = 6u, oy = 26u, ow = 388u, oh = 262u, base = oy + oh - 4u, ph = oh - 12u, pw = ow - 6u;
+        frame_box(ox, oy, ow, oh, DIM);
+        if (hist) {
+            uint32_t mx = 0u; for (uint32_t k = 0; k < GD_HIST_N; k++) { const uint32_t m2 = hs_plot_max(hist, k); if (m2 > mx) mx = m2; }
+            static const uint16_t line_col[GD_HIST_N] = { 0x4208u, 0xF800u, 0x07E0u, 0x001Fu };
+            uint32_t prev[GD_HIST_N] = { 0u, 0u, 0u, 0u };
+            for (uint32_t x = 0; x < pw; x++) {                                                              /* a column a level, spread over the width (a level is a pixel and a half) */
+                const uint32_t i = x * HS_FINE / pw;
+                for (uint32_t k = 0; k < GD_HIST_N; k++) {
+                    const uint32_t h2 = hs_height_m(hs_bar(hist, k, i), mx, ph, hm_mode % HM_N);
+                    if (k == 0u) { if (h2) gfx_rect(ox + 3u + x, base - h2, 1, h2, line_col[0]); }
+                    else { const uint32_t lo = h2 < prev[k] ? h2 : prev[k], hi = h2 < prev[k] ? prev[k] : h2; gfx_rect(ox + 3u + x, base - hi, 1, hi - lo + 1u, line_col[k]); prev[k] = h2; }
+                }
+            }
+            for (uint32_t k = 0; k < GD_HIST_N; k++) gfx_text(ox + 4u + k * 64u, oy + oh + 4u, gd_hist_labels[k], k == 0u ? 0xFFFFu : line_col[k], BG);
+            gfx_text(ox + 4u + 4u * 64u, oy + oh + 4u, "SCALE", DIM, BG); gfx_text(ox + 4u + 4u * 64u + 48u, oy + oh + 4u, hm_names[hm_mode % HM_N], FG, BG);
+        }
+        gfx_text(6, 324, hist ? (from_dec ? GD_HIST_SRC_DEC : head.version == 1u ? GD_HIST_SRC_CROP : GD_HIST_SRC) : GD_HIST_NOTE, DIM, BG);
     } else {
         static const uint16_t bar_col[GD_HIST_N] = { 0xFFFFu, 0xF800u, 0x07E0u, 0x001Fu };
         draw_preview(DET_VX, DET_VY_HIST, thumb_off);
@@ -1330,24 +1355,6 @@ static void draw_dpage(const gdp_t *p, const gd_t *d, const gd_meta_t *m, const 
             { hs_stats_t st; hs_stats(hist, &st); char q[20], *w = put_s(q, "MEAN "); w = put_u(w, st.mean); *w = 0; gfx_text(DET_VX, DET_VY_HIST + 224u, q, FG, BG);
               if (st.exact) { w = put_s(q, "BLK "); w = put_u(w, st.black_pm / 10u); *w++ = '.'; w = put_u(w, st.black_pm % 10u); *w++ = '%'; *w = 0; gfx_text(DET_VX, DET_VY_HIST + 244u, q, FG, BG);
                               w = put_s(q, "WHT "); w = put_u(w, st.white_pm / 10u); *w++ = '.'; w = put_u(w, st.white_pm % 10u); *w++ = '%'; *w = 0; gfx_text(DET_VX, DET_VY_HIST + 264u, q, FG, BG); } }
-        }
-        if (hv_overlay && hist) {                                                                         /* the colours over one another in one big plot: the luma as grey bars, red, green and blue as lines */
-            const uint32_t ox = 6u, oy = 28u, ow = 262u, oh = 288u, base = oy + oh - 4u, ph = oh - 12u;
-            gfx_rect(DET_PX - 118u, 26u, 380u - (DET_PX - 118u) + 6u, 292u, BG);
-            frame_box(ox, oy, ow, oh, DIM); uint32_t mx = 0u; for (uint32_t k = 0; k < GD_HIST_N; k++) { const uint32_t m2 = hs_plot_max(hist, k); if (m2 > mx) mx = m2; }
-            static const uint16_t line_col[GD_HIST_N] = { 0x4208u, 0xF800u, 0x07E0u, 0x001Fu };
-            for (uint32_t k = 0; k < GD_HIST_N; k++) {
-                uint32_t prev = 0u;
-                for (uint32_t i = 0; i < HS_FINE; i++) {
-                    const uint32_t h2 = hs_height_m(hs_bar(hist, k, i), mx, ph, hm_mode % HM_N);
-                    if (k == 0u) { if (h2) gfx_rect(ox + 3u + i, base - h2, 1, h2, line_col[0]); }
-                    else { const uint32_t lo = h2 < prev ? h2 : prev, hi = h2 < prev ? prev : h2; gfx_rect(ox + 3u + i, base - hi, 1, hi - lo + 1u, line_col[k]); prev = h2; }
-                }
-            }
-            for (uint32_t k = 0; k < GD_HIST_N; k++) gfx_text(274u, 40u + k * 20u, gd_hist_labels[k], k == 0u ? 0xFFFFu : line_col[k], BG);
-            gfx_text(274u, 140u, "SCALE", DIM, BG); gfx_text(274u, 156u, hm_names[hm_mode % HM_N], FG, BG);
-            gfx_text(6, 324, hist ? (from_dec ? GD_HIST_SRC_DEC : head.version == 1u ? GD_HIST_SRC_CROP : GD_HIST_SRC) : GD_HIST_NOTE, DIM, BG);
-            draw_indicator(p); page_foot("A SCALE  X PLOTS  B BACK", 0, 0); return;
         }
         for (uint32_t h = 0; h < GD_HIST_N; h++) {
             const uint32_t x = DET_PX, y = DET_PY0 + h * DET_PSTEP;
@@ -1362,7 +1369,7 @@ static void draw_dpage(const gdp_t *p, const gd_t *d, const gd_meta_t *m, const 
         gfx_text(6, 324, hist ? (from_dec ? GD_HIST_SRC_DEC : head.version == 1u ? GD_HIST_SRC_CROP : GD_HIST_SRC) : GD_HIST_NOTE, DIM, BG);
     }
     draw_indicator(p);
-    page_foot(id == GDP_HIST ? "A SCALE  X OVERLAY  B BACK" : "LEFT RIGHT PAGE   B OR SELECT BACK", 0, 0);
+    page_foot(id == GDP_HIST || id == GDP_OVER ? "A SCALE   LEFT RIGHT PAGE   B BACK" : "LEFT RIGHT PAGE   B OR SELECT BACK", 0, 0);
 }
 /* Waits for the next key press (an edge) and returns it. */
 static uint32_t next_edge(uint32_t *prev)
@@ -1387,7 +1394,7 @@ static void run_details(int from_grid)
     gdp_t pg; gdp_open(&pg, &m);
     uint32_t prev = REG_RD(R_INPUT) & 0xFFFFu; int hist_ok = -1, from_dec = 0;
     for (;;) {
-        if (pg.id[pg.cur] == GDP_HIST && hist_ok < 0) {
+        if ((pg.id[pg.cur] == GDP_HIST || pg.id[pg.cur] == GDP_OVER) && hist_ok < 0) {
             if (from_grid && hist_for != sel && head.version == 1u) {                                   /* opened from the grid: the thumbnail is the picture CROPPED to a square, its histograms are the crop's, not the picture's. Decode the fit level (about a quarter of a second) and have the decoder count it, as the viewer does; a failure leaves the thumbnail's count */
                 gfx_text(6, 324, GD_HIST_WAIT, ACC, BG); (void)open_picture(sel, 0);
             }
@@ -1396,7 +1403,7 @@ static void run_details(int from_grid)
         }
         draw_dpage(&pg, &d, &m, hist_ok > 0 ? &det_hist : 0, from_dec, gx_thumb_off(&head, e->thumb));
         const uint32_t de = next_edge(&prev);
-        if (pg.id[pg.cur] == GDP_HIST && (de & (GP_KEY_A | KEY_X))) { if (de & GP_KEY_A) hm_mode = (hm_mode + 1u) % HM_N; if (de & KEY_X) hv_overlay ^= 1u; continue; }       /* A: the next height scale; X: the plots or the overlay (the page is drawn again) */
+        if ((pg.id[pg.cur] == GDP_HIST || pg.id[pg.cur] == GDP_OVER) && (de & GP_KEY_A)) { hm_mode = (hm_mode + 1u) % HM_N; continue; }       /* A: the next height scale; X: the plots or the overlay (the page is drawn again) */
         if (gdp_input(&pg, de)) break;
     }
 }

@@ -183,15 +183,15 @@ int main(void)
             { static uint8_t longcam[44]; gd_meta_t q; longcam[0] = 2; longcam[1] = 40; for (uint32_t i = 0; i < 40u; i++) longcam[2 + i] = 'x'; gd_meta_parse(longcam, sizeof longcam, &q); n = gdi_rows(&dd, &q, ir);
               chk("details INFO: a 40 character camera name is cut to the 27 character column", n == 5u && strlen(ir[4].value) == 26u); }
             { gdp_t p; gd_meta_t q; static const uint8_t isoonly[] = { 7, 4, 100, 0, 0, 0 }, fmtonly[] = { 1, 3, 'P', 'N', 'G' };
-              gdp_open(&p, &m); chk("details pages: a full picture has INFO, SHOT, HISTOGRAMS", p.n == 3u && p.id[0] == GDP_INFO && p.id[1] == GDP_SHOT && p.id[2] == GDP_HIST && p.cur == 0u);
-              gd_meta_parse(fmtonly, sizeof fmtonly, &q); gdp_open(&p, &q); chk("details pages: with no exposure field the SHOT page is not offered", p.n == 2u && p.id[0] == GDP_INFO && p.id[1] == GDP_HIST);
-              gd_meta_parse(isoonly, sizeof isoonly, &q); gdp_open(&p, &q); chk("details pages: one exposure field is enough to offer it", p.n == 3u);
+              gdp_open(&p, &m); chk("details pages: a full picture has INFO, SHOT, HISTOGRAMS, OVERLAY", p.n == 4u && p.id[0] == GDP_INFO && p.id[1] == GDP_SHOT && p.id[2] == GDP_HIST && p.id[3] == GDP_OVER && p.cur == 0u);
+              gd_meta_parse(fmtonly, sizeof fmtonly, &q); gdp_open(&p, &q); chk("details pages: with no exposure field the SHOT page is not offered", p.n == 3u && p.id[0] == GDP_INFO && p.id[1] == GDP_HIST && p.id[2] == GDP_OVER);
+              gd_meta_parse(isoonly, sizeof isoonly, &q); gdp_open(&p, &q); chk("details pages: one exposure field is enough to offer it", p.n == 4u);
               gdp_open(&p, &m); char b[12];
-              gdp_indicator(b, &p); chk("details indicator: 1/3 on the first page", !strcmp(b, "1/3"));
-              chk("details pages: Right turns to SHOT (2/3) then HISTOGRAMS (3/3) then wraps to INFO", gdp_input(&p, GP_KEY_RIGHT) == 0 && p.cur == 1u && (gdp_indicator(b, &p), !strcmp(b, "2/3")) && gdp_input(&p, GP_KEY_RIGHT) == 0 && p.cur == 2u && gdp_input(&p, GP_KEY_RIGHT) == 0 && p.cur == 0u);
-              chk("details pages: Left from the first page wraps to the last", gdp_input(&p, GP_KEY_LEFT) == 0 && p.cur == 2u && gdp_input(&p, GP_KEY_LEFT) == 0 && p.cur == 1u);
-              chk("details pages: B and Select close, Up, Down, A and Start do not, the page stays", gdp_input(&p, GP_KEY_B) == 1 && gdp_input(&p, GP_KEY_SELECT) == 1 && gdp_input(&p, GP_KEY_UP) == 0 && gdp_input(&p, GP_KEY_DOWN) == 0 && gdp_input(&p, GP_KEY_A) == 0 && gdp_input(&p, GP_KEY_START) == 0 && p.cur == 1u);
-              gd_meta_parse(fmtonly, sizeof fmtonly, &q); gdp_open(&p, &q); gdp_input(&p, GP_KEY_RIGHT); gdp_indicator(b, &p); chk("details indicator: 2/2 on the last page of a two page picture", !strcmp(b, "2/2")); }
+              gdp_indicator(b, &p); chk("details indicator: 1/4 on the first page", !strcmp(b, "1/4"));
+              chk("details pages: Right turns to SHOT (2/4), HISTOGRAMS (3/4), OVERLAY (4/4) then wraps to INFO", gdp_input(&p, GP_KEY_RIGHT) == 0 && p.cur == 1u && (gdp_indicator(b, &p), !strcmp(b, "2/4")) && gdp_input(&p, GP_KEY_RIGHT) == 0 && p.cur == 2u && gdp_input(&p, GP_KEY_RIGHT) == 0 && p.cur == 3u && gdp_input(&p, GP_KEY_RIGHT) == 0 && p.cur == 0u);
+              chk("details pages: Left from the first page wraps to the last", gdp_input(&p, GP_KEY_LEFT) == 0 && p.cur == 3u && gdp_input(&p, GP_KEY_LEFT) == 0 && p.cur == 2u);
+              chk("details pages: B and Select close, Up, Down, A and Start do not, the page stays", gdp_input(&p, GP_KEY_B) == 1 && gdp_input(&p, GP_KEY_SELECT) == 1 && gdp_input(&p, GP_KEY_UP) == 0 && gdp_input(&p, GP_KEY_DOWN) == 0 && gdp_input(&p, GP_KEY_A) == 0 && gdp_input(&p, GP_KEY_START) == 0 && p.cur == 2u);
+              gd_meta_parse(fmtonly, sizeof fmtonly, &q); gdp_open(&p, &q); gdp_input(&p, GP_KEY_RIGHT); gdp_input(&p, GP_KEY_RIGHT); gdp_indicator(b, &p); chk("details indicator: 3/3 on the last page of a three page picture", !strcmp(b, "3/3")); }
         }
         chk("details: B closes", gd_input(GP_KEY_B) == 1); chk("details: Select closes (it opens the page, so it toggles)", gd_input(GP_KEY_SELECT) == 1);
         chk("details: A, Up, Down, Left, Right and Start do not close", gd_input(GP_KEY_A) == 0 && gd_input(GP_KEY_UP) == 0 && gd_input(GP_KEY_DOWN) == 0 && gd_input(GP_KEY_LEFT) == 0 && gd_input(1u << 3) == 0 && gd_input(GP_KEY_START) == 0);

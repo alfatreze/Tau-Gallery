@@ -399,13 +399,13 @@ static inline uint32_t gds_rows(const gd_meta_t *m, gd_row_t r[GD_ROWS])
     return n;
 }
 /* The pages: INFO, SHOT (only when the picture has an exposure field) and HISTOGRAMS; Left and Right turn them (wrapping), B or Select closes. The indicator is "page/pages" with one dot a page. */
-enum { GDP_INFO = 0, GDP_SHOT, GDP_HIST };
-typedef struct { uint8_t n, cur, id[3]; } gdp_t;
+enum { GDP_INFO = 0, GDP_SHOT, GDP_HIST, GDP_OVER };                       /* GDP_OVER: the same counts as one plot, the colours over one another */
+typedef struct { uint8_t n, cur, id[4]; } gdp_t;
 static inline void gdp_open(gdp_t *p, const gd_meta_t *m)
 {
     p->n = 0u; p->id[p->n++] = GDP_INFO;
     if (m->has & GDM_SHOT) p->id[p->n++] = GDP_SHOT;
-    p->id[p->n++] = GDP_HIST; p->cur = 0u;
+    p->id[p->n++] = GDP_HIST; p->id[p->n++] = GDP_OVER; p->cur = 0u;
 }
 static inline int gdp_input(gdp_t *p, uint32_t edge)
 {
