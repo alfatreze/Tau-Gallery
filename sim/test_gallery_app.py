@@ -610,7 +610,26 @@ def mutants(setdir, tail=None):
         print("SURVIVED" if ok else "killed  ", i, a[:60]); bad += ok
     return bad
 
+def quick(names):
+    """--scenario a,b: build once and run just these scenarios (Tier A of CLAUDE.md section 4: the edit loop), each with the set it needs. Nothing else runs."""
+    w = Path(tempfile.mkdtemp())
+    if not build(w): return 1
+    sets = {}
+    def get(kind):
+        if kind not in sets:
+            d = Path(tempfile.mkdtemp()); {"base": make_set, "v1": make_v1_set, "v1i": make_v1idx_set, "lib1": make_lib1_set, "libbig": make_libbig_set, "big": make_big_set, "zoom": make_zoom_set}[kind](d); sets[kind] = d
+        return sets[kind]
+    rc = 0
+    for sc in names:
+        kind = "v1i" if sc == "v1gridhist" else "v1" if sc.startswith("v1") else "lib1" if sc.startswith("lib1") else "libbig" if sc.startswith("libbig") or sc == "colour" else "big" if sc.startswith("big") else "zoom" if sc == "zoom" else "base"
+        r = subprocess.run([str(w / "t"), str(get(kind)), sc], capture_output=True, text=True, timeout=900)
+        bad = [l for l in r.stdout.splitlines() if "FAIL" in l]
+        print(("FAIL " if r.returncode else "ok   ") + sc + ("  " + " | ".join(bad[:4]) + " " + r.stderr[-300:] if r.returncode else ""))
+        rc |= r.returncode != 0
+    return rc
+
 if __name__ == "__main__":
+    if "--scenario" in sys.argv: sys.exit(quick(sys.argv[sys.argv.index("--scenario") + 1].split(",")))
     setdir = Path(tempfile.mkdtemp()); make_set(setdir)
     if "--mutants" in sys.argv or "--only" in sys.argv or "--idx" in sys.argv: sys.exit(1 if mutants(setdir) else 0)
     if "--v1-mutants" in sys.argv: sys.exit(1 if mutants(setdir, int(sys.argv[sys.argv.index("--v1-mutants") + 1]) if len(sys.argv) > sys.argv.index("--v1-mutants") + 1 else 7) else 0)
