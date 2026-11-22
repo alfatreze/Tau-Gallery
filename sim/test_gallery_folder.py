@@ -52,15 +52,16 @@ def verify(conv, n, report=True):
     check(r.returncode == 0 and ev and ev[-1]["event"] == "done", "the converter finishes with exit 0 and a done event", (r.returncode, r.stderr[-300:]))
     if not ev or ev[-1]["event"] != "done": return w
     conv_ev = [e for e in ev if e["event"] == "converted"]; skips = [e for e in ev if e["event"] == "skip"]
-    check(len(conv_ev) == len(good) == ev[-1]["pictures"], f"{len(good)} good pictures converted, none lost", (len(conv_ev), len(good)))
-    check(sorted(e["file"] for e in skips) == sorted(["damaged_0000.jpg", "empty.jpg", LONG + ".png"]) and ev[-1]["skipped"] == 3, "exactly the damaged file, the empty file and the too-long name were skipped, and counted (the ._ metadata file is not a picture and is not even listed)", [e["file"][:20] for e in skips])
-    check(any("shorten" in e["error"] for e in skips if e["file"].startswith("LLL")), "the too-long name's skip says what to do")
+    check(len(conv_ev) == len(good) + 1 == ev[-1]["pictures"], f"{len(good)} good pictures and the one with the too-long name converted, none lost", (len(conv_ev), len(good)))
+    check(sorted(e["file"] for e in skips) == sorted(["damaged_0000.jpg", "empty.jpg"]) and ev[-1]["skipped"] == 2, "exactly the damaged file and the empty file were skipped, and counted (the ._ metadata file is not a picture and is not even listed)", [e["file"][:20] for e in skips])
+    longs = [e for e in tgy.parse_index((out / "tau-library.tdb").read_bytes()) if e["name"].startswith("LLL")]
+    check(len(longs) == 1 and len(longs[0]["path"].encode()) < tgy.PATH_BYTES and (out / Path(longs[0]["path"]).name).is_file(), "the too-long name is converted: its file name is shortened to fit the card path, the display name stays", [l["path"] for l in longs])
     tgys = sorted(p.name for p in out.glob("*.tgy"))
-    check(len(tgys) == len(good) and not list(out.glob("*.part")), "one .tgy per good picture and no .part file is left", (len(tgys), list(out.glob("*.part"))[:2]))
+    check(len(tgys) == len(good) + 1 and not list(out.glob("*.part")), "one .tgy per good picture and no .part file is left", (len(tgys), list(out.glob("*.part"))[:2]))
     check(all(p.stat().st_size == 1748992 for p in out.glob("*.tgy")), "every .tgy is 1,748,992 bytes")
     check(not (out / "inner.tgy").exists(), "pictures in a subfolder are not converted (the converter does not descend)")
     idx = (out / "tau-library.tdb").read_bytes(); ents = tgy.parse_index(idx)
-    check(len(ents) == len(good), "the index lists every good picture once", (len(ents), len(good)))
+    check(len(ents) == len(good) + 1, "the index lists every good picture once", (len(ents), len(good)))
     paths = [e["path"] for e in ents]
     check(all(b < 0x80 for p in paths for b in p.encode("utf-8")), "every card path is ASCII only (KB-041: the Pocket cannot open a path with a byte of 0x80 or more)", [p for p in paths if any(b >= 0x80 for b in p.encode())][:2])
     byname = {e["name"]: e["path"] for e in ents}
@@ -97,13 +98,13 @@ def tgy_convert_ext():
 
 def mutants():
     src = (ROOT / "tools/gallery/tgy_convert.py").read_text()
-    muts = [("base = ascii_stem(p.stem); stem = base;", "base = p.stem; stem = base;"),
+    muts = [("base = ascii_stem(p.stem); n = 1", "base = p.stem; n = 1"),
             ("if s != stem: s += \"_%04x\" % (zlib.crc32(stem.encode(\"utf-8\")) & 0xFFFF)", "pass"),
-            ("if len(path.encode(\"utf-8\")) >= tgy.PATH_BYTES:", "if False:"),
-            ("while stem.lower() in used: n += 1; stem = f\"{base}_{n}\"", "pass"),
-            ("used.add(stem.lower())", "pass"),
+            ("base = base[:room]; stem = base", "stem = base"),
+            ("while (dirs, stem.lower()) in used: n += 1; suf = f\"_{n}\"; stem = base[:room - len(suf)] + suf", "pass"),
+            ("used.add((dirs, stem.lower()))", "pass"),
             ("print(json.dumps({\"event\": \"skip\", \"file\": p.name, \"error\": str(e)})); skipped += 1; continue", "raise"),
-            ("files = sorted(p for p in a.src.iterdir()", "files = sorted((p for p in a.src.iterdir()"),
+            ("top = sorted(p for p in a.src.iterdir() if is_picture(p))", "top = sorted((p for p in a.src.iterdir() if is_picture(p)), reverse=True)"),
             ("os.replace(tmp, path)", "tmp.rename(path.with_name(path.name + '.part'))"),
             ("\"skipped\": skipped", "\"skipped\": 0"),
             ("name=name_of(shown)", "name=name_of(shown)[:5]")]
@@ -111,7 +112,6 @@ def mutants():
     for i, (a, b) in enumerate(muts):
         if a not in src: print("MISSING mutant text", i, a[:50]); bad += 1; continue
         m = src.replace(a, b, 1)
-        if i == 4: m = m.replace("if p.suffix.lower() in EXT and p.is_file())", "if p.suffix.lower() in EXT and p.is_file()), reverse=True)", 1)
         d = Path(tempfile.mkdtemp()); (d / "tgy_convert.py").write_text(m)
         for f in ("tgy.py",): (d / f).write_text((ROOT / "tools/gallery" / f).read_text())
         global fails; fails = 0

@@ -90,8 +90,8 @@ def checks(conv):
     return bad
 
 MUT = [("sys.stdout.reconfigure(line_buffering=True)", "pass"),
-       ("if not (photos / Path(e[\"path\"]).name).is_file(): continue", "if False: continue"),
-       ("old.pop((stem + \".tgy\").lower(), None)", "pass"),
+       ("if not (photos / rel).is_file(): continue", "if False: continue"),
+       ("old.pop(path.lower(), None)", "pass"),
        ("\"name\": lambda it: (it[\"name\"].lower(), it[\"path\"].lower())", "\"name\": lambda it: it[\"width\"]"),
        ("index_dir = a.out / str(Path(card_dir).parent) if a.card_layout else a.out", "index_dir = a.out"),
        ("photos = a.out / card_dir if a.card_layout else a.out", "photos = a.out"),
