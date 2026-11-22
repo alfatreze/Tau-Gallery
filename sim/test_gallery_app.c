@@ -115,7 +115,7 @@ int slot_open_path(uint32_t slot, const char *path)
 }
 uint32_t _tag_start[1024];
 static uint32_t rc_prev, rc_starts, rc_retarget; static int32_t rc_bx, rc_by;
-static uint32_t ldr_pct, ldr_chunks, ldr_max, ldr_prev, ldr_first_ok = 1u, ldr_mono = 1u, ldr_skip, ldr_opens;
+static int32_t nv590; static uint32_t ldr_pct, ldr_chunks, ldr_max, ldr_prev, ldr_first_ok = 1u, ldr_mono = 1u, ldr_skip, ldr_opens;
 int slot_read_blocking(uint32_t slot, uint32_t off, uint32_t dst, uint32_t len, uint32_t to)
 {
     (void)to; reads++;
@@ -168,6 +168,22 @@ uint32_t gfx_text_width(const char *s) { return 8u * (uint32_t)strlen(s); }
 void irq_enable(uint32_t m) { (void)m; }
 /* the Talos BLIT as the RTL has it (docs/M2_DESIGN.md section 9, sim/tb_talos_tilecopy.v): bases 25 bits, offsets 19 bits, a row at most 127 halfwords; this model also counts copies that read a window and any write into the displayed screen area */
 void gfx_fence(void) { }
+static uint32_t blend_a, blend_calls, blend_on_n; static int blend_open;                          /* the Talos alpha blend: dst = (src * a + dst * (256 - a)) >> 8 per channel (RGB565), only inside gfx_blend_on .. gfx_blend_off */
+int gfx_blend_ready(void) { return 1; }
+void gfx_blend_on(uint32_t a) { blend_a = a & 255u; blend_open = 1; blend_on_n++; }
+void gfx_blend_off(void) { blend_open = 0; }
+void gfx_blend_blit(uint32_t sx, uint32_t sy, uint32_t dx, uint32_t dy, uint32_t w, uint32_t h)
+{
+    blend_calls++;
+    for (uint32_t j = 0; j < h; j++) for (uint32_t i = 0; i < w; i++) {
+        const uint16_t sp = fb[(sy + j) * 512u + sx + i], dp = fb[(dy + j) * 512u + dx + i];
+        const uint32_t sr = sp >> 11, sg = (sp >> 5) & 63u, sb = sp & 31u, dr = dp >> 11, dg = (dp >> 5) & 63u, db = dp & 31u;
+        const uint32_t r = (sr * blend_a + dr * (256u - blend_a)) >> 8, g = (sg * blend_a + dg * (256u - blend_a)) >> 8, b = (sb * blend_a + db * (256u - blend_a)) >> 8;
+        fb[(dy + j) * 512u + dx + i] = (uint16_t)(r << 11 | g << 5 | b);
+    }
+}
+void gfx_blit_stash(uint32_t sx, uint32_t sy, uint32_t dx, uint32_t dy, uint32_t w, uint32_t h) { for (uint32_t j = 0; j < h; j++) for (uint32_t i = 0; i < w; i++) fb[(dy + j) * 512u + dx + i] = fb[(sy + j) * 512u + sx + i]; }
+void gfx_blit_to_stash(uint32_t sx, uint32_t sy, uint32_t dx, uint32_t dy, uint32_t w, uint32_t h) { gfx_blit_stash(sx, sy, dx, dy, w, h); }
 void gfx_blit_raw(uint32_t sb, uint32_t db, uint32_t so, uint32_t dof, uint32_t w)
 {
     if (!w || w > 127u || so >= (1u << 19) || dof >= (1u << 19) || sb >= (1u << 25) || db >= (1u << 25)) { blit_bad++; return; }
@@ -620,7 +636,7 @@ static void lib1_cp(int n)
     char w[32];
     if (getenv("LIB1_DEBUG")) { printf("cp %d: level %u gi %u first %u count %u sel %u page %u nop %u last '%s' c0 %d c1 %d c2 %d ring0 %d ring1 %d pageok %d\n", n, level, gi, cur_first, cur_count, sel, page, n_on_page, last_text(), lib1_cell_ok(0, 0, thumb1_of(0), 1), lib1_cell_ok(0, 1, thumb1_of(20), 1), lib1_cell_ok(0, 2, thumb1_of(23), 1), lib1_ring_ok(0, 3, 0), lib1_ring_ok(0, 3, 1), lib1_page_ok(0, cur_first + page * pp, n_on_page)); }
     switch (n) {
-    case 400: chk(400, level == 1u && gi == 0u && cur_count == 3u && sel == 0u && !strcmp(last_text(), "1/3") && lib1_cell_ok(0, 0, thumb1_of(0), 1) && lib1_cell_ok(0, 1, thumb1_of(20), 1) && lib1_cell_ok(0, 2, thumb1_of(23), 1) && lib1_ring_ok(0, 3, 0)
+    case 400: chk(400, fade_steps >= 6u && level == 1u && gi == 0u && cur_count == 3u && sel == 0u && !strcmp(last_text(), "1/3") && lib1_cell_ok(0, 0, thumb1_of(0), 1) && lib1_cell_ok(0, 1, thumb1_of(20), 1) && lib1_cell_ok(0, 2, thumb1_of(23), 1) && lib1_ring_ok(0, 3, 0)
               && said("Alpha 20") && said("Beta 3") && said("Gamma 13")); break;                                             /* the folder level: the covers, the names and counts in the strips, the ring on the first */
     case 401: chk(401, sel == 1u && !strcmp(last_text(), "2/3") && lib1_ring_ok(0, 3, 1)); break;                          /* Right: the ring moves to the second folder (no page redraw: the covers stay) */
     case 402: chk(402, level == 0u && cur_first == 20u && cur_count == 3u && sel == 20u && !strcmp(last_text(), "1/3") && lib1_page_ok(0, 20, 3) && lib1_ring_ok(0, 3, 0) && said("Img 20")); break;   /* A: the pictures of the second folder, three of them, in the 4 x 3 grid */
@@ -857,10 +873,12 @@ static void checkpoint(int n)
     case 596: chk(596, said("DETAILS  HISTOGRAMS")); clear_texts(); break;
     case 597: chk(597, vid_bus == 1u && z2_shown && z2_view_ok("v00_full.rgb", 1000u, 900u, 2u)); break;
     case 598: chk(598, said("DETAILS  INFO") && vid_bus == 0u); clear_texts(); break;
-    case 599: chk(599, vid_bus == 1u && zk == 0 && z_shown && v1_view_matches("v00_full.rgb", 1000u, 900u)); break;
-    case 590: chk(590, map_active == 1u && zk == 0 && z_shown && !z2_active && z2_hold == 1u && info.zt_dec_n > 0u && info.zt_catch > 0u); break;                                                                                  /* the 1:1 view with its map open; the Info page still has the 2x run's numbers */
-    case 591: chk(591, map_active == 0u && zk == 0 && z_shown && v1_view_matches("v00_full.rgb", 1000u, 900u)); break;                                                                                     /* the map closed: the 1:1 view */
-    case 592: chk(592, z2_shown && z2_level == 2u && z2_view_ok("v00_full.rgb", 1000u, 900u, 2u)); break;                                                                                                       /* and A: the 2x view again */
+    case 578: chk(578, z_shown || (zk == 0 && vstride == z2_pitch() / 2u && ((pix_ctrl & 8u) != 0u) == (z2_dbl == 2) && vbase != GAL_PLANE_BASE)); break;      /* B at 2x: until the 1:1 view is up the 2x plane stays on the screen (not the fit picture, not black), doubling kept */
+    case 599: chk(599, vid_bus == 1u && z2_shown && z2_level == 2u && z2_view_ok("v00_full.rgb", 1000u, 900u, 2u)); break;
+    case 590: { int32_t okx = 0, oky = 0, a, b, w, h; zoom_off(zk, &okx, &oky); gv_map_rect(zoom_scale(-1), (int32_t)pic.rx, (int32_t)pic.ry, zoom_scale(zk), okx, oky, 0, 0, &a, &b, &w, &h); nv590 = z2_vx;
+                chk(590, map_active == 1u && z2_active && zk == 0 && vbase == GAL_PLANE_BASE && vstride == GAL_LINE_WORDS16 && (pix_ctrl & 8u) == 0u && m_rw == w / 2 && m_rh == h / 2 && m_rw > 0 && info.zt_dec_n > 0u); } break;      /* the navigator is up at once on the fit plane (not the doubled plane), its rectangle half the 1:1 view's */
+    case 591: chk(591, map_active == 0u && z2_shown && z2_level == 2u && ((pix_ctrl & 8u) != 0u) == (z2_dbl == 2) && z2_view_ok("v00_full.rgb", 1000u, 900u, 2u) && z2_vx == nv590); break;                                                  /* the navigator closed: the same 2x view */
+    case 592: chk(592, z2_shown && z2_level == 2u && z2_vx < nv590 && z2_view_ok("v00_full.rgb", 1000u, 900u, 2u)); break;                                                                                                                     /* A on a place chosen to the left: the 2x view there
     case 586: chk(586, z2_vis_hits == 0u && z2_level == 2u && z2_view_ok("v00_full.rgb", 1000u, 900u, 2u)); break;                                                                                              /* L1: back to 2x */
     case 588: z2_c1x = (z2_vx + z2_vw / 2) / (int32_t)z2_s; z2_c1y = (z2_vy + z2_vh / 2) / (int32_t)z2_s; chk(588, z2_vis_hits == 0u && z2_level == 2u && z2_view_ok("v00_full.rgb", 1000u, 900u, 2u)); break;                                                                                              /* 4x again and B: 2x */
     case 589: chk(589, vid_bus == 0u && zk < 0); break;                                                                                                                                                     /* a held B in the 1:1 view: the grid */
@@ -910,7 +928,7 @@ static void checkpoint(int n)
     case 19: chk(27, said("ADD PHOTOS") && said("1/3") && !said("MENU")); clear_texts(); break;                                                                  /* Down, A: Help page 1 of 3 */
     case 20: chk(28, said("WHERE THINGS ARE") && said("2/3") && !said("ADD PHOTOS")); clear_texts(); break;                                                      /* Down turns the page */
     case 22: chk(30, said("INFO") && said("4D50331B") && said("800 X 720") && said("NONE YET") && said("LAST ERROR") && said("L1 LOADED 1 SAVED 0")); snprintf(want, sizeof want, "%u", count); chk(31, said(want)); clear_texts(); break;    /* Info before any picture was opened */
-    case 23: chk(32, said("4D50331B") && count_text("NONE YET") == 11 && said(" MS") && said("432128 WORDS, 0 LOST")); chk(33, said("NONE") && !said("FAILED")); chk(44, said("L1 LOADED 1 SAVED 1")); chk(125, ldr_opens > 0u && ldr_chunks > 0u && ldr_first_ok && ldr_mono && ldr_pct >= 62u && ldr_pct < 100u); clear_texts(); break;   /* Info after viewing pictures: the last landing */
+    case 23: chk(32, said("4D50331B") && count_text("NONE YET") == 11 && said(" MS") && said("432128 WORDS, 0 LOST")); chk(33, said("NONE") && !said("FAILED")); chk(44, said("L1 LOADED 1 SAVED 1")); chk(125, ldr_opens > 0u && ldr_chunks > 0u && ldr_first_ok && ldr_mono && ldr_pct >= 45u && ldr_pct < 100u); clear_texts(); break;   /* Info after viewing pictures: the last landing */
     case 24: chk(34, said("OPEN FAILED") && said("0 WORDS, 0 LOST")); clear_texts(); break;                                                                          /* Info after a failed open: the error, and no landing counts carried over */
     case 25: chk(35, said("RESUME LAST PICTURE") && said("ON") && !said("OFF") && said("GRID SIZE") && said("4 X 3") && said("DITHER") && said("ORDERED")); clear_texts(); break;                                                                    /* Settings page, resume on (the default) */
     case 26: chk(36, said("OFF") && (setw[2] & 1u) == 0u && set_writes == 0); clear_texts(); break;                                                                   /* toggled off: shown, but not yet written */
@@ -1220,9 +1238,9 @@ int main(int argc, char **argv)
         S2[k++] = KEY_L1; S2[k++] = 0; H2(0, 500); S2[k++] = CP(586);
         H2(KEY_RIGHT, 20); H2(0, 300);
         S2[k++] = KEY_SELECT; S2[k++] = 0; H2(0, 3); S2[k++] = CP(595); S2[k++] = KEY_RIGHT; S2[k++] = 0; S2[k++] = CP(596); S2[k++] = KEY_B; S2[k++] = 0; H2(0, 100); S2[k++] = CP(597);                          /* Select in the 2x view: the details; Right: the histograms; B: the 2x view again, as it was */
-        S2[k++] = KEY_START; S2[k++] = 0; H2(0, 400); S2[k++] = CP(590); S2[k++] = KEY_B; S2[k++] = 0; H2(0, 100); S2[k++] = CP(591); S2[k++] = KEY_SELECT; S2[k++] = 0; H2(0, 3); S2[k++] = CP(598); S2[k++] = KEY_B; S2[k++] = 0; H2(0, 100); S2[k++] = CP(599); S2[k++] = KEY_A; S2[k++] = 0; H2(0, 500); S2[k++] = CP(592);                       /* Start in the 2x view: the 1:1 view's map to choose the area; B closes the map; A goes into 2x again */                                                                                                                              /* L1: back to 2x */
+        S2[k++] = KEY_START; S2[k++] = 0; H2(0, 100); S2[k++] = CP(590); S2[k++] = KEY_B; S2[k++] = 0; H2(0, 100); S2[k++] = CP(591); S2[k++] = KEY_SELECT; S2[k++] = 0; H2(0, 3); S2[k++] = CP(598); S2[k++] = KEY_B; S2[k++] = 0; H2(0, 100); S2[k++] = CP(599); S2[k++] = KEY_START; S2[k++] = 0; H2(0, 20); H2(KEY_LEFT, 30); H2(0, 5); S2[k++] = KEY_A; S2[k++] = 0; H2(0, 500); S2[k++] = CP(592);                       /* Start in the 2x view: the navigator at once (the fit plane, a rectangle the 2x screen's size); B closes it; Select the details and B back; Start, the rectangle moved left, A: the 2x view there */                                                                                                                              /* L1: back to 2x */
         S2[k++] = KEY_A; S2[k++] = 0; H2(0, 600); S2[k++] = KEY_B; S2[k++] = 0; H2(0, 500); S2[k++] = CP(588);                                                                                     /* 4x again, B: 2x */
-        S2[k++] = KEY_B; S2[k++] = 0; H2(0, 200); S2[k++] = CP(582);                                                                                                                               /* B: the 1:1 view at the centre the zoom had */
+        S2[k++] = KEY_B; S2[k++] = 0; H2(0, 2); S2[k++] = CP(578); H2(0, 200); S2[k++] = CP(582);                                                                                                                               /* B: the 1:1 view at the centre the zoom had */
         S2[k++] = KEY_B; S2[k++] = 0; H2(0, 5); S2[k++] = CP(583);                                                                                                                                 /* B: the fit view */
         S2[k++] = KEY_A; S2[k++] = 0; H2(0, 200); H2(KEY_B, 90); H2(0, 5); S2[k++] = CP(589); S2[k++] = KEY_A; S2[k++] = 0; H2(0, 3);                                                                /* the 1:1 view and a held B: the grid; the picture opened again */
         S2[k++] = KEY_A; S2[k++] = 0; H2(0, 200); S2[k++] = KEY_A; S2[k++] = 0; H2(0, 400); H2(KEY_B, 90); H2(0, 5); S2[k++] = CP(587); S2[k++] = END;                                              /* zoom, 2x, and a held B: the grid */

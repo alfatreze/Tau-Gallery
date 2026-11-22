@@ -136,22 +136,63 @@ static void footer(void)
     gfx_text(GFX_W - 16u - gfx_text_width(b), 338, b, DIM, BG);   /* gfx_text drops a glyph cell that starts within 16 px of the right edge: a 6 px margin lost the last digit */
 }
 
+static void wait_ms(uint32_t ms);
+/* ---- the grid fades its thumbnails in (owner, 2026-11-22): they arrive one at a time, so each one is blended into its cell in three steps (about 40 %, 80 %, then the exact copy) that are spread over the next two thumbnails' card reads: no wait is added, the card's own pace is
+ * the fade. A thumbnail waits in a stash slot (three of them, 100 rows apart below the stash's first row) until its last step; the folder strip and the rounded corners come after it. ---- */
+#define FADE_SLOTS 3u
+typedef struct { uint8_t on, step; uint16_t k, x, y, w, h; } fade_t;
+static fade_t fade[FADE_SLOTS]; static uint32_t fade_steps;                                              /* fade_steps: the blends that ran (for the host test) */
+static uint32_t fade_y(uint32_t j) { return STASH_Y + j * 100u; }
+static void cell_finish(uint32_t k, uint32_t x, uint32_t y)                                            /* what goes over the thumbnail once it is whole */
+{
+    if (level == 1u) {                                                                           /* a folder tile: the cover with a darkened strip at the foot carrying the name and the number of pictures */
+        char b[16], *q = b; uint32_t n = ent[k].size, d = 1u; for (uint32_t v = n; v >= 10u; v /= 10u) d++;
+        const uint32_t room = 11u - d; for (uint32_t i = 0; i < room && ent[k].name[i]; i++) *q++ = ent[k].name[i];
+        *q++ = ' '; q = put_u(q, n); *q = 0;
+        gfx_rect(x, y + GR.ch - 16u, GR.cw, 16u, dark_bg()); gfx_text(x + 2u, y + GR.ch - 16u, b, FG, dark_bg());
+        gfx_corners(x, y, GR.cw, GR.ch, GR.rad, BG);
+    } else if (GR.rad) gfx_corners(x, y, GR.cw, GR.ch, GR.rad, BG);
+}
+static void fade_advance(uint32_t j)
+{
+    fade_t *f = &fade[j]; if (!f->on) return;
+    if (f->step < 2u) { gfx_blend_on(f->step == 0u ? 100u : 200u); gfx_blend_blit(STASH_X, fade_y(j), f->x, f->y, f->w, f->h); gfx_blend_off(); f->step++; fade_steps++; if (GR.rad) gfx_corners(f->x, f->y, GR.cw, GR.ch, GR.rad, BG); }
+    else { gfx_blit_stash(STASH_X, fade_y(j), f->x, f->y, f->w, f->h); f->on = 0u; cell_finish(f->k, f->x, f->y); }
+}
+static void fade_flush(void)                                                                          /* the thumbnails still fading finish (two more steps, a frame apart) */
+{
+    for (uint32_t round = 0; round < 3u; round++) {
+        uint32_t any = 0u; for (uint32_t j = 0; j < FADE_SLOTS; j++) if (fade[j].on) { any = 1u; fade_advance(j); }
+        if (!any) break;
+        wait_ms(16u);
+    }
+}
+static int draw_thumb_fade(uint32_t k, uint32_t x, uint32_t y, uint32_t off)
+{
+    const uint32_t ds = GR.ratio != 0xFFu, j = k % FADE_SLOTS, sy = fade_y(j);
+    for (uint32_t i = 0; i < FADE_SLOTS; i++) if (i != j) fade_advance(i);                              /* the older ones go on a step while this one is read */
+    while (fade[j].on) fade_advance(j);
+    gfx_fence();
+    if (!thumb_blit(STASH_X, sy, off)) return 0;
+    uint32_t w = 96u, h = head.thumb_bytes / 192u;
+    if (ds) { gfx_dsblit(STASH_X, sy, x, y, 96u, 96u, GR.ratio, GR.ratio); w = GR.cw; h = GR.ch; gfx_blit_to_stash(x, y, STASH_X, sy, w, h); gfx_rect(x, y, w, h, BG); }
+    fade[j].on = 1u; fade[j].step = 0u; fade[j].k = (uint16_t)k; fade[j].x = (uint16_t)x; fade[j].y = (uint16_t)y; fade[j].w = (uint16_t)w; fade[j].h = (uint16_t)h;
+    fade_advance(j);
+    return 1;
+}
 static void draw_page(void)
 {
     gfx_rect(0, 0, GFX_W, GFX_H, BG);
     gfx_text(6, 2, "TAU GALLERY", ACC, BG);
     if (loaded_page != page && !load_page()) { say("INDEX READ FAILED", BAD); return; }
+    const int fading = gfx_blend_ready() != 0;
+    for (uint32_t i = 0; i < FADE_SLOTS; i++) fade[i].on = 0u;
     for (uint32_t k = 0; k < n_on_page; k++) {
         uint32_t x, y; cell_xy(k, &x, &y);
-        if (!draw_thumb(x, y, gx_thumb_off(&head, ent[k].thumb))) { say("THUMBNAIL READ FAILED", BAD); return; }
-        if (level == 1u) {                                                                           /* a folder tile: the cover with a darkened strip at the foot carrying the name and the number of pictures */
-            char b[16], *q = b; uint32_t n = ent[k].size, d = 1u; for (uint32_t v = n; v >= 10u; v /= 10u) d++;
-            const uint32_t room = 11u - d; for (uint32_t i = 0; i < room && ent[k].name[i]; i++) *q++ = ent[k].name[i];
-            *q++ = ' '; q = put_u(q, n); *q = 0;
-            gfx_rect(x, y + GR.ch - 16u, GR.cw, 16u, dark_bg()); gfx_text(x + 2u, y + GR.ch - 16u, b, FG, dark_bg());
-            gfx_corners(x, y, GR.cw, GR.ch, GR.rad, BG);
-        }
+        if (fading) { if (!draw_thumb_fade(k, x, y, gx_thumb_off(&head, ent[k].thumb))) { fade_flush(); say("THUMBNAIL READ FAILED", BAD); return; } }
+        else { if (!draw_thumb(x, y, gx_thumb_off(&head, ent[k].thumb))) { say("THUMBNAIL READ FAILED", BAD); return; } if (level == 1u) cell_finish(k, x, y); }
     }
+    fade_flush();
     frame(sel - (cur_first + page * pp), ACC); footer();
 }
 
@@ -173,10 +214,11 @@ static uint32_t zb_on, zb_px;                       /* the zoom's loader bar is 
 #define LDR_H 2u
 #define LDR_TRACK ((uint16_t)((DIM >> 1) & 0x7BEFu))     /* the track: the secondary text colour at half brightness */
 static uint32_t ldr_live;                                                                                  /* 1 while the picture being opened shows its progress */
+static uint32_t ldr_lo, ldr_hi = 100u;                                                                       /* the share of the bar this stage fills (percent): reading the file 0 to 55, decoding the fit level 55 to 100, one bar that fills once */
 static uint32_t ldr_x = LDR_X, ldr_y = LDR_Y, ldr_w = LDR_W, ldr_h = LDR_H;                              /* where the bar is: the middle of the screen, or (a picture opened from the grid) centred on its thumbnail, smaller */
 static void loader_bar(uint32_t done, uint32_t total)
 {
-    const uint32_t w = total ? (uint32_t)((uint64_t)done * ldr_w / total) : 0u;
+    const uint32_t pct = total ? ldr_lo + (uint32_t)((uint64_t)(ldr_hi - ldr_lo) * (done > total ? total : done) / total) : ldr_lo, w = pct * ldr_w / 100u;
     gfx_rect(ldr_x, ldr_y, ldr_w, ldr_h, LDR_TRACK);
     if (w) gfx_rect(ldr_x, ldr_y, w > ldr_w ? ldr_w : w, ldr_h, ACC);
 }
@@ -199,6 +241,7 @@ static tgy_file_t v1f; static tgy_level_t v1l; static uint8_t v1_idx[V1_IDX_MAX]
 static int v1_read_idx(void *ctx, uint32_t off, uint32_t len, uint8_t *dst) { (void)ctx; return read_bytes(SLOT_PIC, off, len, dst); }
 static int v1_land(uint32_t total, int show_progress)       /* lands bytes 0 .. total of the file at the landing window; 0 or 5 */
 {
+    ldr_lo = 0u; ldr_hi = 55u;
     REG_WR(R_LAND_BASE, GAL_LAND_BASE); REG_WR(R_LAND_CTRL, 1u);
     for (uint32_t c = 0; c < total; c += LAND_CHUNK) {
         const uint32_t len = total - c < LAND_CHUNK ? total - c : LAND_CHUNK;
@@ -210,6 +253,7 @@ static int v1_land(uint32_t total, int show_progress)       /* lands bytes 0 .. 
 static int v1_tick(void *ctx, uint32_t tx, uint32_t ty)
 {
     const int *show = ctx;
+    ldr_lo = 55u; ldr_hi = 100u;
     if (*show) { const uint32_t done = ty * v1l.cols + tx + 1u, all = v1l.cols * v1l.rows; char b[24], *q = put_s(b, "DECODING "); q = put_u(q, done * 100u / all); q = put_s(q, "%"); *q = 0; say(b, ACC); loader_bar(done, all); }
     return 0;
 }
@@ -377,7 +421,7 @@ static int open_picture(uint32_t i, int show_progress)
 {
     char path[GX_PATH_MAX + 2u]; path[0] = '/';
     { const char *s = EN(i).path; uint32_t n = 0; while (s[n] && n < GX_PATH_MAX) { path[1u + n] = s[n]; n++; } path[1u + n] = 0; }
-    ldr_live = show_progress ? 1u : 0u;
+    ldr_live = show_progress ? 1u : 0u; ldr_lo = 0u; ldr_hi = 100u;
     if (show_progress) { say("OPENING", ACC); loader_bar(0u, 1u); }
     if (!slot_open_path(SLOT_PIC, path)) return 1;
     if (!read_bytes(SLOT_PIC, 0u, 4096u, h4) && !read_bytes(SLOT_PIC, 0u, 4096u, h4)) return 2;      /* one retry of a failed read: a transient card error should not cost the picture */
@@ -546,13 +590,19 @@ static void zb_set(uint32_t done, uint32_t total)
 }
 static void zb_end(void) { if (!zb_on) return; zb_on = 0u; zb_copy(1); zb_view = GAL_PLANE_BASE; zb_stride = GAL_LINE_WORDS16; }
 static void zoom_shown_now(void) { zb_end(); if (z_first) { z_first = 0u; if (!z2_hold) info.zoom_ms = (cycles() - z_t0) / (CLK_HZ / 1000u); } }       /* the first zoomed view is on screen */
-static void zoom_leave(void)
+static void zoom_leave_keep(void)                                                           /* the zoom's state goes, the screen is left as it is (a 2x view that stays up while the 1:1 view loads) */
 {
     if (t_job) gfx_fence();                                                                  /* Talos commands of an abandoned copy retire before anything reuses their memory */
-    zb_end();                                                                                /* the fit plane's own pixels back under the loader bar */
-    REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16); REG_WR(R_VIEW_BASE, GAL_PLANE_BASE);              /* the fit plane is still in SDRAM: back in one write */
+    zb_end();                                                                                /* the plane's own pixels back under the loader bar */
     z_shown = 0u; t_job = 0u; t_recentre = 0u; zk = -1; v1_pre.valid = 0u;
 }
+static void zoom_leave(void)
+{
+    zoom_leave_keep();
+    REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16); REG_WR(R_VIEW_BASE, GAL_PLANE_BASE);              /* the fit plane is still in SDRAM: back in one write */
+    if (view_dbl_on) { view_dbl_on = 0u; fx_apply(); }
+}
+static uint32_t z_open_front;                                                                /* the window the next zoom_open decodes its first view into (the other one holds the 2x view that is still on the screen) */
 /* Opens stop k with its screen corner at (nx, ny) of the stop's canvas (clamped here): the fit view shows while the level loads. */
 static void zoom_open(int k, int32_t nx, int32_t ny)
 {
@@ -570,7 +620,7 @@ static void zoom_open(int k, int32_t nx, int32_t ny)
     zl = zs[k]; zk = k; z_stop.w = zl.w; z_stop.h = zl.h; z_stop.scale_q16 = zl.scale_q16; gv_clamp(&z_stop, &nx, &ny);
     z_wx = nx; z_wy = ny; z_sx = -1; z_sy = -1; z_shown = 0u; z_t0 = cycles(); z_first = 1u;
     if (zl.layout == 0u) { z_stride_hw = zl.stride / 2u; z_nch = gv_nchunks((zl.len + 4095u) & ~4095u); z_lo = 0u; z_hi = 0u; }
-    else { t_front = 0u; gv_window_for(&z_stop, z_wx, z_wy, &t_wx[0], &t_wy[0]); res_clear(0u); }
+    else { t_front = z_open_front; z_open_front = 0u; gv_window_for(&z_stop, z_wx, z_wy, &t_wx[t_front], &t_wy[t_front]); res_clear(t_front); }
     zb_begin();
 }
 /* Goes to stop k (-1: fit). The fit view shows while the new level loads, and its first view keeps the screen centre on the same point of the picture. */
@@ -696,6 +746,7 @@ static void tile_show(int32_t x, int32_t y)                                     
 {
     REG_WR(R_VIEW_STRIDE, GV_WIN_STRIDE_WORDS); REG_WR(R_VIEW_BASE, gv_win_base(win_base(t_front), x, y, t_wx[t_front], t_wy[t_front]));
     z_sx = x; z_sy = y; z_shown = 1u; t_shown_win = t_front; zoom_shown_now();
+    if (view_dbl_on) { view_dbl_on = 0u; fx_apply(); }                                       /* the 1:1 view is on the screen: the doubling that the 2x view had goes */
 }
 /* One pass of the tile zoom loop. The keys move the WANTED corner (z_wx, z_wy) at once; the SHOWN view (z_sx, z_sy) follows it a step a frame, only where every tile of the step is whole, so a pan that outruns the card
  * slows to the card's pace instead of freezing and jumping. The windows are built around the shown view pulled toward the wanted corner by at most SLACK, and the tiles are fetched in the order of that view.
@@ -990,6 +1041,45 @@ static int z2_work(uint32_t tp, uint32_t from, int32_t wx, int32_t wy)
 }
 static void z2_stats_reset(void) { info.zt_n = info.zt_land_sum = info.zt_land_max = info.zt_dec_n = info.zt_dec_sum = info.zt_dec_max = info.zt_pass_max = info.zt_catch = info.zt_moved = info.zt_stall_run_max = 0u; info.zoom_ms = GI_NONE; }
 /* The zoom loop. level: 2 or 4. (*cx, *cy): the screen's centre in the level's own pixels, in and out. Returns 0 for the 1:1 view, 1 for the fit view, 2 to leave for the grid, 3 for the 1:1 view's map, -1 when a tile could not be read. */
+/* The navigator in the 2x and 4x views (owner, 2026-11-22: Start there showed a map of the wrong size and waited for the 1:1 view to load). The fit plane is still in memory, so the map is up at once; its rectangle is the area the
+ * 2x or 4x screen shows (the 1:1 view's rectangle over the level), D-pad moves it, A chooses it (the centre in the 1:1 level's pixels is returned, the zoom goes there at the same level), B or Start leave it. 1: chosen, 0: left. */
+static int map_z2(uint32_t lvl, int32_t lcx, int32_t lcy, int32_t *ncx, int32_t *ncy)
+{
+    map_runs++; map_active = 1u;
+    const uint32_t saved_dbl = view_dbl_on; if (saved_dbl) { view_dbl_on = 0u; fx_apply(); }
+    REG_WR(R_VIEW_STRIDE, GAL_LINE_WORDS16); REG_WR(R_VIEW_BASE, GAL_PLANE_BASE);
+    for (uint32_t h = 0; h < 1200u; h += 2u) gfx_mb_write(GAL_BARSAVE + MAP_SPR + h, (uint32_t)zb_half(h, 1000000u) | ((uint32_t)zb_half(h + 1u, 1000000u) << 16));
+    int32_t okx, oky, rx, ry, rw, rh; zoom_off(zk, &okx, &oky);
+    gv_map_rect(zoom_scale(-1), (int32_t)pic.rx, (int32_t)pic.ry, zoom_scale(zk), okx, oky, lcx - GV_SCREEN_W / 2, lcy - GV_SCREEN_H / 2, &rx, &ry, &rw, &rh);       /* the 1:1 view's rectangle with the zoom's centre ... */
+    const int32_t ccx = rx + rw / 2, ccy = ry + rh / 2; m_rw = rw / (int32_t)lvl; m_rh = rh / (int32_t)lvl; if (m_rw < 8) m_rw = 8; if (m_rh < 8) m_rh = 8;       /* ... made the 2x or 4x screen's size about the same centre */
+    m_rx = ccx - m_rw / 2; m_ry = ccy - m_rh / 2;
+    gv_map_clamp((int32_t)pic.rx, (int32_t)pic.ry, (int32_t)pic.rw, (int32_t)pic.rh, m_rw, m_rh, &m_rx, &m_ry);
+    int32_t dx0 = m_rx, dy0 = m_ry, dw0 = m_rw, dh0 = m_rh; int res = 0;
+    map_ops(0, dx0, dy0, dw0, dh0); map_ops(1, dx0, dy0, dw0, dh0); gfx_fence();
+    uint32_t prev = REG_RD(R_INPUT) & 0xFFFFu, held = 0u, next_tick = cycles();
+    for (;;) {
+        const uint32_t keys = REG_RD(R_INPUT) & 0xFFFFu, edge = keys & ~prev; prev = keys;
+        if (edge) last_act = cycles();
+        settings_tick();
+        if (edge & (KEY_B | KEY_START)) break;
+        if (edge & KEY_A) {
+            const int32_t cxf = m_rx + m_rw / 2, cyf = m_ry + m_rh / 2, w1 = m_rw * (int32_t)lvl, h1 = m_rh * (int32_t)lvl; int32_t sx2, sy2;
+            gv_map_view(zoom_scale(-1), (int32_t)pic.rx, (int32_t)pic.ry, zoom_scale(zk), okx, oky, cxf - w1 / 2, cyf - h1 / 2, &sx2, &sy2);
+            *ncx = sx2 + GV_SCREEN_W / 2; *ncy = sy2 + GV_SCREEN_H / 2; res = 1; break;
+        }
+        const int dx = (keys & KEY_RIGHT) ? 1 : (keys & KEY_LEFT) ? -1 : 0, dy = (keys & KEY_DOWN) ? 1 : (keys & KEY_UP) ? -1 : 0; int redraw = 0;
+        if ((int32_t)(cycles() - next_tick) >= 0) {
+            next_tick = cycles() + ZOOM_FRAME; held = (dx || dy) ? held + 1u : 0u;
+            if (dx || dy) { const int32_t st = gv_speed(held); m_rx += dx * st; m_ry += dy * st; gv_map_clamp((int32_t)pic.rx, (int32_t)pic.ry, (int32_t)pic.rw, (int32_t)pic.rh, m_rw, m_rh, &m_rx, &m_ry); redraw = 1; }
+        }
+        if (redraw && (m_rx != dx0 || m_ry != dy0)) { map_ops(2, dx0, dy0, dw0, dh0); map_ops(0, m_rx, m_ry, m_rw, m_rh); map_ops(1, m_rx, m_ry, m_rw, m_rh); gfx_fence(); dx0 = m_rx; dy0 = m_ry; }
+    }
+    map_ops(2, dx0, dy0, dw0, dh0); gfx_fence();
+    REG_WR(R_VIEW_STRIDE, z2_disp_stride); REG_WR(R_VIEW_BASE, z2_disp_view);                          /* the view that was on the screen again, with its doubling */
+    if (saved_dbl) { view_dbl_on = 1u; fx_apply(); }
+    map_active = 0u;
+    return res;
+}
 static int z2_run(int32_t *cx, int32_t *cy, uint32_t level)
 {
     uint32_t f = 1u - t_shown_win, composing = 0u, held = 0u, next_tick = cycles(), prev = REG_RD(R_INPUT) & 0xFFFFu, b_t0 = 0u, b_on = 0u, z_run = 0u, t_level = cycles(), t_comp = 0u, last_pct = 101u, z2_fail = 0u; int ret = 0;
@@ -1002,7 +1092,16 @@ static int z2_run(int32_t *cx, int32_t *cy, uint32_t level)
         settings_tick();
         if (lab_on && (edge || (z2_shown && (uint32_t)(cycles() - lab_t0) > 2u * CLK_HZ))) lab_clear();                         /* the bar (the loader's, or the level's name) goes at the next key press; the name after two seconds as well */
         int32_t nlevel = 0;                                                                                                   /* a level change asked for: -1 = the 1:1 view, 2 or 4 = that scale */
-        if (edge & KEY_START) { ret = 3; break; }                                                                              /* Start: the 1:1 view's map, to choose the area */
+        int tele = 0;                                                                                                         /* the navigator chose a place: the same level there */
+        if (edge & KEY_START) {                                                                                               /* Start: the navigator (the fit plane is in memory: it is up at once), sized for this level */
+            lab_clear(); zb_end();
+            int32_t ncx = 0, ncy = 0;
+            const int32_t lcx = ((z2_shown ? z2_vx : wx) + z2_vw / 2) / (int32_t)z2_s, lcy = ((z2_shown ? z2_vy : wy) + z2_vh / 2) / (int32_t)z2_s;
+            const int chosen = map_z2(z2_level, lcx, lcy, &ncx, &ncy);
+            prev = REG_RD(R_INPUT) & 0xFFFFu; next_tick = cycles(); held = 0u;
+            if (!chosen) continue;
+            tele = 1; *cx = ncx; *cy = ncy;
+        }
         if ((edge & KEY_SELECT) && !(keys & (KEY_LEFT | KEY_RIGHT))) {                                                         /* Select: the details pages (Info and histograms), then the view again */
             lab_clear(); zb_end(); gal_view_off(); run_details(0);
             if (!gal_view_on()) { ret = 2; break; }
@@ -1014,12 +1113,13 @@ static int z2_run(int32_t *cx, int32_t *cy, uint32_t level)
         if (edge & KEY_B) { b_t0 = cycles(); b_on = 1u; }                                                                      /* B: back a level on release, the grid when held */
         if (b_on && !(keys & KEY_B)) { b_on = 0u; nlevel = z2_level == 4u ? 2 : -1; }
         else if (b_on && (uint32_t)(cycles() - b_t0) > B_LONG) { ret = 2; break; }
+        if (tele) nlevel = (int32_t)z2_level;
         if (nlevel == -1) { ret = 0; break; }
         if (nlevel != 0) {                                                                                                     /* 2x <-> 4x: the centre kept, the first plane of the new scale composed while the old view stays on the screen */
             lab_clear(); zb_end();
-            *cx = ((z2_shown ? z2_vx : wx) + z2_vw / 2) / (int32_t)z2_s; *cy = ((z2_shown ? z2_vy : wy) + z2_vh / 2) / (int32_t)z2_s;
-            if (z2_s == 4u && f == 1u) { hide_view(); z2_disp_ok = 0u; }                                                                            /* the 4x plane in the second place covers both windows: nothing is left to compose the 2x one in while it is on the screen */
-            const uint32_t old_s = z2_s; z2_setup((uint32_t)nlevel); z2_shown = 0u; composing = 0u; f = z2_s == 4u ? 0u : (old_s == 4u ? 1u : 1u - f);                    /* a plane of the zoom's two windows is composed in the one that is not on the screen; the 4x plane (4 x 4 per pixel, without the doubler) has its own first place */ z2_dirx = z2_diry = 0; z2_stats_reset(); t_level = cycles(); held = 0u; last_pct = 101u;
+            if (!tele) { *cx = ((z2_shown ? z2_vx : wx) + z2_vw / 2) / (int32_t)z2_s; *cy = ((z2_shown ? z2_vy : wy) + z2_vh / 2) / (int32_t)z2_s; }
+            if (z2_s == 4u && (f == 1u || tele)) { hide_view(); z2_disp_ok = 0u; }                                                                            /* the 4x plane in the second place covers both windows: nothing is left to compose the 2x one in while it is on the screen */
+            const uint32_t old_s = z2_s; z2_setup((uint32_t)nlevel); z2_shown = 0u; composing = 0u; f = z2_s == 4u ? 0u : (old_s == 4u && !tele ? 1u : 1u - f);                    /* a plane of the zoom's two windows is composed in the one that is not on the screen; the 4x plane (4 x 4 per pixel, without the doubler) has its own first place */ z2_dirx = z2_diry = 0; z2_stats_reset(); t_level = cycles(); held = 0u; last_pct = 101u;
             wx = (int32_t)z2_s * *cx - z2_vw / 2; wy = (int32_t)z2_s * *cy - z2_vh / 2; z2_clampv(&wx, &wy);
             z2_aim(f, wx, wy);
         }
@@ -1064,7 +1164,7 @@ static int z2_run(int32_t *cx, int32_t *cy, uint32_t level)
         }
         { const uint32_t us = z2_us(pass_t0); if (us > info.zt_pass_max) info.zt_pass_max = us; }
     }
-    lab_clear(); zb_end(); z2_active = 0u; view_hidden = 0u; z2_job.on = 0u; if (view_dbl_on) { view_dbl_on = 0u; fx_apply(); }
+    lab_clear(); zb_end(); z2_active = 0u; view_hidden = 0u; z2_job.on = 0u;              /* (the doubling stays until the caller has put the next view on the screen) */
     if (ret >= 0) { const int32_t vx = z2_shown ? z2_vx : wx, vy = z2_shown ? z2_vy : wy; *cx = (vx + z2_vw / 2) / (int32_t)z2_s; *cy = (vy + z2_vh / 2) / (int32_t)z2_s; }
     return ret;
 }
@@ -1075,8 +1175,13 @@ static void z2_enter(void)                                                      
     const int k = zk; int32_t cx = z_sx + GV_SCREEN_W / 2, cy = z_sy + GV_SCREEN_H / 2;
     z2_disp_view = gv_win_base(win_base(t_shown_win), z_sx, z_sy, t_wx[t_shown_win], t_wy[t_shown_win]); z2_disp_stride = GV_WIN_STRIDE_WORDS; z2_disp_ok = 1u;                 /* the 1:1 view is on the screen while the 2x one loads: the loader's bar goes on it */
     const int r = z2_run(&cx, &cy, 2u);
-    zoom_leave(); z2_hold = 1u;                                                                  /* the Info page keeps the 2x or 4x run's numbers until the next zoom from the fit view */                                                                                /* the zoom's windows were written over: the 1:1 view is opened again at the same centre */
-    if (r == 0 || r == 3) { hide_view(); view_hidden = 0u; zb_view = GAL_BLACK_BASE; zb_stride = GAL_LINE_WORDS16; zoom_open(k, cx - GV_SCREEN_W / 2, cy - GV_SCREEN_H / 2); }      /* the 1:1 view loads on a black screen with the loader's bar (not on the whole picture, which was a flash of something else) */
+    z2_hold = 1u;                                                                                /* the Info page keeps the 2x or 4x run's numbers until the next zoom from the fit view */
+    if (r == 0 || r == 3) {                                                                      /* back to the 1:1 view: the 2x view stays on the screen with the loader's bar while it loads into the window that does not hold it */
+        const uint32_t shown_p = z2_disp_view >= GAL_WIN1 ? 1u : 0u;
+        zoom_leave_keep(); zb_view = z2_disp_view; zb_stride = z2_disp_stride; z_open_front = 1u - shown_p;
+        zoom_open(k, cx - GV_SCREEN_W / 2, cy - GV_SCREEN_H / 2);
+        if (zk < 0) zoom_leave();                                                                /* it did not start: the fit plane, not a half plane */
+    } else zoom_leave();
     if (r == 3) zoom_want_map = 1u;                                                              /* the 1:1 view's map, as soon as that view is up */
     else if (r < 0) say("ZOOM READ FAILED", BAD);
     else if (r == 2) zoom_to_grid = 1u;                                                          /* the caller leaves for the grid */
@@ -1184,7 +1289,7 @@ static void viewer(void)
 static void open_from_grid(void)
 {
     rot_o = 0u; mask_i = 0u; mask_painted = 0u;
-    { uint32_t x, y; cell_xy(sel - (cur_first + page * pp), &x, &y); ldr_w = (GR.cw * 3u / 4u) & ~1u; ldr_h = 4u; ldr_x = x + (GR.cw - ldr_w) / 2u; ldr_y = y + GR.ch / 2u - ldr_h / 2u; }      /* the loader is a smaller bar in the middle of the thumbnail being opened */
+    { uint32_t x, y; cell_xy(sel - (cur_first + page * pp), &x, &y); ldr_w = (GR.cw * 3u / 4u) & ~1u; ldr_h = 2u; ldr_x = x + (GR.cw - ldr_w) / 2u; ldr_y = y + GR.ch / 2u - ldr_h / 2u; }      /* the loader is a smaller bar in the middle of the thumbnail being opened */
     const int r = open_timed(sel, 1);
     ldr_x = LDR_X; ldr_y = LDR_Y; ldr_w = LDR_W; ldr_h = LDR_H;
     if (r) { loaded_page = 0xFFFFFFFFu; draw_page(); say(open_msg[r], BAD); return; }
