@@ -137,12 +137,12 @@ static void footer(void)
 }
 
 static void wait_ms(uint32_t ms);
-/* ---- the grid fades its thumbnails in (owner, 2026-11-22; "too abrupt" at three steps): each thumbnail is blended into its cell in six steps (the share of the picture rises 1/6, 2/6 ... then the exact copy), a step at least 24 ms after the last, so a fade takes about 120 ms.
+/* ---- the grid fades its thumbnails in (owner, 2026-11-22; "too abrupt" at three steps): each thumbnail is blended into its cell in six steps (the share of the picture rises 1/6, 2/6 ... then the exact copy), a step at least 33 ms after the last (30 a second), so a fade takes 200 ms.
  * The steps of the thumbnails already drawn go on while the next one is read from the card (no wait is added to the page), what is left at the end is finished with short waits. A thumbnail waits in a stash slot (six, 100 rows apart below the
  * stash's first row) until its last step; the folder strip and the rounded corners come after it. ---- */
 #define FADE_SLOTS 6u
 #define FADE_BLENDS 5u                                                                                   /* then the exact copy */
-#define FADE_GAP_MS 24u
+#define FADE_GAP_MS 33u                                                                                  /* 30 steps a second: six steps are 200 ms */
 typedef struct { uint8_t on, step; uint16_t k, x, y, w, h; uint32_t t; } fade_t;
 static fade_t fade[FADE_SLOTS]; static uint32_t fade_steps;                                              /* fade_steps: the blends that ran (for the host test) */
 static uint32_t fade_y(uint32_t j) { return STASH_Y + j * 100u; }
@@ -165,7 +165,7 @@ static void fade_advance(uint32_t j)
     } else { gfx_blit_stash(STASH_X, fade_y(j), f->x, f->y, f->w, f->h); f->on = 0u; cell_finish(f->k, f->x, f->y); }
     f->t = cycles();
 }
-static void fade_due(void)                                                                           /* the steps that are due (24 ms after the last one) */
+static void fade_due(void)                                                                           /* the steps that are due (33 ms after the last one) */
 {
     for (uint32_t j = 0; j < FADE_SLOTS; j++) if (fade[j].on && (uint32_t)(cycles() - fade[j].t) >= FADE_GAP_MS * (CLK_HZ / 1000u)) fade_advance(j);
 }
