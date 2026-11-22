@@ -358,6 +358,16 @@ static int label_ok(const char *text)                                           
     }
     return 1;
 }
+static int label_view_ok(const char *text)                                                                         /* the bar on a zoom plane: it lies on the last 32 rows of what the screen reads (from the view registers), black with the text in white, pixel for pixel */
+{
+    if (!lab_on || lab_stride != vstride || lab_base != vbase + GLB_Y0 * vstride) return 0;
+    for (uint32_t y = 0; y < GLB_H; y++) for (uint32_t x = 0; x < 800u; x++) for (uint32_t k = 0; k < 3u; k++) {
+        const uint32_t b = 3u * x + k, got = (mem[lab_base + y * lab_stride + b / 2u] >> (8u * (b & 1u))) & 255u;
+        const int on = y >= GLB_TY && y < GLB_TY + 21u && x >= GLB_TX && x < GLB_PX && glb_on(text, x - GLB_TX, y - GLB_TY);
+        if (got != (on ? 255u : 0u)) return 0;
+    }
+    return !strcmp(lab_last, text);
+}
 static int rot_plane_ok(const char *ref, uint32_t o, uint32_t iw, uint32_t ih)
 {
     char f[600]; snprintf(f, sizeof f, "%s/%s", dir, ref); uint32_t n; uint8_t *d = slurp(f, &n); if (!d || n != iw * ih * 3u) return 0;
@@ -699,7 +709,7 @@ static int big_grid_ok(void)                                                    
 }
 static void clear_texts(void);
 static void lib1_cp(int n);
-static uint32_t starts_570; static int32_t z2_c0x, z2_c0y, z2_c1x, z2_c1y;
+static uint32_t starts_570, nl593; static int32_t z2_c0x, z2_c0y, z2_c1x, z2_c1y;
 static int hid_pairs(void)                                                                                           /* a turn or a mask redraws a plane that is on the screen: each time the screen is pointed at the black plane first and at a picture plane after, never at a half drawn one */
 {
     if (vsnap_n < 2u || (vsnap_n & 1u)) return 0;
@@ -829,6 +839,9 @@ static void checkpoint(int n)
     case 581:
     z2_c0x = (z2_vx + 400) / 2; z2_c0y = (z2_vy + 360) / 2; chk(581, z2_nrecentre >= 1u && z2_ncopy >= 5u && info.zt_dec_n >= 5u && info.zoom_ms != GI_NONE && info.zt_pass_max > 0u && info.zt_moved > 0u && z2_vis_hits == 0u && z2_shown && z2_view_ok("v00_full.rgb", 1000u, 900u, 2u) && z2_vx > 2 * (z_sx + 400) - 400 && z2_vy > 2 * (z_sy + 360) - 360); break;      /* panned right and down: still the picture doubled, further along */
     case 582: chk(582, zk == 0 && z_shown && v1_view_matches("v00_full.rgb", 1000u, 900u) && z_sx == ((z2_c1x - 400 < 0 ? 0 : z2_c1x - 400 > 200 ? 200 : z2_c1x - 400) & ~3) && z_sy == (z2_c1y - 360 < 0 ? 0 : z2_c1y - 360 > 180 ? 180 : z2_c1y - 360)); break;                                                                  /* L1: back to the 1:1 view, at the 2x view's centre (it had moved right and down) */
+    case 593:
+    chk(593, z2_shown && label_view_ok("2X ZOOM") && lab_nload >= 2u); break;                                                                                                         /* the 2x view is up and its bar says 2X ZOOM, on the last rows of the plane the screen reads; the loader's bar (LOADING 2X nn%) was written while it loaded */
+    case 594: chk(594, z2_shown && z2_s == 4u && label_view_ok("4X ZOOM") && lab_nload > nl593); break;                                                                                                 /* the same for 4x: the loader's bar while the 4x plane loaded (the 2x view on the screen), then 4X ZOOM on the new plane */
     case 584: chk(584, z2_vis_hits == 0u && z2_s == 4u && z2_view_ok("v00_full.rgb", 1000u, 900u, 4u) && abs((z2_vx + 400) / 4 - z2_c0x) <= 4 && abs((z2_vy + 360) / 4 - z2_c0y) <= 4); break;      /* A again: the 4x view (every pixel 4 x 4), at the 2x view's centre */
     case 585: chk(585, z2_vis_hits == 0u && z2_s == 4u && z2_view_ok("v00_full.rgb", 1000u, 900u, 4u) && (z2_vx + 400) / 4 < z2_c0x); break;                                                                  /* panned left and up at 4x: still exact, further along */
     case 590: chk(590, map_active == 1u && zk == 0 && z_shown && !z2_active && z2_hold == 1u && info.zt_dec_n > 0u && info.zt_catch > 0u); break;                                                                                  /* the 1:1 view with its map open; the Info page still has the 2x run's numbers */
@@ -898,7 +911,7 @@ static void checkpoint(int n)
     case 35: { const uint32_t x = 399u; chk(48, thumbs_on_screen(0, count < 16u ? count : 16u) && fb[100u * 512u + x] == th_role[TR_BG_BOTTOM] && fb[100u * 512u + x] != 0u); } break;   /* back in the grid: the background is the theme's, the frame its accent */
     case 36: chk(49, setw[1] == (0x40000000u | 2u | (1u << 5) | (1u << 11)) && setw[0] == (1u << 27)); break;                                                             /* the look is saved after a quiet second, as word 1 only */
     case 60: chk(60, big_grid_ok()); break;
-    case 260: chk(260, sel == 0u && big_grid_ok()); break;
+    case 260: chk(260, sel == 3u && big_grid_ok()); break;                                                                                                     /* a new Down on the last picture (299, column 3 of the last row): the same column of the first row, 3 */
     case 261: chk(261, sel == count - 1u && big_grid_ok()); break;
     case 262: chk(262, sel == 0u && big_grid_ok()); break;
     case 263: chk(263, sel == count - 1u && big_grid_ok()); break;
@@ -915,7 +928,7 @@ static void checkpoint(int n)
     case 63: chk(63, plane_is_f("b000.tgy") && sel == 0u && page == 0u); break;                                                                                         /* Right, Right: past the end to the first picture, across 18 pages */
     case 69: chk(69, sel == 0u && big_grid_ok()); break;
     case 70: chk(70, sel == 298u && big_grid_ok()); break;
-    case 71: chk(71, sel == 299u && big_grid_ok()); break;
+    case 71: chk(71, sel == 2u && big_grid_ok()); break;                                                                                                          /* a new Down from 298 in the last row: the same column (2) of the first row */
     case 64: chk(64, plane_is_f("b150.tgy") && sel == 150u && page == 9u); break;                                                                                       /* a picture in the middle, opened from its page */
     case 72: fail_pic_reads = 1; pass_pic_reads = 0; clear_texts(); break;                                                                                              /* the header read fails once */
     case 73: chk(72, vid_bus == 1u && fail_pic_reads == 0 && plane_is(count - 1u) && !said("FAILED")); clear_texts(); break;                                                          /* the header is read again and the picture shows */
@@ -1185,9 +1198,9 @@ int main(int argc, char **argv)
         uint32_t S2[8192]; int k = 0; legacy_a = 0u;
 #define H2(key, n) do { for (int _i = 0; _i < (n); _i++) S2[k++] = (key); } while (0)
         S2[k++] = KEY_A; S2[k++] = 0; S2[k++] = CP(210); S2[k++] = KEY_A; S2[k++] = 0; S2[k++] = KEY_R1; S2[k++] = 0; H2(0, 200); S2[k++] = CP(211);                                          /* fit, then the 1:1 view (R1 before it shows is ignored) */
-        S2[k++] = CP(230); S2[k++] = KEY_A; S2[k++] = 0; H2(0, 400); S2[k++] = CP(580);                                                                                                         /* A: the 2x view */
+        S2[k++] = CP(231); S2[k++] = KEY_A; S2[k++] = 0; H2(0, 110); S2[k++] = CP(593); S2[k++] = CP(230); H2(0, 300); S2[k++] = CP(580);                                                                /* a slow clock while it loads: the bar's two seconds do not run out before the check */                                                                                                         /* A: the 2x view */
         H2(KEY_RIGHT, 40); H2(KEY_DOWN, 30); H2(0, 400); S2[k++] = CP(581);                                                                                                                       /* pan */
-        S2[k++] = KEY_A; S2[k++] = 0; H2(0, 600); S2[k++] = CP(584);                                                                                                                               /* A again: the 4x view, the same centre */
+        S2[k++] = CP(231); S2[k++] = KEY_A; S2[k++] = 0; H2(0, 300); S2[k++] = CP(594); S2[k++] = CP(230); H2(0, 400); S2[k++] = CP(584);                                                                                                                               /* A again: the 4x view, the same centre */
         H2(KEY_LEFT, 60); H2(KEY_UP, 40); H2(0, 600); S2[k++] = CP(585);                                                                                                                           /* pan at 4x (the screen goes black when the plane is aimed again) */
         S2[k++] = KEY_L1; S2[k++] = 0; H2(0, 500); S2[k++] = CP(586);
         H2(KEY_RIGHT, 20); H2(0, 300);
@@ -1231,7 +1244,7 @@ int main(int argc, char **argv)
             S3[k++] = CP(60); S3[k++] = KEY_RIGHT; S3[k++] = 0; S3[k++] = KEY_RIGHT; S3[k++] = 0; S3[k++] = KEY_RIGHT; S3[k++] = 0; S3[k++] = CP(60); S3[k++] = KEY_L1; S3[k++] = 0; S3[k++] = CP(69);      /* L1 on the first page goes to the first picture */
             for (uint32_t p = 0; p < pages; p++) { S3[k++] = KEY_R1; S3[k++] = 0; S3[k++] = CP(60); }                      /* R1 up to the last picture, one page at a time */
             S3[k++] = KEY_R1; S3[k++] = 0; S3[k++] = CP(60);                                                                         /* the last picture */
-            S3[k++] = KEY_DOWN; S3[k++] = 0; S3[k++] = CP(260); S3[k++] = KEY_UP; S3[k++] = 0; S3[k++] = CP(261);                                 /* a new Down on the last picture: the first; a new Up on the first: the last */
+            S3[k++] = KEY_DOWN; S3[k++] = 0; S3[k++] = CP(260); S3[k++] = KEY_UP; S3[k++] = 0; S3[k++] = CP(261);                                 /* a new Down on the last picture: the same column of the first row (3); a new Up there: the same column of the last row, the last picture */
             S3[k++] = KEY_RIGHT; S3[k++] = 0; S3[k++] = CP(262); S3[k++] = KEY_LEFT; S3[k++] = 0; S3[k++] = CP(263);                              /* the same for Right and Left */
             S3[k++] = CP(264); for (int i = 0; i < 6; i++) S3[k++] = KEY_RIGHT; S3[k++] = 0; S3[k++] = CP(269);                              /* Right held for 0.3 s: only the first press (to 0), no repeat yet */
             S3[k++] = KEY_RIGHT; for (int i = 0; i < 59; i++) S3[k++] = KEY_RIGHT; S3[k++] = 0; S3[k++] = CP(265);                                   /* Right held for 3 s (a poll is 50 ms): the first press wraps to 0, then it repeats forward */
@@ -1246,7 +1259,7 @@ int main(int argc, char **argv)
             S3[k++] = CP(60); S3[k++] = KEY_UP; S3[k++] = 0; S3[k++] = KEY_UP; S3[k++] = 0; S3[k++] = KEY_LEFT; S3[k++] = 0; S3[k++] = KEY_LEFT; S3[k++] = 0; S3[k++] = CP(60);      /* 160 - 4 - 4 - 1 - 1 = 150, on page 9 */
             S3[k++] = KEY_A; S3[k++] = 0; S3[k++] = CP(64); S3[k++] = KEY_B; S3[k++] = 0; S3[k++] = CP(60);
             for (uint32_t p = 0; p < 9u; p++) { S3[k++] = KEY_R1; S3[k++] = 0; }                                          /* 150 -> 294 */
-            S3[k++] = KEY_DOWN; S3[k++] = 0; S3[k++] = CP(70); S3[k++] = KEY_DOWN; S3[k++] = 0; S3[k++] = CP(71); S3[k++] = END;      /* a row down, then Down from the last row goes to the last picture */
+            S3[k++] = KEY_DOWN; S3[k++] = 0; S3[k++] = CP(70); S3[k++] = KEY_DOWN; S3[k++] = 0; S3[k++] = CP(71); S3[k++] = END;      /* a row down, then Down from the last row goes to the same column of the first row */
         }
         if (k > (int)(sizeof script / sizeof script[0])) { printf("FAIL the scenario script has %d steps, the script buffer holds %d (raise both arrays)\n", k, (int)(sizeof script / sizeof script[0])); return 2; }
         nscript = k; memcpy(script, S3, (size_t)k * sizeof S3[0]);

@@ -365,16 +365,18 @@ int main(void)
             const uint32_t cols = 4u, last = count - 1u, row = sel / cols, lastrow = last / cols; uint32_t want = sel;
             if (dir == 0u) want = sel > 0u ? sel - 1u : (fresh ? last : sel);
             if (dir == 1u) want = sel < last ? sel + 1u : (fresh ? 0u : sel);
-            if (dir == 2u) want = row > 0u ? sel - cols : (sel == 0u && fresh ? last : sel);
-            if (dir == 3u) want = row < lastrow ? (sel + cols <= last ? sel + cols : last) : (sel < last ? last : (fresh ? 0u : sel));
+            if (dir == 2u) want = row > 0u ? sel - cols : (fresh ? (lastrow * cols + sel % cols > last ? last : lastrow * cols + sel % cols) : sel);
+            if (dir == 3u) want = sel + cols <= last ? sel + cols : (row < lastrow ? last : (fresh ? sel % cols : sel));
             if (gv_grid_step(sel, count, cols, dir, fresh) != want) { okn = 0; if (cases < 3u) printf("  count %u sel %u dir %u fresh %u: got %u want %u\n", count, sel, dir, fresh, gv_grid_step(sel, count, cols, dir, fresh), want); }
             cases++;
         }
-        chk("grid step: every count 1..40, picture, key and press kind equals the rule (wrap only on a new press at the first or last picture)", okn);
+        chk("grid step: every count 1..40, picture, key and press kind equals the rule (Left and Right wrap at the ends on a new press; Up and Down loop by column from the first or last row, Down from above a short last row goes to the last picture)", okn);
         uint32_t s2 = 0u; for (int i = 0; i < 100; i++) s2 = gv_grid_step(s2, 10u, 4u, 3u, 0u);
-        chk("grid step: a held Down stops at the last picture and does not loop", s2 == 9u);
-        s2 = gv_grid_step(s2, 10u, 4u, 3u, 1u); chk("grid step: a new Down on the last picture goes to the first", s2 == 0u);
-        s2 = gv_grid_step(s2, 10u, 4u, 2u, 1u); chk("grid step: a new Up on the first picture goes to the last", s2 == 9u);
+        chk("grid step: a held Down stops in the last row and does not loop (10 pictures, 4 columns: 0, 4, 8)", s2 == 8u);
+        s2 = gv_grid_step(s2, 10u, 4u, 3u, 1u); chk("grid step: a new Down in the last row goes to the same column of the first row (8 to 0)", s2 == 0u);
+        s2 = gv_grid_step(s2, 10u, 4u, 2u, 1u); chk("grid step: a new Up in the first row goes to the same column of the last row (0 to 8)", s2 == 8u);
+        chk("grid step: Up from column 1 goes to the last row's column 1 (1 to 9); from column 2, which that row lacks, to the last picture (2 to 9); Down from 9 goes to 1", gv_grid_step(1u, 10u, 4u, 2u, 1u) == 9u && gv_grid_step(2u, 10u, 4u, 2u, 1u) == 9u && gv_grid_step(9u, 10u, 4u, 3u, 1u) == 1u);
+        chk("grid step: other grid sizes: 57 pictures in 5, 6 and 8 columns loop by column (Up goes to the last row's same column or the last picture, Down from the last row to its column in the first row)", gv_grid_step(0u, 57u, 5u, 2u, 1u) == 55u && gv_grid_step(3u, 57u, 5u, 2u, 1u) == 56u && gv_grid_step(56u, 57u, 5u, 3u, 1u) == 1u && gv_grid_step(1u, 57u, 6u, 2u, 1u) == 55u && gv_grid_step(5u, 57u, 6u, 2u, 1u) == 56u && gv_grid_step(56u, 57u, 8u, 3u, 1u) == 0u && gv_grid_step(7u, 57u, 8u, 2u, 1u) == 56u);
         chk("grid step: a held Up from the last picture stops at the first row and does not loop", ({ uint32_t q = 9u; for (int i = 0; i < 100; i++) q = gv_grid_step(q, 10u, 4u, 2u, 0u); q == 1u; }));
     }
     {   /* where a picture sits on the fit canvas: the converter's rule in floating point (round half to even) for every size to 800 x 800 and 200,000 random ones, on the 800 x 720 canvas and the 96 x 72 thumbnail; a tie that

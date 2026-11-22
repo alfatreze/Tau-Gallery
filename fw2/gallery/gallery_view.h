@@ -155,7 +155,9 @@ static inline void gv_fit_rect(uint32_t w, uint32_t h, uint32_t cw, uint32_t ch,
 
 /* ---- grid navigation ---- */
 /* One direction key in the grid: the picture selected next. dir 0 left, 1 right, 2 up, 3 down; fresh = 1 for a new press, 0 for a key repeat. A held key walks to the end of the library and stops there; only a NEW press
- * on the first picture (left or up) goes to the last, and on the last picture (right or down) to the first. Down from the last row goes to the last picture (the row may be short), as before. */
+ * on the first picture (left) goes to the last and on the last picture (right) to the first. Up and Down loop by COLUMN (owner, 2026-11-21): a new Up on any picture of the first row goes to the picture of the same column in the last row
+ * (the last picture when that row is short and has no such column), and a new Down on any picture of the last row to the same column of the first row; Down from the row above a short last row goes to the last picture. A key held
+ * stops at the top and bottom. Pages hold whole rows, so the first and last row are those of the first and the last page, whatever the grid's columns. */
 static inline uint32_t gv_grid_step(uint32_t sel, uint32_t count, uint32_t cols, uint32_t dir, uint32_t fresh)
 {
     if (count == 0u) return 0u;
@@ -175,17 +177,24 @@ static inline uint32_t gv_grid_step(uint32_t sel, uint32_t count, uint32_t cols,
 #endif
     case 2u: if (sel >= cols) return sel - cols;
 #if BUG == 26
-        return (fresh && sel < cols) ? last : sel;                                           /* wraps from anywhere in the first row */
+        return (fresh && sel == 0u) ? last : sel;                                            /* only the first picture loops (as before the column rule) */
+#elif BUG == 29
+        return fresh ? last : sel;                                                           /* every column goes to the last picture */
 #else
-        return (fresh && sel == 0u) ? last : sel;
+        if (!fresh) return sel;
+        { const uint32_t t = (last / cols) * cols + sel % cols; return t > last ? last : t; } /* the same column of the last row, or the last picture when that row is short */
 #endif
     default: if (sel + cols <= last) return sel + cols;
 #if BUG == 27
-        if (sel < last) return sel;                                                          /* no jump to the last picture from a short last row */
+        return (fresh && sel == last) ? 0u : sel;                                            /* only the last picture loops */
 #else
-        if (sel < last) return last;
+#if BUG == 28
+        if (sel / cols < last / cols) return sel;                                            /* no jump to the last picture from the row above a short last row */
+#else
+        if (sel / cols < last / cols) return last;                                           /* the row above a short last row: the last picture */
 #endif
-        return fresh ? 0u : sel;
+        return fresh ? sel % cols : sel;                                                     /* the last row: a new press goes to the first row, same column */
+#endif
     }
 }
 
