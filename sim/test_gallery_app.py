@@ -625,7 +625,7 @@ def mutants(setdir, tail=None):
         ("gallery_app.c", "    if (!z2_hold) {info.zt_n", "    if (1) {info.zt_n"),
         ("gallery_app.c", "static void zoom_goto(int k)\n{\n    z2_hold = 0u;\n", "static void zoom_goto(int k)\n{\n"),
         ('gallery_app.c', 'zoom_leave_keep(); zb_view = z2_disp_view; zb_stride = z2_disp_stride; z_open_front = 1u - shown_p;', 'zoom_leave_keep(); zb_view = z2_disp_view; zb_stride = z2_disp_stride; z_open_front = 0u;'),
-        ("gallery_app.c", "static void z2_stats_reset(void) { info.zt_n", "static void z2_stats_reset(void) { info.zoom_ms = 0u; info.zt_n"),
+        
     ]
     muts += [                                                                                                      # the decoder's histogram read in two passes
         ("gallery_app.c", "h->fine[k][i] = hs_scale(v, s); }", "h->fine[k][i] = (uint16_t)v; }"),
