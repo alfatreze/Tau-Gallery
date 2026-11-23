@@ -19,6 +19,7 @@ static uint16_t fb[512u * 1024u];                  /* the UI framebuffer, halfwo
 static uint32_t hist_boost = 1u;                                                                                 /* every bin the histogram unit reports times this (a scenario sets it so the counts pass 65,535 and the page must scale them)  */
 static uint32_t z2_vis_hits;                                                                                     /* decoder writes into the rows the screen is reading while the 2x loop runs (there must be none: only tiles outside the shown view are ever decoded) */
 static uint32_t vlog[256], vlog_n, vsnap[256], vsnap_n;                                                          /* every write of the view base since the last checkpoint (the snapshot is what the checkpoint sees) */
+static uint32_t enter_black;                          /* times the viewer mode was switched on with the black plane under it (view_enter: after Info) */
 static uint32_t leave_bad;                          /* times the viewer mode was switched off while a picture was still on the screen (the black plane must be shown first) */
 static uint32_t clk, irq_pend, vid_req, vid_bus, vid_sw, vid_due, vbase, vstride, land_base, land_words, land_ovf, input_n;
 static int force_ovf, force_short, viewer_dead, fail_pic_reads, pass_pic_reads; static uint32_t v1_starts_before, land_unaligned, zt_n_212, rwd_241;
@@ -29,6 +30,9 @@ static uint32_t rc_prev, rc_starts, rc_retarget; static int32_t rc_bx, rc_by;
 static void ldr_lead_probe(void);
 static void ldr_lead_probe(void);
 static void ldr_probe(uint32_t dst);
+static void ldr_gfx_hook(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint16_t c);      /* every rectangle the firmware draws, defined after the firmware: the loader bar's fill, and the first rectangles of the run (the splash screen) */
+static void ldr_open_reset(void);
+static void v1c_hook(void);                                                                  /* the first read of the tile index cache after it was reset, defined after the firmware */
 static void tile_read_probe(uint32_t off);
 static void zb_probe(void);
 static void pass_hook(void);                                                                  /* called once per pass of the firmware's loop (a read of the keys): defined after the firmware, which it looks into */
@@ -87,7 +91,7 @@ static void wr(uint32_t a, uint32_t v)
     case 0x80000264u: hs_rect0 = v; break; case 0x80000268u: hs_rect1 = v; break; case 0x8000026Cu: hs_org = v; hs_starts++; break;
     case 0x80000270u: hs_data = (hs_bin[(v >> 8) & 3u][v & 255u] * hist_boost) & 0xFFFFFFu; hs_n = hs_cnt; hs_rd_busy = 2u; break;
     case 0x80000254u: { const uint32_t ch = (v >> 16) & 3u; if (pix_busy || (pix_ctrl & 4u) || ch > 2u) pix_bad++; else { pix_lut[ch][(v >> 8) & 255u] = v & 255u; pix_stores++; pix_busy = 3u; } } break;
-    case 0x800001ECu: if (!(v & 1u) && vid_bus == 1u && vbase != 0x300000u) leave_bad++; vid_req = v & 1u; vid_due = clk + 2u * 1111111u; break;
+    case 0x800001ECu: if (!(v & 1u) && vid_bus == 1u && vbase != 0x300000u) leave_bad++; if ((v & 1u) && vid_bus == 0u && vbase == 0x300000u) enter_black++; vid_req = v & 1u; vid_due = clk + 2u * 1111111u; break;
     case 0x800001F0u: vbase = v & 0x1FFFFFFu; if (vlog_n < 256u) vlog[vlog_n++] = vbase; { const uint32_t wn = (vbase >= T_WIN1 && vbase < T_STAGE) ? 1u : (vbase >= T_WIN0 && vbase < T_WIN1) ? 0u : 9u; if (wn != 9u && wn != last_win) { if (last_win != 9u) win_flips++; last_win = wn; } } break;
     case 0x800001F4u: vstride = v & 0xFFFFu; break;
     case 0x80000200u: land_base = v & 0x1FFFFFFu; break;
@@ -108,6 +112,7 @@ static uint8_t *idx_data, *pic_data; static uint32_t idx_len, pic_len; static ch
 static uint8_t *slurp(const char *p, uint32_t *n) { FILE *f = fopen(p, "rb"); if (!f) return 0; fseek(f, 0, SEEK_END); long l = ftell(f); fseek(f, 0, SEEK_SET); uint8_t *b = malloc((size_t)l); if (fread(b, 1, (size_t)l, f) != (size_t)l) exit(2); fclose(f); *n = (uint32_t)l; return b; }
 int slot_open_path(uint32_t slot, const char *path)
 {
+    if (slot == 2u) ldr_open_reset();                                                           /* a picture is being opened: the loader bar's checks start again */
     opens++; strncpy(last_open, path, sizeof last_open - 1);
     if (slot != 2u || path[0] != '/') return 0;
     const char *b = strrchr(path, '/') + 1; char f[600]; snprintf(f, sizeof f, "%s/%s", dir, b);
@@ -116,6 +121,8 @@ int slot_open_path(uint32_t slot, const char *path)
 }
 uint32_t _tag_start[1024];
 static uint32_t rc_prev, rc_starts, rc_retarget; static int32_t rc_bx, rc_by;
+static uint32_t ldr_last_w, ldr_seen55, ldr_bad2, ldr_full_seen, rect_log[48][5], rect_n, v1c_bad;
+static uint32_t dec588;                                   /* the 2x view's time spent decoding (info.zt_dec_sum) before B takes it back to the 1:1 view: the Info page keeps it (z2_hold), the 1:1 view's own decodes add to it */
 static int32_t nv590; static uint32_t ldr_pct, ldr_chunks, ldr_max, ldr_prev, ldr_first_ok = 1u, ldr_mono = 1u, ldr_skip, ldr_opens;
 int slot_read_blocking(uint32_t slot, uint32_t off, uint32_t dst, uint32_t len, uint32_t to)
 {
@@ -124,6 +131,7 @@ int slot_read_blocking(uint32_t slot, uint32_t off, uint32_t dst, uint32_t len, 
     if (zoom_phase && slot == 2u && len == 49152u) { tile_reads++; tile_read_probe(off); }
     if (!zoom_phase && slot == 2u && len == 131072u && !tagwin && dst >= 0x40000000u) ldr_probe(dst);
     if (zoom_phase && slot == 2u) { if (len > zoom_max_len) zoom_max_len = len; if (++reads_since_input > zoom_max_rs) zoom_max_rs = reads_since_input; }
+    if (slot == 2u && tagwin) v1c_hook();
     if (tg.pending) reads_while_decoding++;                                                      /* a card read while the decoder runs: the pipeline overlaps them */
     if (slot == 2u && !tagwin && (dst >> 28) == 4u && ((off & 4095u) || (len & 4095u))) land_unaligned++;      /* a landing read of a picture starts and ends on 4 KB (the APF reads fastest aligned; every landing in this firmware keeps to it) */
     if (slot == 5u && fail_idx) return 0;                                                         /* the index cannot be read (the thumbnail of the details page) */
@@ -140,7 +148,7 @@ int slot_read_blocking(uint32_t slot, uint32_t off, uint32_t dst, uint32_t len, 
 int gfx_mb_write(uint32_t a, uint32_t d) { if (a + 1u >= HW_N) return -1; mem[a] = (uint16_t)d; mem[a + 1u] = (uint16_t)(d >> 16); return 0; }
 int gfx_mb_read(uint32_t a, uint32_t *o) { *o = (uint32_t)mem[a] | (uint32_t)mem[a + 1u] << 16; return 0; }
 int gfx_mb_write_buf(uint32_t a, uint32_t d) { if (a + 1u >= sizeof fb / 2u) return -1; fb[a] = (uint16_t)d; fb[a + 1u] = (uint16_t)(d >> 16); return 0; }
-void gfx_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint16_t c) { for (uint32_t j = y; j < y + h && j < 1024u; j++) for (uint32_t i = x; i < x + w && i < 512u; i++) fb[j * 512u + i] = c; }
+void gfx_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint16_t c) { ldr_gfx_hook(x, y, w, h, c); for (uint32_t j = y; j < y + h && j < 1024u; j++) for (uint32_t i = x; i < x + w && i < 512u; i++) fb[j * 512u + i] = c; }
 static char texts[64][64]; static uint32_t texts_y[64]; static int ntext;
 /* Talos ops of core rev 30, modelled: OP_CORNERS paints the cut of each corner (a circle of radius r) in bg; OP_DSBLIT scales DOWN from the stash, every output pixel the rounded average of a 2 x 2 source box at floor(i * den / num). */
 static uint32_t corner_ops, dsblit_ops, dsblit_bad;                                                             /* dsblit_bad: a scale whose source is not in the shared stash rows (360 and below): the second UI buffer would read another picture */
@@ -170,7 +178,8 @@ void irq_enable(uint32_t m) { (void)m; }
 /* the Talos BLIT as the RTL has it (docs/M2_DESIGN.md section 9, sim/tb_talos_tilecopy.v): bases 25 bits, offsets 19 bits, a row at most 127 halfwords; this model also counts copies that read a window and any write into the displayed screen area */
 void gfx_fence(void) { }
 static uint32_t blend_a, blend_calls, blend_on_n; static int blend_open;                          /* the Talos alpha blend: dst = (src * a + dst * (256 - a)) >> 8 per channel (RGB565), only inside gfx_blend_on .. gfx_blend_off */
-int gfx_blend_ready(void) { return 1; }
+static int blend_off;                                                                                  /* NO_BLEND=1: a bitstream without the alpha blend, the grid draws its thumbnails the plain way */
+int gfx_blend_ready(void) { return !blend_off; }
 void gfx_blend_on(uint32_t a) { blend_a = a & 255u; blend_open = 1; blend_on_n++; }
 void gfx_blend_off(void) { blend_open = 0; }
 void gfx_blend_blit(uint32_t sx, uint32_t sy, uint32_t dx, uint32_t dy, uint32_t w, uint32_t h)
@@ -490,9 +499,29 @@ static void ldr_lead_probe(void)      /* a window has just been placed (a re-cen
     if (z_wy - z_sy > 96 || z_sy - z_wy > 96) { const int32_t b1 = py - t_wy[b], b2 = (t_wy[b] + GV_WIN_H) - (py + 720); const int ok1 = b1 >= GV_BEHIND - 16 && b1 <= GV_BEHIND + 127 + 16, ok2 = b2 >= GV_BEHIND - 16 && b2 <= GV_BEHIND + 127 + 16; if (t_wy[b] > 0 && t_wy[b] + GV_WIN_H < sh) { rc_lead_n++; if (!ok1 && !ok2) rc_lead_bad++; } }
 }
 static uint32_t zbp_n, zbp_max, zbp_prev, zbp_bad, zbp_rmax;
+static void ldr_gfx_hook(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint16_t c)
+{
+    if (rect_n < 48u) { rect_log[rect_n][0] = x; rect_log[rect_n][1] = y; rect_log[rect_n][2] = w; rect_log[rect_n][3] = h; rect_log[rect_n][4] = c; rect_n++; }
+    if (!ldr_live || x != ldr_x || y != ldr_y || h != ldr_h || c != th_role[TR_ACCENT]) return;
+    if (w < ldr_last_w) ldr_bad2++;                                                                   /* the fill of one open only grows, the reading of the file and the decoding of the fit level are one bar */
+    if (ldr_lo == 55u && !ldr_seen55) { ldr_seen55 = 1u; if (ldr_last_w != ldr_w * 55u / 100u) ldr_bad2++; }      /* the reading of the file ends at 55 % */
+    if (w == ldr_w) ldr_full_seen = 1u;
+    ldr_last_w = w;
+}
+static void ldr_open_reset(void) { if (ldr_live) { ldr_last_w = 0u; ldr_seen55 = 0u; ldr_full_seen = 0u; } }                  /* a bar of its own: an open that shows no progress leaves the last one alone */
+static int splash_ok(void)                                                                           /* the splash screen's bar: 160 x 4 at (120, 178), filled completely before the grid */
+{
+    int fill = 0, track = 0; for (uint32_t i = 0; i < rect_n; i++) { if (rect_log[i][0] == 120u && rect_log[i][1] == 178u && rect_log[i][2] == 160u && rect_log[i][3] == 4u) { if (rect_log[i][4] == th_role[TR_ACCENT]) fill = 1; else track = 1; } }
+    return fill && track;
+}
+static void v1c_hook(void)                                                                           /* the first cache read after a zoom opened with its index on the card: every block of the cache is empty, whatever the zoom before it left in it */
+{
+    if (v1z.idx == 0 && v1z.fetch && v1c_clock == 0u) for (uint32_t i = 0; i < v1c_n; i++) if (v1c_pos[i] != 0xFFFFFFFFu) v1c_bad++;
+}
 static void zb_probe(void)      /* the zoom's loader bar in the fit plane (rows 358 and 359, pixels 320 to 479): a prefix of ACC pixels on a dark track, a prefix that only grows, the same in both rows */
 {
     if (!zoom_phase || zk < 0 || z_shown || !zb_on) return;
+    if (!((zb_w == 800u && zb_rows == 6u) || (zb_w == 400u && zb_rows == 3u))) zbp_bad++;                  /* the bar is 6 rows of the screen at the top, whatever the plane */
     { static uint32_t last_t0; if (z_t0 != last_t0) { last_t0 = z_t0; zbp_prev = 0u; } }                      /* a zoom opened again (B goes back a level at a time now, so a level can open on the way to the fit view): its bar starts from 0 */
     const uint16_t ac = th_role[TR_ACCENT], tr = (uint16_t)((th_role[TR_TEXT_SECONDARY] >> 1) & 0x7BEFu);
     const uint8_t ar = (uint8_t)(((ac >> 11) & 31u) << 3), ag = (uint8_t)(((ac >> 5) & 63u) << 2), ab = (uint8_t)((ac & 31u) << 3), tR = (uint8_t)(((tr >> 11) & 31u) << 3), tG = (uint8_t)(((tr >> 5) & 63u) << 2), tB = (uint8_t)((tr & 31u) << 3);
@@ -637,7 +666,7 @@ static void lib1_cp(int n)
     char w[32];
     if (getenv("LIB1_DEBUG")) { printf("cp %d: level %u gi %u first %u count %u sel %u page %u nop %u last '%s' c0 %d c1 %d c2 %d ring0 %d ring1 %d pageok %d\n", n, level, gi, cur_first, cur_count, sel, page, n_on_page, last_text(), lib1_cell_ok(0, 0, thumb1_of(0), 1), lib1_cell_ok(0, 1, thumb1_of(20), 1), lib1_cell_ok(0, 2, thumb1_of(23), 1), lib1_ring_ok(0, 3, 0), lib1_ring_ok(0, 3, 1), lib1_page_ok(0, cur_first + page * pp, n_on_page)); }
     switch (n) {
-    case 400: chk(400, splash_calls >= 6u && fade_steps >= 6u && level == 1u && gi == 0u && cur_count == 3u && sel == 0u && !strcmp(last_text(), "1/3") && lib1_cell_ok(0, 0, thumb1_of(0), 1) && lib1_cell_ok(0, 1, thumb1_of(20), 1) && lib1_cell_ok(0, 2, thumb1_of(23), 1) && lib1_ring_ok(0, 3, 0)
+    case 400: chk(400, splash_ok() && splash_calls >= 6u && (blend_off || fade_steps >= 6u) && level == 1u && gi == 0u && cur_count == 3u && sel == 0u && !strcmp(last_text(), "1/3") && lib1_cell_ok(0, 0, thumb1_of(0), 1) && lib1_cell_ok(0, 1, thumb1_of(20), 1) && lib1_cell_ok(0, 2, thumb1_of(23), 1) && lib1_ring_ok(0, 3, 0)
               && said("Alpha 20") && said("Beta 3") && said("Gamma 13")); break;                                             /* the folder level: the covers, the names and counts in the strips, the ring on the first */
     case 401: chk(401, sel == 1u && !strcmp(last_text(), "2/3") && lib1_ring_ok(0, 3, 1)); break;                          /* Right: the ring moves to the second folder (no page redraw: the covers stay) */
     case 402: chk(402, level == 0u && cur_first == 20u && cur_count == 3u && sel == 20u && !strcmp(last_text(), "1/3") && lib1_page_ok(0, 20, 3) && lib1_ring_ok(0, 3, 0) && said("Img 20")); break;   /* A: the pictures of the second folder, three of them, in the 4 x 3 grid */
@@ -675,6 +704,8 @@ static void lib1_cp(int n)
     case 802: chk(802, z_shown && map_runs == 0u && z_sx > 0); break;                                                                                                                                                          /* after a long pan right: still shown, moved, no navigator */
     case 803: chk(803, z_shown && map_runs == 0u && z_sy > 0); break;                                                                                                                                                          /* after the diagonal: moved down too, still no navigator */
     case 804: chk(804, z_shown && map_runs == 0u && !z2_active && vid_bus == 1u); break;
+    case 710: chk(710, level == 0u && sel == 4u && cur_first == 2u && cur_count == 7u && cur_up == 0u && cur_folder == 1u); break;                                                                                             /* resume, flat: the top folder that holds the picture (Travel: both Days), the picture selected */
+    case 711: chk(711, level == 0u && sel == 4u && cur_first == 2u && cur_count == 4u && cur_up == 2u && cur_folder == 2u); break;                                                                                             /* resume, nested: the folder that holds the picture itself (Day 1) */
     case 700: chk(700, level == 1u && fl_n == 2u && fl[0] == 0u && fl[1] == 1u && fl_parent1 == 0u && applied_nested == 0u && ent[0].size == 2u && ent[1].size == 7u && said("Misc 2") && said("Travel 7")); break;                      /* flat (the default): the top folders only, Travel holds all seven pictures under it */
     case 701: chk(701, level == 1u && sel == 1u); break;
     case 702: chk(702, level == 0u && cur_first == 2u && cur_count == 7u && cur_up == 0u && cur_folder == 1u); break;                                                                                                          /* A on Travel (flat): its pictures, those of Day 1 and Day 2 together */
@@ -768,10 +799,11 @@ static void checkpoint(int n)
     case 205: chk(205, said("NOT A TGY PICTURE")); clear_texts(); break;                                                                                                      /* a damaged header */
     case 207: force_ovf = 1; v1_starts_before = tg.starts; clear_texts(); break;                                                                                              /* the landing path counts an overflow: the next open must not show a damaged picture */
     case 208: chk(208, said("PICTURE DAMAGED IN TRANSFER") && vid_bus == 0u && tg.starts == v1_starts_before); force_ovf = 0; clear_texts(); break;                           /* a version 1 picture whose landing overflowed is refused before the decoder starts */
-    case 210: chk(210, plane_is_rgb("v00.rgb") && zn == 1u && zs[0].layout == 2u && zs[0].w == 1000u && zs[0].h == 900u && zk < 0); break;                                         /* the v1 zoom scenario: v00 is open (fit), its full level is the one stop */
+    case 612: clear_texts(); break;
+    case 210: chk(713, ldr_bad2 == 0u && ldr_full_seen); chk(210, plane_is_rgb("v00.rgb") && zn == 1u && zs[0].layout == 2u && zs[0].w == 1000u && zs[0].h == 900u && zk < 0); break;                                         /* the v1 zoom scenario: v00 is open (fit), its full level is the one stop */
     case 211: chk(211, zk == 0 && z_shown && v1_view_matches("v00_full.rgb", 1000u, 900u) && info.copy_ms != GI_NONE && info.land_ms != GI_NONE && z_sx >= 96 && z_sx <= 104 && z_sy >= 86 && z_sy <= 94 && info.zt_n >= 40u && info.zt_dec_n >= 40u && info.zt_land_sum > 0u && info.zt_dec_sum > 0u && info.zt_land_max >= info.zt_land_sum / info.zt_n && info.zt_dec_max >= info.zt_dec_sum / info.zt_dec_n && info.zt_pass_max > 0u
                && info.zt_sp + info.zt_sc + info.zt_sn + info.zt_sj + info.zt_ss <= info.zt_pass_max && reads_while_decoding >= 30u && info.zt_n >= info.zt_dec_n && info.zt_n <= info.zt_dec_n + 1u && info.zt_dec_sum / info.zt_dec_n >= 200u); break;                 /* the pipeline: nearly every tile's stream was read while the previous tile decoded, one read a tile (at most one over), and the decode time is the decoder's own counter (62 SDRAM clocks a byte plus 20,000 in the model) */                                                                          /* A: the 1:1 view, decoded tile by tile into the window, equals the reference decode of the full level */
-    case 212: chk(212, zk == 0 && z_shown && z_sx > 0 && z_sy > 0 && v1_view_matches("v00_full.rgb", 1000u, 900u) && info.zt_catch > 0u && info.zt_moved > 0u && info.zt_moved <= info.zt_catch && info.zt_n > 40u); zt_n_212 = info.zt_n; break;                                                  /* panned right and down: still the reference pixels */
+    case 212: chk(212, zk == 0 && z_shown && z_sx > 0 && z_sy > 0 && v1_view_matches("v00_full.rgb", 1000u, 900u) && info.zt_moved > 0u && info.zt_moved > 0u && info.zt_moved <= info.zt_catch && info.zt_n > 40u); zt_n_212 = info.zt_n; break;                                                  /* panned right and down: still the reference pixels */
     case 213: chk(213, zk < 0 && vbase == GAL_PLANE_BASE && plane_is_rgb("v00.rgb")); break;                                                                                /* A: back to fit, the fit plane untouched */
     case 214: chk(214, zk == 0 && z_shown && v1_view_matches("v00_full.rgb", 1000u, 900u) && v1z_idx_ok && info.zt_n == zt_n_212 && info.zt_catch == 0u); break;                                                            /* zoom again: the same, the index kept */
     case 215: chk(215, zn == 1u && zk < 0 && vid_bus == 1u && h4[18] == 1u); break;                                                                                         /* the rotated picture (EXIF 180 degrees): its zoom level is written upright, the header's orientation is 1, so it has its zoom stop */
@@ -791,14 +823,14 @@ static void checkpoint(int n)
     case 293: chk(293, m_ry >= 226 && m_ry + m_rh <= 226 + 267 && m_ry + m_rh >= 226 + 267 - 3); break;                                                                                /* pushed down it stops at the bottom edge of the PICTURE (y 493), not the canvas's (720) */
     case 294: chk(294, zk == 0 && z_shown && z_sy >= 470 && z_sy <= 480 && z_sy + 720 <= 1200); break;                                                                               /* the jump lands at the bottom of the level (corner y about 480) */
     case 295: chk(295, sel == 9u && pic.rx == 280u && pic.ry == 0u && pic.rw == 240u && pic.rh == 720u); break;                                                                        /* the 1100 x 3300 portrait: 240 x 720 at x 280 */
-    case 244: chk(244, v1c_n * v1c_bs <= sizeof v1z_idx && zk == 0 && z_shown && v1z_idx_ok && v1z.idx == 0 && v1z.fetch && v1c_reads > 6u && v1c_reads < 60u && v1_view_matches("v00_full.rgb", 1000u, 900u)); { /* the cache's replacement rule, driven directly: blocks A, B, A, C, A with two slots read 3 times from the card (least recently used out; a hit renews a block) */
+    case 244: chk(244, v1c_bad == 0u && v1c_n * v1c_bs <= sizeof v1z_idx && zk == 0 && z_shown && v1z_idx_ok && v1z.idx == 0 && v1z.fetch && v1c_reads > 6u && v1c_reads < 60u && v1_view_matches("v00_full.rgb", 1000u, 900u)); { /* the cache's replacement rule, driven directly: blocks A, B, A, C, A with two slots read 3 times from the card (least recently used out; a hit renews a block) */
         const uint32_t b0 = v1z.idx_off / 256u, A = (b0 + 1u) * 256u + 40u, B = (b0 + 2u) * 256u + 40u, C = v1z.idx_off; uint8_t e[12]; int okk = (v1z.idx_off % 256u) <= 240u;
         v1c_clock = 0u; for (uint32_t q = 0; q < 16u; q++) { v1c_pos[q] = 0xFFFFFFFFu; v1c_age[q] = 0u; } v1c_reads = 0u;
         const uint32_t seq[5] = { A, B, A, C, A }, want[5] = { 1u, 2u, 2u, 3u, 3u };
         for (int q = 0; q < 5; q++) { okk &= v1_idx_entry(0, seq[q], e) == 1; for (int k = 0; k < 12; k++) okk &= e[k] == pic_data[seq[q] + k]; okk &= v1c_reads == want[q]; }
         chk(247, okk); }
         break;      /* the zoom opened and shows the exact reference pixels with every tile's entry read through two 256 byte blocks (entries straddle blocks) */
-    case 245: v1z_cap = V1Z_IDX_MAX; v1c_bs = 4096u; v1c_n = V1C_BLOCKS; break;                                                                                  /* so that picture has no zoom stop */
+    case 245: v1z_cap = V1Z_IDX_MAX; v1c_bs = 4096u; v1c_n = V1C_BLOCKS; chk(248, v1c_n * v1c_bs <= sizeof v1z_idx); break;                                                                                  /* so that picture has no zoom stop */
     case 221: chk(221, zn == 1u && !v1z_idx_ok && zk < 0); fail_pic_reads = 3; pass_pic_reads = 0; clear_texts(); break;                                                      /* opened again with the normal buffer; the next card reads fail: the zoom's index cannot be read */
     case 222: chk(222, said("ZOOM INDEX READ FAILED") && zk < 0 && !v1z_idx_ok && vid_bus == 1u); fail_pic_reads = 0; clear_texts(); break;                                  /* the fit view stays, with the message */
     case 223: chk(223, zk == 0 && z_shown && v1z_idx_ok && v1_view_matches("v00_full.rgb", 1000u, 900u)); break;                                                            /* the card reads work again: the zoom opens */
@@ -818,7 +850,7 @@ static void checkpoint(int n)
     case 273: poll_adv = CLK_HZ / 60u; poll_alt = 0u; rs_f0 = zt_frames; clk += 10u * (CLK_HZ / 60u); break;                                                    /* one pass of 10 frames, then passes of one frame */
     case 274: { const uint32_t got = zt_frames - rs_f0; chk(274, got >= 12u && got <= 15u); poll_adv = 0u; } break;                                                    /* the long pass is paid back by at most 4 frames; the rest is dropped (no burst afterwards): about 4 + 10 */
     case 271: { const uint32_t fr = (clk - rs_c0) / (CLK_HZ / 60u), got = zt_frames - rs_f0; chk(271, fr >= 250u && got + 4u >= fr && got <= fr + 3u); poll_adv = 0u; poll_alt = 0u; } break;      /* the pan frames follow the elapsed time (about 300 here), not the 200 passes */
-    case 251: chk(251, info.zt_catch > 0u && info.zt_catch > info.zt_moved && info.zt_stall_run_max >= 1u && info.zt_stall_run_max <= info.zt_catch - info.zt_moved && info.zt_n >= info.zt_dec_n
+    case 251: chk(251, info.zt_moved > 0u && info.zt_catch > info.zt_moved && info.zt_stall_run_max >= 1u && info.zt_stall_run_max <= info.zt_catch - info.zt_moved && info.zt_n >= info.zt_dec_n
                && info.zt_sj > 0u && info.zt_sn + info.zt_sc > 0u && info.zt_sp + info.zt_sc + info.zt_sn + info.zt_sj + info.zt_ss <= info.zt_pass_max && info.zt_pass_max - (info.zt_sp + info.zt_sc + info.zt_sn + info.zt_sj + info.zt_ss) <= 3u * (1000000u / 66u + 1u)); break;       /* the pass split adds up to the longest pass (the two clock reads that bound it are a frame apart in this model) */      /* a long pan outruns the tile reads: frames stalled, and the longest run of them is at least one and at most all of them */
     case 240: chk(240, said("ZOOM PIPELINE") && said("ON") && !said("OFF") && v1_pipe_off == 0u && said("A TOGGLE ZOOM PIPELINE")); clear_texts(); break;                                                      /* the Info page shows the switch, on */
     case 241: chk(241, said("OFF") && v1_pipe_off == 1u); rwd_241 = reads_while_decoding; clear_texts(); break;                                                                               /* A turned it off */
@@ -839,7 +871,7 @@ static void checkpoint(int n)
     case 476: chk(476, hid_pairs() && rot_o == 0u && vbase == GAL_PLANE_BASE && plane_is_rgb("v00.rgb")); break;                                    /* X: upright again, the upright plane is shown and is still the picture */
     case 477: chk(477, rot_o == 5u && rot_plane_ok("v00.rgb", 5u, 800u, 720u) && vbase == GAL_ROT_BASE + 40u * GAL_LINE_WORDS16); break;     /* X: 90 counter-clockwise; the details page and back keep the turned view */
     case 478: chk(478, zk >= 0 && rot_o == 0u && mask_i == 0u); break;                               /* A (zoom) on a turned picture: it goes upright and the 1:1 level is shown (the zoom views are upright) */
-    case 479: chk(479, rot_o == 0u && vbase == GAL_PLANE_BASE); break;                                                                 /* the next picture is upright */
+    case 479: chk(479, rot_o == 0u && mask_i == 0u && vbase == GAL_PLANE_BASE); break;                                                                 /* the next picture is upright */
     case 480: chk(480, rot_o == 0u && vbase == GAL_PLANE_BASE && sel == 1u); break;                                                    /* a turned picture left with B and opened again from the grid is upright */
     case 500: chk(500, label_ok("MASK 1:1") && hid_pairs() && mask_i == 1u && mask_painted && plane_mask_ok("v00.rgb", 0u, 40u, 0u, 760u, 720u) && vbase == GAL_PLANE_BASE); break;                         /* L1: the square mask: the plane is the picture with everything outside the centred 720 x 720 black */
     case 501: chk(501, label_ok("MASK 4:5") && hid_pairs() && mask_i == 2u && mask_p == 0u && plane_mask_ok("v00.rgb", 0u, 0u, 40u, 800u, 680u)); break;                                                          /* L1: 4:5 in the picture's own (landscape) orientation is 5:4: 800 x 640; the picture shows again where the square mask had hidden it */
@@ -876,27 +908,27 @@ static void checkpoint(int n)
     chk(580, z2_vis_hits == 0u && z2_shown && z2_view_ok("v00_full.rgb", 1000u, 900u, 2u) && z2_vx == ((int32_t)z2_s * (z_sx + 400) - z2_vw / 2) - (((int32_t)z2_s * (z_sx + 400) - z2_vw / 2) & 3) && tg.starts >= 4u); break;      /* R1 at the 1:1 view: the 2x view on the other window, centred where the 1:1 view's centre was, every pixel a 2 x 2 block (four decodes a tile) */
     case 581:
     z2_c0x = (z2_vx + z2_vw / 2) / (int32_t)z2_s; z2_c0y = (z2_vy + z2_vh / 2) / (int32_t)z2_s; chk(581, (z2_dbl == 2 || (z2_nrecentre >= 1u && z2_ncopy >= 5u && info.zt_moved > 0u)) && info.zt_dec_n >= 5u && info.zoom_ms != GI_NONE && info.zt_pass_max > 0u && z2_vis_hits == 0u && z2_shown && z2_view_ok("v00_full.rgb", 1000u, 900u, 2u) && z2_vx > (int32_t)z2_s * (z_sx + 400) - z2_vw / 2 && z2_vy > (int32_t)z2_s * (z_sy + 360) - z2_vh / 2); break;      /* panned right and down: still the picture doubled, further along */
-    case 582: chk(582, zk == 0 && z_shown && v1_view_matches("v00_full.rgb", 1000u, 900u) && z_sx == ((z2_c1x - 400 < 0 ? 0 : z2_c1x - 400 > 200 ? 200 : z2_c1x - 400) & ~3) && z_sy == (z2_c1y - 360 < 0 ? 0 : z2_c1y - 360 > 180 ? 180 : z2_c1y - 360)); break;                                                                  /* L1: back to the 1:1 view, at the 2x view's centre (it had moved right and down) */
+    case 582: chk(582, dec588 > 0u && info.zt_dec_sum >= dec588 && (pix_ctrl & 8u) == 0u && zk == 0 && z_shown && v1_view_matches("v00_full.rgb", 1000u, 900u) && z_sx == ((z2_c1x - 400 < 0 ? 0 : z2_c1x - 400 > 200 ? 200 : z2_c1x - 400) & ~3) && z_sy == (z2_c1y - 360 < 0 ? 0 : z2_c1y - 360 > 180 ? 180 : z2_c1y - 360)); break;                                                                  /* L1: back to the 1:1 view, at the 2x view's centre (it had moved right and down) */
     case 593: nl593 = z2_zb_calls; chk(593, z2_shown && label_view_ok("2X ZOOM") && z2_zb_calls >= 2u && !zb_on && fail_pic_reads == 0u); break;                                                                                                         /* the 2x view is up and its bar says 2X ZOOM, on the last rows of the plane the screen reads; the loader's bar (LOADING 2X nn%) was written while it loaded */
-    case 594: chk(594, z2_shown && z2_level == 4u && label_view_ok("4X ZOOM") && z2_zb_calls > nl593 && !zb_on); break;                                                                                                 /* the same for 4x: the loader's bar while the 4x plane loaded (the 2x view on the screen), then 4X ZOOM on the new plane */
+    case 594: chk(594, (z2_s != 4u || z2_tx == 4u) && z2_shown && z2_level == 4u && label_view_ok("4X ZOOM") && z2_zb_calls > nl593 && !zb_on); break;                                                                                                 /* the same for 4x: the loader's bar while the 4x plane loaded (the 2x view on the screen), then 4X ZOOM on the new plane */
     case 584: chk(584, z2_vis_hits == 0u && z2_level == 4u && z2_view_ok("v00_full.rgb", 1000u, 900u, 4u) && abs((z2_vx + z2_vw / 2) / (int32_t)z2_s - z2_c0x) <= 4 && abs((z2_vy + z2_vh / 2) / (int32_t)z2_s - z2_c0y) <= 4); break;      /* A again: the 4x view (every pixel 4 x 4), at the 2x view's centre */
     case 585: chk(585, z2_vis_hits == 0u && z2_level == 4u && z2_view_ok("v00_full.rgb", 1000u, 900u, 4u) && (z2_vx + z2_vw / 2) / (int32_t)z2_s < z2_c0x); break;                                                                  /* panned left and up at 4x: still exact, further along */
     case 600: fail_pic_reads = 2; pass_pic_reads = 0; break;                                                                                                                                           /* the card does not answer for two reads while the 2x level loads (a screenshot): the loader tries again, the view still comes up */
     case 601: dump_fb("hist_linear"); chk(601, hm_mode == 1u && said("LINEAR") && said("MEAN")); clear_texts(); break;                                                                                                          /* A on the histogram page: the next height scale (LINEAR), the page drawn again with the mean */
     case 603: chk(603, hm_mode == 2u && said("LOG")); clear_texts(); break;
-    case 602: dump_fb("hist_overlay"); chk(602, hm_mode == 0u && said("DETAILS  HISTOGRAM OVERLAY") && said("A SCALE   LEFT RIGHT PAGE   B BACK") && said("GREEN") && said("SQRT")); clear_texts(); break;                                                                                           /* A back to SQRT and Right: the overlay page (its own title, the names under the plot) */
+    case 602: dump_fb("hist_overlay"); chk(602, hm_mode == 0u && said("DETAILS  HISTOGRAM OVERLAY") && said("A SCALE   LEFT RIGHT PAGE   B BACK") && said("GREEN") && said("SQRT") && said("COUNTED FROM THE DECODED PICTURE")); clear_texts(); break;                                                                                           /* A back to SQRT and Right: the overlay page (its own title, the names under the plot) */
     case 595: chk(595, said("DETAILS  INFO") && vid_bus == 0u); clear_texts(); break;
     case 596: chk(596, said("DETAILS  HISTOGRAMS")); clear_texts(); break;
     case 597: chk(597, vid_bus == 1u && z2_shown && z2_view_ok("v00_full.rgb", 1000u, 900u, 2u)); break;
     case 598: chk(598, leave_bad == 0u && said("DETAILS  INFO") && vid_bus == 0u); clear_texts(); break;
     case 578: chk(578, z_shown || (zk == 0 && vstride == z2_pitch() / 2u && ((pix_ctrl & 8u) != 0u) == (z2_dbl == 2) && vbase != GAL_PLANE_BASE)); break;      /* B at 2x: until the 1:1 view is up the 2x plane stays on the screen (not the fit picture, not black), doubling kept */
-    case 599: chk(599, vid_bus == 1u && z2_shown && z2_level == 2u && z2_view_ok("v00_full.rgb", 1000u, 900u, 2u)); break;
+    case 599: chk(599, enter_black >= 1u && vid_bus == 1u && z2_shown && z2_level == 2u && z2_view_ok("v00_full.rgb", 1000u, 900u, 2u)); break;
     case 590: { int32_t okx = 0, oky = 0, a, b, w, h; zoom_off(zk, &okx, &oky); gv_map_rect(zoom_scale(-1), (int32_t)pic.rx, (int32_t)pic.ry, zoom_scale(zk), okx, oky, 0, 0, &a, &b, &w, &h); nv590 = z2_vx;
                 chk(590, map_active == 1u && z2_active && zk == 0 && vbase == GAL_PLANE_BASE && vstride == GAL_LINE_WORDS16 && (pix_ctrl & 8u) == 0u && m_rw == w / 2 && m_rh == h / 2 && m_rw > 0 && info.zt_dec_n > 0u); } break;      /* the navigator is up at once on the fit plane (not the doubled plane), its rectangle half the 1:1 view's */
     case 591: chk(591, map_active == 0u && z2_shown && z2_level == 2u && ((pix_ctrl & 8u) != 0u) == (z2_dbl == 2) && z2_view_ok("v00_full.rgb", 1000u, 900u, 2u) && z2_vx == nv590); break;                                                  /* the navigator closed: the same 2x view */
     case 592: chk(592, z2_shown && z2_level == 2u && z2_vx < nv590 && z2_view_ok("v00_full.rgb", 1000u, 900u, 2u)); break;                                                                                                                     /* A on a place chosen to the left: the 2x view there
     case 586: chk(586, z2_vis_hits == 0u && z2_level == 2u && z2_view_ok("v00_full.rgb", 1000u, 900u, 2u)); break;                                                                                              /* L1: back to 2x */
-    case 588: z2_c1x = (z2_vx + z2_vw / 2) / (int32_t)z2_s; z2_c1y = (z2_vy + z2_vh / 2) / (int32_t)z2_s; chk(588, z2_vis_hits == 0u && z2_level == 2u && z2_view_ok("v00_full.rgb", 1000u, 900u, 2u)); break;                                                                                              /* 4x again and B: 2x */
+    case 588: dec588 = info.zt_dec_sum; z2_c1x = (z2_vx + z2_vw / 2) / (int32_t)z2_s; z2_c1y = (z2_vy + z2_vh / 2) / (int32_t)z2_s; chk(588, z2_vis_hits == 0u && z2_level == 2u && z2_view_ok("v00_full.rgb", 1000u, 900u, 2u)); break;                                                                                              /* 4x again and B: 2x */
     case 589: chk(589, vid_bus == 0u && zk < 0); break;                                                                                                                                                     /* a held B in the 1:1 view: the grid */
     case 587: chk(587, vid_bus == 0u && zk < 0); break;                                                                                                                                                     /* a held B in the 2x view: the grid */
     case 583: chk(583, z2_hold == 0u && zk < 0 && vbase == GAL_PLANE_BASE && plane_is_rgb("v00.rgb")); break;                                                                                                /* A in the 2x view: the fit view */
@@ -944,7 +976,7 @@ static void checkpoint(int n)
     case 19: chk(27, said("ADD PHOTOS") && said("1/3") && !said("MENU")); clear_texts(); break;                                                                  /* Down, A: Help page 1 of 3 */
     case 20: chk(28, said("WHERE THINGS ARE") && said("2/3") && !said("ADD PHOTOS")); clear_texts(); break;                                                      /* Down turns the page */
     case 22: chk(30, said("INFO") && said("4D50331B") && said("800 X 720") && said("NONE YET") && said("LAST ERROR") && said("L1 LOADED 1 SAVED 0")); snprintf(want, sizeof want, "%u", count); chk(31, said(want)); clear_texts(); break;    /* Info before any picture was opened */
-    case 23: chk(32, said("4D50331B") && count_text("NONE YET") == 11 && said(" MS") && said("432128 WORDS, 0 LOST")); chk(33, said("NONE") && !said("FAILED")); chk(44, said("L1 LOADED 1 SAVED 1")); chk(125, ldr_opens > 0u && ldr_chunks > 0u && ldr_first_ok && ldr_mono && ldr_pct >= 45u && ldr_pct < 100u); clear_texts(); break;   /* Info after viewing pictures: the last landing */
+    case 23: chk(32, said("4D50331B") && count_text("NONE YET") == 11 && said(" MS") && said("432128 WORDS, 0 LOST")); chk(33, said("NONE") && !said("FAILED")); chk(44, said("L1 LOADED 1 SAVED 1")); chk(125, ldr_bad2 == 0u && ldr_full_seen && ldr_opens > 0u && ldr_chunks > 0u && ldr_first_ok && ldr_mono && ldr_pct >= 45u && ldr_pct < 100u); clear_texts(); break;   /* Info after viewing pictures: the last landing */
     case 24: chk(34, said("OPEN FAILED") && said("0 WORDS, 0 LOST")); clear_texts(); break;                                                                          /* Info after a failed open: the error, and no landing counts carried over */
     case 25: chk(35, said("RESUME LAST PICTURE") && said("ON") && !said("OFF") && said("GRID SIZE") && said("4 X 3") && said("DITHER") && said("ORDERED")); clear_texts(); break;                                                                    /* Settings page, resume on (the default) */
     case 26: chk(36, said("OFF") && (setw[2] & 1u) == 0u && set_writes == 0); clear_texts(); break;                                                                   /* toggled off: shown, but not yet written */
@@ -1022,7 +1054,7 @@ static void checkpoint(int n)
     case 114: { int32_t x = -1, y = -1; chk(108, view_matches("z04.tgy", &x, &y) && x == 400 && y == 480); } break;                                                                /* L1: back to the raster half, the centre kept */
     case 115: chk(133, zbp_rmax >= 1u); chk(109, zk == -1 && vbase == GAL_PLANE_BASE && plane_is_f("z04.tgy")); break;                                                                                  /* L1 again: the fit view */
     case 117: { int32_t x = -1, y = -1; const uint32_t f0 = win_flips; (void)f0; chk(110, tile_view_matches("z05.tgy", &x, &y) && x == 1500 && t_recentre == 0u); chk(111, win_flips >= 1u && blit_from_win > 0u && blit_visible == 0u && blit_bad == 0u); chk(122, ph_jump_max <= 16u && ph_stall_max <= 300u); chk(123, info.flip_ms != GI_NONE && info.flip_ms > 0u && info.flip_ms < 20000u); } break;      /* a long held pan: the shown view never moves more than 16 pixels in a pass and never stands still for more than a window's worth of tile copies (about 250 passes, bound 300) while the keys are ahead of it: it follows at the card's pace instead of freezing until the whole way is loaded */   /* panned to the right edge across window re-centres: exact, flipped windows, tiles reused by Talos copies, nothing written into the screen */
-    case 129: chk(124, ph_axx > 0u && ph_axy > 0u && ph_jump_max <= 16u); break;      /* a held diagonal pan: when the diagonal step's tiles are not whole the view still steps along one axis, each way */
+    case 129: { FILE *df = fopen("/tmp/dbg129.txt", "w"); fprintf(df, "zb_w %u rows %u zbp_bad %u n %u max %u\n", zb_w, zb_rows, zbp_bad, zbp_n, zbp_max); fclose(df); } chk(124, ph_axx > 0u && ph_axy > 0u && ph_jump_max <= 16u); break;      /* a held diagonal pan: when the diagonal step's tiles are not whole the view still steps along one axis, each way */
     case 130: chk(126, rc_retarget >= 1u && ph_jump_max <= 16u); chk(127, rc_lead_bad == 0u); break;      /* right to a window edge, then down while the new window is composing: it is aimed again at where the view is now */
     case 131: zb_ok_phase = 1; to_n = to_bad = 0u; rc_lead_n = rc_lead_bad = 0u; zbp_n = zbp_max = zbp_prev = zbp_bad = 0u; break;
     case 132: chk(136, to_n > 100u && to_bad == 0u); chk(135, plane_is_f("z06.tgy")); chk(128, rc_lead_n >= 2u && rc_lead_bad == 0u && blit_visible == 0u); break;      /* z06: the windows composed for a pan lie where the pan needs them */
@@ -1065,6 +1097,7 @@ int main(int argc, char **argv)
     snprintf(dir, sizeof dir, "%s", argv[1]); char f[600]; snprintf(f, sizeof f, "%s/tau-library.tdb", dir);
     idx_data = slurp(f, &idx_len); if (!idx_data) return 2;
     count = (uint32_t)idx_data[8] | (uint32_t)idx_data[9] << 8;
+    if (getenv("NO_BLEND")) blend_off = 1;
     setw[0] = 1u << 27; setw[1] = 0x40000001u; setw[2] = 0x4000005Eu; setw[5] = 0x40000000u; setw[6] = 0x40000000u; setw[8] = 0u;      /* the package's defaults of the inherited variables: layout 1, appearance, word 2 with bit 0 clear (resume on), the player's marks in words 5 and 6 */
     if (argc > 2 && !strcmp(argv[2], "zoom")) {                                                      /* the zoom (option A): pan, clamp, loading behind, the loop rules */
         static uint32_t S4[32768]; int k = 0;
@@ -1123,7 +1156,7 @@ int main(int argc, char **argv)
     }
     if (argc > 2 && !strcmp(argv[2], "v1hist")) {                                                            /* the histograms of a version 1 picture counted by the decoder's unit while the viewer decoded it (v00), and the thumbnail's for one that was not (v01) */
         caps_val = 0x80000007u;
-        const uint32_t SH[] = { KEY_A, 0, KEY_B, 0, KEY_A, 0, CP(530), KEY_SELECT, 0, KEY_RIGHT, 0, CP(531), KEY_A, 0, CP(601), KEY_A, 0, CP(603), KEY_A, 0, KEY_RIGHT, 0, CP(602), KEY_LEFT, 0, KEY_B, 0, KEY_B, 0, KEY_RIGHT, 0, KEY_A, 0, KEY_SELECT, 0, KEY_RIGHT, 0, CP(533), KEY_B, 0, KEY_B, 0, KEY_RIGHT, 0, KEY_SELECT, 0, KEY_RIGHT, 0, CP(532), KEY_B, 0, KEY_LEFT, 0, KEY_LEFT, 0, KEY_LEFT, 0, KEY_A, 0, KEY_B, 0, KEY_RIGHT, 0, KEY_RIGHT, 0, KEY_SELECT, 0, KEY_RIGHT, 0, CP(534), END };
+        const uint32_t SH[] = { KEY_A, 0, KEY_B, 0, KEY_A, 0, CP(530), KEY_SELECT, 0, KEY_RIGHT, 0, CP(531), KEY_A, 0, CP(601), KEY_A, 0, CP(603), KEY_A, 0, CP(612), KEY_RIGHT, 0, CP(602), KEY_LEFT, 0, KEY_B, 0, KEY_B, 0, KEY_RIGHT, 0, KEY_A, 0, KEY_SELECT, 0, KEY_RIGHT, 0, CP(533), KEY_B, 0, KEY_B, 0, KEY_RIGHT, 0, KEY_SELECT, 0, KEY_RIGHT, 0, CP(532), KEY_B, 0, KEY_LEFT, 0, KEY_LEFT, 0, KEY_LEFT, 0, KEY_A, 0, KEY_B, 0, KEY_RIGHT, 0, KEY_RIGHT, 0, KEY_SELECT, 0, KEY_RIGHT, 0, CP(534), END };
         nscript = (int)(sizeof SH / sizeof SH[0]); memcpy(script, SH, sizeof SH);
         if (!setjmp(done)) gallery_app_main();
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
@@ -1155,6 +1188,13 @@ int main(int argc, char **argv)
         SB[k++] = KEY_A; SB[k++] = 0; SB[k++] = CP(800); SB[k++] = KEY_A; SB[k++] = 0; HB(0, 300); SB[k++] = CP(801);
         HB(KEY_RIGHT, 150); SB[k++] = CP(802); HB(KEY_RIGHT | KEY_DOWN, 150); SB[k++] = CP(803); HB(KEY_DOWN, 100); HB(KEY_LEFT | KEY_UP, 150); HB(0, 300); SB[k++] = CP(804);
         SB[k++] = END; nscript = k; memcpy(script, SB, (size_t)k * sizeof SB[0]);
+        if (!setjmp(done)) gallery_app_main();
+        printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
+    }
+    if (argc > 2 && !strncmp(argv[2], "libtreeresume", 13)) {                                                  /* resume on a picture of Day 1 (index 4) in the tree library: flat (libtreeresumeF) or nested (libtreeresumeN) */
+        lib1_on = 1; char rp[96]; snprintf(rp, sizeof rp, "Assets/tau_gallery/common/photos/Travel/Day 1/t4.tgy");
+        setw[6] = 4u; setw[5] = gf_crc32((const uint8_t *)rp, (uint32_t)strlen(rp)) & 0x7FFFFFFFu; if (!strcmp(argv[2], "libtreeresumeN")) setw[8] = 1u << 7;
+        const uint32_t SR2[] = { CP(!strcmp(argv[2], "libtreeresumeN") ? 711 : 710), END }; nscript = 2; memcpy(script, SR2, sizeof SR2);
         if (!setjmp(done)) gallery_app_main();
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;
     }
@@ -1290,7 +1330,7 @@ int main(int argc, char **argv)
     }
     if (argc > 2 && !strcmp(argv[2], "v1rot")) {                                                           /* the turned view of a version 1 picture (v00: 1000 x 900, its fit canvas fills the screen) */
         const uint32_t SR[] = { KEY_A, 0, CP(200), KEY_Y, 0, CP(470), KEY_DOWN, 0, CP(471), KEY_DOWN, 0, KEY_DOWN, 0, KEY_DOWN, 0, CP(472), KEY_UP, 0, KEY_UP, 0, KEY_UP, 0, KEY_UP, 0, KEY_UP, 0, KEY_UP, 0, CP(473), KEY_Y, 0, CP(474), KEY_Y, 0, KEY_Y, 0, KEY_Y, 0, CP(475), KEY_Y, 0, KEY_Y, 0, KEY_Y, 0, CP(476),
-                                KEY_Y, 0, KEY_Y, 0, KEY_Y, 0, KEY_SELECT, 0, KEY_B, 0, CP(477), KEY_A, 0, CP(478), KEY_B, 0, CP(514), KEY_RIGHT, 0, CP(479), KEY_Y, 0, KEY_B, 0, KEY_A, 0, CP(480), KEY_RIGHT, 0, KEY_Y, 0, CP(481), END };
+                                KEY_Y, 0, KEY_Y, 0, KEY_Y, 0, KEY_SELECT, 0, KEY_B, 0, CP(477), KEY_A, 0, CP(478), KEY_B, 0, CP(514), KEY_Y, 0, KEY_L1, 0, KEY_RIGHT, 0, CP(479), KEY_Y, 0, KEY_B, 0, KEY_A, 0, CP(480), KEY_RIGHT, 0, KEY_Y, 0, CP(481), END };
         nscript = (int)(sizeof SR / sizeof SR[0]); memcpy(script, SR, sizeof SR);
         if (!setjmp(done)) gallery_app_main();
         printf(fails ? "GALLERY APP FAILED %d\n" : "GALLERY APP PASSED (0 failures)\n", fails); return fails ? 1 : 0;

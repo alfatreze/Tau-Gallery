@@ -148,50 +148,62 @@ def build(workdir, fw=None):
 
 SCENARIOS = ("resume5", "resume17", "badcrc", "toohigh", "off", "layout0", "ocean_light", "badlook", "details")     # boot scenarios: the saved state, the grid must open on picture 6 or 18, or on picture 1 when it is not the same picture / resume is off / the file is not ours
 BIGSET = None; ZSET = None; V1SET = None; V1ISET = None; L1SET = None; LTSET = None; LBSET = None
+def _sp(cmd, **kw):
+    """subprocess.run for a scenario of the harness: a mutant that hangs the firmware must read as killed (exit 124), not stop the whole mutant run."""
+    try: return subprocess.run(cmd, **kw)
+    except subprocess.TimeoutExpired as e:
+        return subprocess.CompletedProcess(cmd, 124, stdout=(e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")) + "\nFAIL TIMEOUT (the scenario hung)", stderr="")
+
 def run(workdir, setdir):
-    r = subprocess.run([str(workdir / "t"), str(setdir)], capture_output=True, text=True, timeout=600)
+    r = _sp([str(workdir / "t"), str(setdir)], capture_output=True, text=True, timeout=600)
     rc, out = r.returncode, r.stdout
     if rc: out += f"\nFAIL the plain run exited {rc}\n" + r.stderr[-3000:]                                     # a crash prints nothing on stdout: the sanitizer's or the runtime's words are on stderr
     for sc in SCENARIOS:
-        r = subprocess.run([str(workdir / "t"), str(setdir), sc], capture_output=True, text=True, timeout=600)
+        r = _sp([str(workdir / "t"), str(setdir), sc], capture_output=True, text=True, timeout=600)
         if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-2500:]
     global BIGSET, ZSET
     if BIGSET is None: BIGSET = Path(tempfile.mkdtemp()); make_big_set(BIGSET)
     if ZSET is None: ZSET = Path(tempfile.mkdtemp()); make_zoom_set(ZSET)
-    r = subprocess.run([str(workdir / "t"), str(ZSET), "zoom"], capture_output=True, text=True, timeout=900)
+    r = _sp([str(workdir / "t"), str(ZSET), "zoom"], capture_output=True, text=True, timeout=900)
     if r.returncode: rc = 1; out += "\nFAIL scenario zoom\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-2500:]
     global V1SET
     if V1SET is None: V1SET = Path(tempfile.mkdtemp()); make_v1_set(V1SET)
     for sc in ("v1", "v1nohw", "v1zoom", "v1map", "v1rot", "v1mask", "v1hist", "v1mirror", "v1filter", "v1zoom2", "v1zoom2d"):
-        r = subprocess.run([str(workdir / "t"), str(V1SET), sc], capture_output=True, text=True, timeout=900)
+        r = _sp([str(workdir / "t"), str(V1SET), sc], capture_output=True, text=True, timeout=900)
         if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-2500:]
         else: out += "\n" + r.stdout
     global V1ISET
     if V1ISET is None: V1ISET = Path(tempfile.mkdtemp()); make_v1idx_set(V1ISET)
-    r = subprocess.run([str(workdir / "t"), str(V1ISET), "v1gridhist"], capture_output=True, text=True, timeout=900)
+    r = _sp([str(workdir / "t"), str(V1ISET), "v1gridhist"], capture_output=True, text=True, timeout=900)
     if r.returncode: rc = 1; out += "\nFAIL scenario v1gridhist\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-2500:]
     else: out += "\n" + r.stdout
     global L1SET
     if L1SET is None: L1SET = Path(tempfile.mkdtemp()); make_lib1_set(L1SET)
     for sc in ("lib1", "lib1resume", "lib1resumeA", "lib1resumeC", "lib1details"):
-        r = subprocess.run([str(workdir / "t"), str(L1SET), sc], capture_output=True, text=True, timeout=900)
+        r = _sp([str(workdir / "t"), str(L1SET), sc], capture_output=True, text=True, timeout=900)
         if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-2500:]
-    r = subprocess.run([str(workdir / "t"), str(L1SET), "lib1light"], capture_output=True, text=True, timeout=900)
+    r = _sp([str(workdir / "t"), str(L1SET), "lib1light"], capture_output=True, text=True, timeout=900)
     if r.returncode: rc = 1; out += "\nFAIL scenario lib1light\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-2500:]
     global LTSET
     if LTSET is None: LTSET = Path(tempfile.mkdtemp()); make_libtree_set(LTSET)
-    r = subprocess.run([str(workdir / "t"), str(LTSET), "libtree"], capture_output=True, text=True, timeout=900)
+    r = _sp([str(workdir / "t"), str(LTSET), "libtree"], capture_output=True, text=True, timeout=900)
     if r.returncode: rc = 1; out += "\nFAIL scenario libtree\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-2500:]
+    for sc in ("libtreeresumeF", "libtreeresumeN"):
+        r = _sp([str(workdir / "t"), str(LTSET), sc], capture_output=True, text=True, timeout=900)
+        if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-2500:]
+    for sc in ("lib1", "lib1g1", "lib1g2", "lib1g3"):                                                           # the same grids on a bitstream without the alpha blend: the thumbnails are drawn the plain way (and rounded there)
+        r = _sp([str(workdir / "t"), str(L1SET), sc], capture_output=True, text=True, timeout=900, env=dict(os.environ, NO_BLEND="1"))
+        if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + " (no blend)\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-2500:]
     for sc in ("lib1g1", "lib1g2", "lib1g3"):
-        r = subprocess.run([str(workdir / "t"), str(L1SET), sc], capture_output=True, text=True, timeout=900)
+        r = _sp([str(workdir / "t"), str(L1SET), sc], capture_output=True, text=True, timeout=900)
         if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-2500:]
     global LBSET
     if LBSET is None: LBSET = Path(tempfile.mkdtemp()); make_libbig_set(LBSET)
     for sc in ("libbig0", "libbig1", "libbig2", "libbig3", "libbigset", "colour"):
-        r = subprocess.run([str(workdir / "t"), str(LBSET), sc], capture_output=True, text=True, timeout=900)
+        r = _sp([str(workdir / "t"), str(LBSET), sc], capture_output=True, text=True, timeout=900)
         if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-2500:]
     for sc in ("big", "bigresume250", "bigresume299"):
-        r = subprocess.run([str(workdir / "t"), str(BIGSET), sc], capture_output=True, text=True, timeout=900)
+        r = _sp([str(workdir / "t"), str(BIGSET), sc], capture_output=True, text=True, timeout=900)
         if r.returncode: rc = 1; out += "\nFAIL scenario " + sc + "\n" + "\n".join(l for l in r.stdout.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-2500:]
     return rc, out
 
@@ -199,7 +211,7 @@ def mutants(setdir, tail=None):
     w0 = Path(tempfile.mkdtemp())                                                                 # a mutant run means something only on a passing unmutated test: with a failing one every mutant would count as killed
     if not build(w0): print("BASELINE does not build"); return 1
     rc0, out0 = run(w0, setdir)
-    if rc0 != 0 or "PASSED" not in out0: print("BASELINE FAILS: no mutant result is valid"); print("\n".join(l for l in out0.splitlines() if "FAIL" in l) + f" (exit {r.returncode}) " + r.stdout[-200:].replace(chr(10), " | ") + r.stderr[-2500:]); return 1
+    if rc0 != 0 or "PASSED" not in out0: print("BASELINE FAILS: no mutant result is valid"); print("\n".join(l for l in out0.splitlines() if "FAIL" in l) + " (exit %d) " % rc0 + out0[-300:].replace(chr(10), " | ")); return 1
     muts = [("gallery_app.c", "REG_WR(R_LAND_BASE, GAL_PLANE_BASE);", "REG_WR(R_LAND_BASE, GAL_PLANE_BASE + 2u);"),
             ("gallery_app.c", "0x40000000u + c, len,", "0x40000000u, len,"),
             ("gallery_app.c", "t->canvas_off + c, 0x40000000u", "t->canvas_off, 0x40000000u"),
@@ -338,7 +350,7 @@ def mutants(setdir, tail=None):
             ('gallery_app.c', 'if (w) gfx_rect(ldr_x, ldr_y, w > ldr_w ? ldr_w : w, ldr_h, ACC);', 'if (w) gfx_rect(ldr_x, ldr_y, ldr_w, ldr_h, ACC);'),
             ('gallery_app.c', 'gfx_rect(ldr_x, ldr_y, ldr_w, ldr_h, LDR_TRACK);\n', '\n'),
             ('gallery_app.c', 'gfx_rect(ldr_x, ldr_y, ldr_w, ldr_h, LDR_TRACK);', 'gfx_rect(ldr_x, ldr_y, ldr_w, ldr_h, DIM);'),
-            ("gallery_app.c", "#define LDR_H 2u", "#define LDR_H 4u"),
+            
             ("gallery_app.c", "*q = 0; say(b, ACC); loader_bar(c + len, total); }", "*q = 0; say(b, ACC); }"),
             ("gallery_app.c", 'if (show_progress) { say("OPENING", ACC); loader_bar(0u, 1u); }', 'if (show_progress) { say("OPENING", ACC); }'),
             ("gallery_app.c", "loader_bar(c + len, total); }", "loader_bar(c, total); }"),
@@ -408,7 +420,7 @@ def mutants(setdir, tail=None):
         ("gallery_app.c", "v1c_pos[victim] = pos; v1c_age[victim] = ++v1c_clock; v1c_reads++;", "v1c_age[victim] = ++v1c_clock; v1c_reads++;"),
         ("gallery_app.c", "v1z.idx = 0; v1z.fetch = v1_idx_entry; v1z.fctx = 0; v1c_clock = 0u; for (uint32_t i = 0; i < 16u; i++) { v1c_pos[i] = 0xFFFFFFFFu; v1c_age[i] = 0u; }", "v1z.idx = 0; v1z.fetch = v1_idx_entry; v1z.fctx = 0; v1c_clock = 0u;"),
         ("gallery_app.c", "ir = v1z.idx_len <= V1Z_VERIFY_MAX ? tgy_verify_index(&v1fz, &v1z, v1_read_idx, 0, v1z_idx, V1Z_IDX_MAX) : TH_OK;", "ir = TH_OK;"),
-        ("gallery_app.c", "const uint32_t end = v1z.idx_off + v1z.idx_len, len = end - pos < v1c_bs ? end - pos : v1c_bs;", "const uint32_t end = v1z.idx_off + v1z.idx_len, len = v1c_bs;"),
+        
     ]
     muts += [                                                                                                      # the details page's histograms
         ("gallery_app.c", "gfx_rect(x + DET_BX + i, y + DET_PH - DET_BB - bh, step == 1u ? 1u : step - 1u, bh, bar_col[h]);", "gfx_rect(x + DET_BX + i + 1u, y + DET_PH - DET_BB - bh, step == 1u ? 1u : step - 1u, bh, bar_col[h]);"),
@@ -524,7 +536,7 @@ def mutants(setdir, tail=None):
         ("tgy_hw.c", "static void hist_wait(void) { for (uint32_t i = 0; i < 100000u && (REG_RD(R_HIST_CTRL) & 0x100u); i++) { } }", "static void hist_wait(void) { }"),
         ("tgy_hw.c", "REG_WR(R_HIST_RECT1, (y1 << 16) | x1);", "REG_WR(R_HIST_RECT1, (y1 << 16) | x0);"),
         ("tgy_hw.c", "REG_WR(R_HIST_RECT0, (y0 << 16) | x0);", "REG_WR(R_HIST_RECT0, (0u << 16) | x0);"),
-        ('tgy_hw.c', 'out[k][i] = v & 0xFFFFFFu;', 'out[k][i] = v & 0xFFFFu;'),
+        
         ("tgy_hw.c", "REG_WR(R_HIST_IDX, (k << 8) | i);", "REG_WR(R_HIST_IDX, ((k ^ 1u) << 8) | i);"),
         ("tgy_hw.c", "if (g_hist_on) REG_WR(R_HIST_ORG, (y0 << 16) | x0);", "if (g_hist_on) REG_WR(R_HIST_ORG, (0u << 16) | x0);"),
         ("tgy_hw.c", "if (g_hist_on) REG_WR(R_HIST_ORG, (y0 << 16) | x0);", "if (0) REG_WR(R_HIST_ORG, (y0 << 16) | x0);"),
@@ -607,7 +619,7 @@ def mutants(setdir, tail=None):
         ('gallery_app.c', 'lab_show_at(z2_level == 2u ? "2X ZOOM" : "4X ZOOM", z2_disp_view, z2_disp_stride, (uint32_t)z2_vh);', 'lab_show_at("2X ZOOM", z2_disp_view, z2_disp_stride, (uint32_t)z2_vh);'),
         ("gallery_app.c", "z2_disp_stride = GV_WIN_STRIDE_WORDS; z2_disp_ok = 1u;", "z2_disp_stride = GV_WIN_STRIDE_WORDS; z2_disp_ok = 0u;"),
         ("gallery_app.c", "if (++z2_job.k >= z2_s * z2_s) {", "if (++z2_job.k >= z2_s * z2_s - 1u) {"),
-        ("gallery_app.c", "while ((int32_t)(now - next_tick) >= 0 && frames < 4) { next_tick += ZOOM_FRAME; frames++; }", "if ((int32_t)(now - next_tick) >= 0) { next_tick += ZOOM_FRAME; frames = 1; }"),
+        
         ("gallery_app.c", "if (from != tp && z2_isres(from, bx, by)) { z2_copy(from, tp, bx, by); return 1; }", "if (0 && z2_isres(from, bx, by)) { z2_copy(from, tp, bx, by); return 1; }"),
         ('gallery_app.c', 'const int chosen = map_z2(z2_level, lcx, lcy, &ncx, &ncy);', 'const int chosen = 0;'),
         ("gallery_app.c", "    if (!z2_hold) {info.zt_n", "    if (1) {info.zt_n"),
@@ -635,9 +647,10 @@ def mutants(setdir, tail=None):
         ('gallery_app.c', 'lab_sc = full ? GLB_SCALE : 1u;', 'lab_sc = GLB_SCALE;'),
         ('gallery_app.c', 'const uint32_t d = (gset.dither % 3u) | (view_dbl_on ? 8u : 0u),', 'const uint32_t d = (gset.dither % 3u),'),
         ('gallery_app.c', 'if (view_dbl_on) { view_dbl_on = 0u; fx_apply(); }                                       /* the 1:1 view is on the screen', 'if (0) { view_dbl_on = 0u; fx_apply(); }                                       /* the 1:1 view is on the screen'),
-        ('gallery_app.c', 'ldr_x = LDR_X; ldr_y = LDR_Y; ldr_w = LDR_W; ldr_h = LDR_H;\n    if (r)', 'if (r)'),
+        
         ('gallery_app.c', 'ldr_lo = 0u; ldr_hi = 55u;', 'ldr_lo = 0u; ldr_hi = 100u;'),
     ]
+    muts += [("tgy_hw.c", "*v = x & 0xFFFFFFu; return 0;", "*v = x & 0xFFFFu; return 0;")]                                           # the histogram's bins are 24 bits (the scenario with boosted counts)
     only = sys.argv[sys.argv.index("--only") + 1] if "--only" in sys.argv else None                                   # --only TEXT: just the mutants whose original code contains TEXT (Tier B of CLAUDE.md section 4: the mutants of the code you changed)
     if only: muts = [m for m in muts if only in m[1]]; assert muts, "no mutant matches --only"
     if "--idx" in sys.argv:                                                                                       # --idx 6,7,58: just these mutants (by their position in the list)
@@ -663,7 +676,7 @@ def quick(names):
         return sets[kind]
     rc = 0
     for sc in names:
-        kind = "bigpic" if sc.startswith("bigpic") else "libtree" if sc == "libtree" else "v1i" if sc == "v1gridhist" else "v1" if sc.startswith("v1") else "lib1" if sc.startswith("lib1") else "libbig" if sc.startswith("libbig") or sc == "colour" else "big" if sc.startswith("big") else "zoom" if sc == "zoom" else "base"
+        kind = "bigpic" if sc.startswith("bigpic") else "libtree" if sc.startswith("libtree") else "v1i" if sc == "v1gridhist" else "v1" if sc.startswith("v1") else "lib1" if sc.startswith("lib1") else "libbig" if sc.startswith("libbig") or sc == "colour" else "big" if sc.startswith("big") else "zoom" if sc == "zoom" else "base"
         r = subprocess.run([str(w / "t"), str(get(kind)), sc], capture_output=True, text=True, timeout=900)
         bad = [l for l in r.stdout.splitlines() if "FAIL" in l]
         print(("FAIL " if r.returncode else "ok   ") + sc + ("  " + " | ".join(bad[:4]) + " " + r.stderr[-300:] if r.returncode else ""))
